@@ -6,10 +6,18 @@ Current top-level files:
 
 - `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`, `IMPLEMENTATION_PLAN.md`: project contracts and milestone plan
 - `docs/`: implementation-facing documentation suite
-- `main.py`: placeholder entrypoint, expected to be replaced or superseded by `src/resemantica/`
+- `src/resemantica/`: active package root for milestone implementation
+- `tests/epub/`: EPUB round-trip and placeholder tests for M1
+- `main.py`: placeholder entrypoint kept for compatibility with the starter project
 - `pyproject.toml`: Python project metadata
 
-There is no production package layout yet. Until `src/resemantica/` exists, new implementation work should follow the target structure defined in `../10-architecture/module-boundaries.md`.
+Implemented package layout (M1 slice):
+
+- `src/resemantica/cli.py`: CLI entrypoint (`epub-roundtrip`)
+- `src/resemantica/settings.py`: config loading and path derivation
+- `src/resemantica/epub/`: EPUB extractor, parser, placeholders, validators, rebuild
+- `src/resemantica/db/sqlite.py`: SQLite connection and migration helpers
+- `src/resemantica/db/migrations/001_initial.sql`: initial manual migration script
 
 ## Target State
 

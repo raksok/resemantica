@@ -2,6 +2,7 @@
 
 - **Milestone:** M1
 - **Depends on:** —
+- **Status:** Completed on 2026-04-24 (implementation + validation complete)
 
 ## Goal
 
@@ -39,9 +40,14 @@ Out:
 - malformed XHTML report test
 - stable block ordering test
 
+Execution status:
+
+- [x] `uv run --extra dev pytest tests/epub` passed (`8 passed`)
+- [x] `uv run python -m resemantica.cli epub-roundtrip --input artifacts/smoke_fixture.epub --release smoke-m1` succeeded
+
 ## Done Criteria
 
-- `epub-roundtrip` writes extracted artifacts and rebuilt EPUB
-- validation reports are inspectable
-- tests for the round-trip slice pass
-- `repo-map.md` is updated if the real package layout now exists
+- [x] `epub-roundtrip` writes extracted artifacts and rebuilt EPUB
+- [x] validation reports are inspectable
+- [x] tests for the round-trip slice pass
+- [x] `repo-map.md` is updated if the real package layout now exists

@@ -75,18 +75,19 @@ Build the deterministic EPUB foundation first: unpack, parse, inspect, rebuild. 
 ### Action Items
 
 [ ] Create the initial package layout under `src/resemantica/` for `cli.py`, `settings.py`, `epub/`, `logging_config.py`, and shared utilities.
-[ ] Add configuration loading and path resolution for source EPUB input, working directories, and output locations.
-[ ] Implement deterministic EPUB unpacking and manifest discovery in `epub/`.
-[ ] Implement XHTML parsing, chapter document selection, and validation reporting with stable block ordering and block IDs.
-[ ] Implement placeholder-safe restoration primitives and a rebuild path that can reconstruct a valid EPUB without translation changes.
-[ ] Add an `epub-roundtrip` CLI command that unpacks, validates, rebuilds, and writes inspection artifacts and reports.
-[ ] Add smoke tests for unpack -> validate -> rebuild on a small fixture EPUB, including malformed XHTML reporting behavior.
+[ ] Remaining gap in this item: `logging_config.py` is not added yet.
+[x] Add configuration loading and path resolution for source EPUB input, working directories, and output locations.
+[x] Implement deterministic EPUB unpacking and manifest discovery in `epub/`.
+[x] Implement XHTML parsing, chapter document selection, and validation reporting with stable block ordering and block IDs.
+[x] Implement placeholder-safe restoration primitives and a rebuild path that can reconstruct a valid EPUB without translation changes.
+[x] Add an `epub-roundtrip` CLI command that unpacks, validates, rebuilds, and writes inspection artifacts and reports.
+[x] Add smoke tests for unpack -> validate -> rebuild on a small fixture EPUB, including malformed XHTML reporting behavior.
 
 ### Validation
 
-[ ] Verify a supported EPUB can be unpacked and rebuilt without crashing.
-[ ] Verify malformed XHTML produces a readable validation report.
-[ ] Verify block ordering and block IDs remain stable across the round-trip path.
+[x] Verify a supported EPUB can be unpacked and rebuilt without crashing.
+[x] Verify malformed XHTML produces a readable validation report.
+[x] Verify block ordering and block IDs remain stable across the round-trip path.
 
 ## Milestone 2: Single-Chapter Translation MVP
 
