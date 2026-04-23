@@ -46,7 +46,7 @@ Structured Chinese summary schema:
 2. Generate `chapter_summary_zh_structured` JSON drafts.
 3. Validate terminology, chronology, and future-knowledge safety.
 4. Derive `chapter_summary_zh_short` from the structured summary's `narrative_progression` field.
-5. **Materialize both `chapter_summary_zh_structured` and `chapter_summary_zh_short` as dedicated rows** in `validated_summaries_zh` with distinct `summary_type` values. The `content_zh` column for `zh_short` holds the `narrative_progression` string. This materialization is mandatory so that Phase 1 (translation) and Phase 1.5 (packet assembly) perform zero JSON parsing to obtain continuity text.
+5. **Materialize both `chapter_summary_zh_structured` and `chapter_summary_zh_short` as dedicated rows** in `validated_summaries_zh` with distinct `summary_type` values. The `content_zh` column for `zh_short` holds the `narrative_progression` string. This materialization occurs inside `summaries.generator.generate_chapter_summary()` as a single-transaction write — both rows are written atomically. No separate materialization stage or lazy extraction exists. The `summary_repo.save()` method accepts the structured JSON response and writes both rows; it does not store raw JSON for later splitting. This is mandatory so that Phase 1 (translation) and Phase 1.5 (packet assembly) perform zero JSON parsing to obtain continuity text.
 6. Persist validated Chinese summaries.
 6. Derive `story_so_far_zh` from prior validated state plus current validated chapter summary.
 7. Derive English summaries from validated Chinese summaries plus locked glossary.
@@ -56,7 +56,7 @@ Structured Chinese summary schema:
 - only validated Chinese summaries may feed continuity state
 - `chapter_summary_zh_structured` must validate as JSON with all required fields
 - `chapter_summary_zh_short` must be derived from `narrative_progression`, not independently invented
-- both `zh_structured` and `zh_short` must be materialized as separate rows in `validated_summaries_zh` before any downstream consumer reads them
+- both `zh_structured` and `zh_short` must be materialized as separate rows in `validated_summaries_zh` inside `generate_chapter_summary()` before any downstream consumer reads them; lazy extraction by consumers is forbidden
 - English summaries must record provenance hashes back to validated Chinese inputs
 - summary validation must fail on future-knowledge leakage
 

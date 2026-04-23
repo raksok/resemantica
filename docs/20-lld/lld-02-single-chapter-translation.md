@@ -36,7 +36,7 @@ Artifacts:
 2. Resolve locked glossary lookups if available, without requiring glossary authority to exist yet.
 3. Load pass prompts and record prompt versions.
 4. Run Pass 1 through the shared LLM client on each block with placeholder-safe source text.
-5. Restore placeholders and validate structure.
+5. Restore placeholders using the restoration algorithm defined in `lld-01`: map each opening placeholder `⟦TYPE_N⟧` to its `original_xhtml`, each closing placeholder `⟦/TYPE_N⟧` to `</element>`, and validate closing order against `closing_order`.
 6. On structural failure of block `B`:
    a. Split the **original source block** `B` into segments `S1, S2, ...` at sentence boundaries. Assign segment IDs (`ch{NNN}_blk{NNN}_seg{NN}`).
    b. **Pass 1 retries each segment independently** — the source for each retry is the segment text alone, not the original full block.

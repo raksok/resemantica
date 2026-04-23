@@ -85,42 +85,63 @@ risk_threshold_high = 0.7
 **Decision:**
 
 - Inline formatting elements (`<i>`, `<b>`, `<em>`, `<span>`, `<a>`, `<u>`, `<s>`) and block elements (`<img>`, `<hr>`, `<div>`, `<table>`, `<ruby>`, `<br>`) are replaced with placeholders during translation.
-- Placeholder syntax: `⟦TYPE_N⟧` using Unicode brackets (U+27E6, U+27E7).
+- Placeholder syntax: `⟦TYPE_N⟧` for opening tags and `⟦/TYPE_N⟧` for closing tags, using Unicode brackets (U+27E6, U+27E7).
 - Explicit type codes: B (bold/strong), I (italic/em), U (underline), S (strikethrough), SPAN, IMG, HR, DIV, RUBY, A (link), TABLE, BR.
 - The placeholder map stores the original element and its attributes for reversible restoration.
 - N is a sequential integer within the block, resetting per block.
+- **Both opening and closing placeholders appear in the extracted text** sent to the model. The model sees `⟦B_1⟧⟦I_1⟧text⟦/I_1⟧⟦/B_1⟧` and is expected to preserve them in translation output.
+
+**Closing placeholder convention:**
+
+- Closing tags are emitted as `⟦/TYPE_N⟧` where `TYPE_N` matches the corresponding opening placeholder exactly.
+- The restorer maps each `⟦/TYPE_N⟧` to its opening entry's `element` field and emits `</element>`.
+- The `closing_order` array on the outermost parent is a **validation** field. After restoration, the restorer checks that closing placeholders appear in the documented order (innermost first). If the model reorders closing placeholders, the restorer warns and applies the correct order from `closing_order`.
+- Self-closing elements (`<img>`, `<hr>`, `<br>`) have no closing placeholder.
 
 **Nested tag handling:**
 
-When tags are nested (e.g., `<b><i>text</i></b>`), the placeholder map records nesting as a **stack-ordered entry** with an explicit `closing_order` field:
+When tags are nested (e.g., `<b><i>text</i></b>`), each inner tag gets its own pair of opening/closing placeholders:
 
 ```json
 {
   "placeholder": "⟦I_1⟧",
   "element": "i",
   "attributes": {},
-  "nesting": {
-    "parent_placeholder": "⟦B_1⟧",
-    "depth": 2,
-    "closing_order": ["⟦I_1⟧", "⟦B_1⟧"]
-  }
+  "parent_placeholder": "⟦B_1⟧",
+  "depth": 2,
+  "closing_order": null
+}
+```
+
+The outermost parent entry:
+
+```json
+{
+  "placeholder": "⟦B_1⟧",
+  "element": "b",
+  "attributes": {},
+  "parent_placeholder": null,
+  "depth": 1,
+  "closing_order": ["⟦I_1⟧", "⟦B_1⟧"]
 }
 ```
 
 Rules for nested placeholders:
 
-- Inner tags receive their own `⟦TYPE_N⟧` placeholder as usual.
+- Inner tags receive their own `⟦TYPE_N⟧` / `⟦/TYPE_N⟧` pair.
 - Each nested entry records its `parent_placeholder` (or null if top-level).
-- The `closing_order` array on the **outermost** parent lists all nested placeholders in reverse opening order (innermost closes first).
-- Restoration walks the `closing_order` array to reconstruct correct tag nesting. The restorer does not guess closing order.
+- The `closing_order` array on the **outermost** parent lists all nested placeholders in reverse opening order (innermost closes first) — used for post-restoration validation, not as the primary restoration mechanism.
+- Restoration converts each opening placeholder to its `original_xhtml` and each closing placeholder to `</element>`. The restorer does not guess closing order.
 - Deep nesting (depth > 3) is flattened to the outermost tag only, with inner tags recorded in the map for manual inspection but not rendered as separate placeholders in the text sent to the model.
 
 **Alternatives considered:**
+
 - `[[TYPE_N]]` ASCII brackets: could collide with Chinese bracket usage in source text.
 - `<PH_TYPE_N/>` XML-like: may confuse the model into treating it as HTML.
 - Single flat placeholder for nested tags: loses restoration fidelity for legitimate formatting.
+- Implicit closing tags (no `⟦/TYPE_N⟧`): restorer must infer where translated text ends, fragile for multi-segment blocks.
 
-**Rationale:** Unicode brackets are visually distinct and extremely unlikely to appear in Chinese web novel text. Explicit type codes give the model context about what each placeholder represents, improving translation quality. Stack-ordered nesting entries with explicit `closing_order` make reconstruction deterministic without requiring the restorer to infer tag nesting from context.
+**Rationale:** Unicode brackets are visually distinct and extremely unlikely to appear in Chinese web novel text. Explicit type codes give the model context about what each placeholder represents, improving translation quality. Explicit closing placeholders make restoration deterministic — the restorer performs a simple lookup, not inference. Stack-ordered `closing_order` provides validation against model reordering without being the primary restoration mechanism.
 
 ---
 
@@ -370,7 +391,16 @@ Resegmentation flow:
 
 - `chapter_summary_zh_short`: just the `narrative_progression` field (concise prose summary).
 
-**Rationale:** JSON structured summaries are machine-parseable, easy to validate, and directly usable in packet assembly. The short summary serves the continuity chain without needing to parse the full structure.
+**Materialization mandate:**
+
+The `generate_chapter_summary()` function in M4 extracts `narrative_progression` from the structured LLM response and writes **two** rows in a single SQLite transaction:
+
+1. `summary_type = 'chapter_summary_zh_structured'`, `content_zh = <full JSON string>`
+2. `summary_type = 'chapter_summary_zh_short'`, `content_zh = <narrative_progression string>`
+
+This is not a separate pipeline stage. The `summary_repo.save()` method receives the structured JSON response and writes both rows atomically; it does not store raw JSON for lazy splitting. Downstream consumers (packet assembly, translation) perform zero JSON parsing to obtain the short summary — they read the dedicated `chapter_summary_zh_short` row directly.
+
+**Rationale:** JSON structured summaries are machine-parseable, easy to validate, and directly usable in packet assembly. The short summary serves the continuity chain without needing to parse the full structure. Single-transaction materialization eliminates the risk of a downstream agent implementing lazy parsing.
 
 ---
 
@@ -440,16 +470,40 @@ Each sub-score saturates at 1.0 based on count thresholds (e.g., 3+ idioms, 2+ a
 **Rules:**
 
 - Packet assembly (M8) calls `count_tokens()` on each assembled section to verify total does not exceed `max_context_per_pass`.
+- **Safety buffer: before comparing to any budget, multiply the raw tiktoken count by 1.05.** This compensates for the 2-3% undercount on Qwen-family models. The effective budget for packet assembly is `floor(max_context_per_pass / 1.05)` = 46811 raw tiktoken tokens (using default `max_context_per_pass` of 49152).
 - Do not use character-ratio heuristics or generic tokenizers.
 - Do not require a running inference server for pre-computation token counting.
-- `tiktoken` Cl100k is within 2-3% accuracy for Qwen-family models, which is sufficient for budget enforcement.
+- `tiktoken` Cl100k is within 2-3% accuracy for Qwen-family models, which is sufficient for budget enforcement when the 5% safety buffer is applied.
 
 **Alternatives considered:**
+
 - llama.cpp `/tokenize` endpoint: exact match but requires a running server and adds latency to offline pre-computation.
 - Character-ratio heuristic (e.g., `len(text) / 4`): too inaccurate for budget enforcement across Chinese and English text with mixed tokenization behavior.
 - No tokenizer specified: every agent invents its own counting method, making budgets incomparable across runs.
+- No safety buffer: a 3% undercount on a 49152-token packet yields ~50626 actual tokens, still within the 65k window but eating into headroom for response tokens and system prompt overhead.
 
-**Rationale:** `tiktoken` is fast, offline, deterministic, already available as a transitive dependency, and accurate enough for budget enforcement. The 2-3% margin is acceptable because budgets are set at 75% of the context window (49152 of 65536), leaving substantial headroom.
+**Rationale:** `tiktoken` is fast, offline, deterministic, already available as a transitive dependency, and accurate enough for budget enforcement. The 5% safety buffer converts the 2-3% accuracy margin from a risk into a non-issue. Budgets are set at 75% of the context window (49152 of 65536), and the buffer reduces the effective ceiling to ~46811 raw tokens — still well within the window with comfortable headroom.
+
+---
+
+### D23. Entity Extraction Fallback Behavior
+
+**Decision:** When the entity extractor (M6) encounters a term in a glossary-covered category (character, faction, location, technique, item_artifact, realm_concept, creature_race, event) with no matching locked glossary entry:
+
+1. Do **not** create a LadybugDB graph entity. This prevents dual-truth scenarios where graph entity names diverge from glossary names.
+2. Write a `deferred_entity` record to SQLite with fields: `deferred_id`, `term_text`, `category`, `evidence_snippet`, `source_chapter`, `discovered_at`, `status = 'pending_glossary'`, `glossary_entry_id = null`.
+3. Emit a `warning_emitted` event with message noting the deferred term and chapter.
+4. The `deferred_entity` table is visible to M3 (glossary discovery) as candidate input — the glossary discovery worker may consider deferred entities alongside its own extraction candidates.
+5. Re-running M6 after glossary promotion resolves pending deferred entries: for each `deferred_entity` with status `pending_glossary`, check if a locked glossary entry now exists for the term. If so, update status to `promoted` and create the graph entity with the new `glossary_entry_id`.
+6. Status lifecycle: `pending_glossary` → `promoted` (glossary entry created) → `graph_created` (graph entity created).
+
+**Alternatives considered:**
+
+- Create provisional LadybugDB entity with null `glossary_entry_id`: creates dual-truth risk; graph and glossary can diverge on naming.
+- Silently skip with no record: the term is lost and will never feed back into glossary discovery.
+- Halt M6 and require M3 first: over-rigid for an iterative workflow where glossary grows incrementally.
+
+**Rationale:** Deferred entities in SQLite preserve extraction discoveries without polluting the graph with unverified names. The SQLite table serves as a bridge between graph extraction and glossary discovery, enabling iterative refinement. The status lifecycle makes progress visible and auditable.
 
 ---
 
@@ -469,13 +523,13 @@ Each sub-score saturates at 1.0 based on count thresholds (e.g., 3+ idioms, 2+ a
 ### E18. Resource Budget Concrete Values
 
 **Decision:** Accept the defaults from config:
-- `max_context_per_pass`: 49152 (~75% of 65536 context window)
+- `max_context_per_pass`: 49152 (~75% of 65536 context window) — this is the **absolute ceiling**; enforcement applies the 5% safety buffer from D22 before comparing, yielding an effective raw-token limit of ~46811.
 - `max_paragraph_chars`: 2000
 - `max_bundle_bytes`: 4096
 - Degrade order: broad_continuity → fuzzy_candidates → rerank_depth → pass3 → fallback_model
 - Pass 3 auto-disabled if bundle exceeds 75% of context budget.
 
-**Rationale:** These are sensible starting defaults for a 65K context window on consumer hardware. They can be tuned per-run via config.
+**Rationale:** These are sensible starting defaults for a 65K context window on consumer hardware. The safety buffer is applied automatically at enforcement time; the operator configures the absolute ceiling in `max_context_per_pass`.
 
 ---
 
@@ -529,7 +583,8 @@ Example structure:
 | D15 | Summary format | JSON structured + short prose | Machine-parseable, packet-friendly |
 | D16 | Context injection | `str.format()` named sections, no template engine | Stdlib, debuggable, consistent syntax |
 | D21 | Risk score formula | Weighted sum of 6 sub-scores, clamped [0,1], threshold 0.7 | Deterministic, auditable, comparable across runs |
-| D22 | Tokenization | tiktoken Cl100k, offline, via `llm.tokens.count_tokens()` | Transitive dep, deterministic, 2-3% accuracy for Qwen |
+| D22 | Tokenization | tiktoken Cl100k, offline, via `llm.tokens.count_tokens()`, 5% safety buffer | Transitive dep, deterministic, buffer covers 2-3% Qwen margin |
+| D23 | Entity fallback | Deferred entity SQLite table, no LadybugDB node until glossary promotion | Prevents dual-truth, bridges extraction to glossary discovery |
 | E17 | Logging | loguru, dual-format, 10MB rotation | Spec stack, serves both console and observability |
 | E18 | Budget values | 49152/2000/4096 defaults from config | Sensible for 65K context |
 | E19 | Embeddings | Interface stub now, implement at M7+ | Lower priority, design ahead |

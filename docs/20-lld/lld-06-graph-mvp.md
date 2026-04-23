@@ -29,7 +29,7 @@ LadybugDB datasets:
 ## Data Flow
 
 1. Read extracted chapter content with glossary anchors and summaries.
-2. Cross-reference extracted entities against the locked glossary. For glossary-covered categories (character, faction, location, technique, item_artifact, realm_concept, creature_race, event), attach `glossary_entry_id` at extraction time. Skip entity creation for terms with no locked glossary entry and flag for retry after glossary promotion.
+2. Cross-reference extracted entities against the locked glossary. For glossary-covered categories (character, faction, location, technique, item_artifact, realm_concept, creature_race, event), attach `glossary_entry_id` at extraction time. For terms with no locked glossary entry: do **not** create a LadybugDB node — instead, write a `deferred_entity` record to SQLite with `status = 'pending_glossary'`, the term text, category, evidence snippet, and source chapter. Emit a `warning_emitted` event noting the deferred term. Re-running graph extraction after glossary promotion resolves pending deferred entries (see D23).
 3. Build provisional entity and relationship observations.
 4. Validate references, intervals, and reveal metadata.
 5. Promote confirmed graph state.
@@ -51,6 +51,8 @@ LadybugDB datasets:
 - alias reveal gating
 - chapter-safe relationship filtering
 - separation between provisional and confirmed graph state
+- entity extraction defers unmatched glossary-covered terms to `deferred_entity` SQLite table
+- deferred entity status lifecycle: pending_glossary → promoted → graph_created
 - snapshot metadata available for packet reproducibility
 
 ## Out Of Scope

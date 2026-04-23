@@ -505,6 +505,46 @@ Validation requirements:
 - canonical link to glossary where applicable — entities in glossary-covered categories must carry a valid `glossary_entry_id`
 - no unsupported inferred ontology
 
+### 7b. Deferred Entity Registry
+
+Purpose:
+
+Capture entity extraction discoveries for glossary-covered terms that have no locked glossary entry yet. Prevents dual-truth by deferring graph entity creation until glossary promotion.
+
+Store:
+
+- SQLite
+
+Mutability:
+
+- `promotable_working_state`
+
+Required fields:
+
+- `deferred_id`
+- `term_text`
+- `category` — must be in the glossary-covered set (character, faction, location, technique, item_artifact, realm_concept, creature_race, event)
+- `evidence_snippet`
+- `source_chapter`
+- `discovered_at`
+- `status` — one of: `pending_glossary`, `promoted`, `graph_created`
+- `glossary_entry_id` — nullable; set after a matching locked glossary entry is created
+- `schema_version`
+
+Validation requirements:
+
+- category must belong to the glossary-covered set (deferred entities are not created for non-glossary categories)
+- status transitions must follow the lifecycle: `pending_glossary` → `promoted` → `graph_created`
+- `glossary_entry_id` must be null when status is `pending_glossary` and non-null when status is `promoted` or `graph_created`
+
+Promotion rule:
+
+A deferred entity may only be promoted to `promoted` after a matching locked glossary entry exists. After promotion, the graph extraction worker creates the corresponding LadybugDB entity and updates status to `graph_created`.
+
+Runtime rule:
+
+Deferred entities are visible to glossary discovery (M3) as candidate input. They do not feed translation or packet assembly directly.
+
 ### 8. Graph Aliases
 
 Purpose:

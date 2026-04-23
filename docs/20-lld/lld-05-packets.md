@@ -43,7 +43,7 @@ Minimum packet sections:
 2. Load confirmed graph state through chapter-safe filters.
 3. Identify active entities for chapter `N` from chapter source, glossary hits, summaries, and recent context.
 4. Compact eligible graph context into packet sections without dumping unrestricted subgraphs.
-5. Call `llm.tokens.count_tokens()` on each assembled packet section. If the total exceeds `max_context_per_pass` (49152), trim sections following the degrade order (`broad_continuity` → `fuzzy_candidates` → `rerank_depth` → `pass3` → `fallback_model`) until under budget.
+5. Call `llm.tokens.count_tokens()` on each assembled packet section, apply the 5% safety buffer (multiply each raw count by 1.05, per D22). If the buffered total exceeds `max_context_per_pass` (49152), trim sections following the degrade order (`broad_continuity` → `fuzzy_candidates` → `rerank_depth` → `pass3` → `fallback_model`) until under budget.
 6. Build chapter packet JSON with all required hashes.
 7. Persist packet metadata in SQLite.
 8. Derive paragraph bundles from local packet sections and source block context. Count tokens per bundle; if a bundle exceeds `max_bundle_bytes`, trim lower-priority retrieval evidence.
@@ -73,7 +73,7 @@ Minimum packet sections:
 - bundle excludes non-local or future chapter context
 - graph-to-packet filtering
 - retrieval precedence conflicts
-- packet size budgeting
+- packet size budgeting (with 5% safety buffer applied)
 - stale packet detection when upstream hash changes
 
 ## Out Of Scope
