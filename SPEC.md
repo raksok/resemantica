@@ -135,6 +135,12 @@ Working state may guide validation or review but must not be silently treated as
 - **`analyst_name`** = preprocessing / analysis / editing model for discovery, extraction, summaries, idioms, relationship mining, Pass 2, and Pass 3
 - **`embedding_name`** = embedding model for fuzzy alias and epithet support only
 
+Default config assignments:
+
+- **`translator_name`** = `HY-MT1.5-7B`
+- **`analyst_name`** = `Qwen3.5-9B-GLM5.1`
+- **`embedding_name`** = `bge-M3`
+
 ### 5.3 Core stack
 
 - `llama.cpp` for local inference (router mode with OpenAI-compatible API)

@@ -21,9 +21,9 @@ This document records the decisions made to resolve gaps identified across SPEC.
 
 ```toml
 [models]
-translator_name = "Qwen2.5-32B-Q4_K_M"
-analyst_name = "Qwen2.5-14B-Q4_K_M"
-embedding_name = "bge-m3-Q8_0"
+translator_name = "HY-MT1.5-7B"
+analyst_name = "Qwen3.5-9B-GLM5.1"
+embedding_name = "bge-M3"
 
 [llm]
 base_url = "http://localhost:8080"
@@ -51,6 +51,13 @@ degrade_order = [
 pass3_default = true
 risk_threshold_high = 0.7
 ```
+
+**Default model note:**
+
+- `translator_name` defaults to `HY-MT1.5-7B`
+- `analyst_name` defaults to `Qwen3.5-9B-GLM5.1`
+- `embedding_name` defaults to `bge-M3`
+- `Qwen3.5-9B-GLM5.1` refers to the Qwen3.5-base distilled GLM5.1 variant from jackrong on Hugging Face
 
 **Alternatives considered:**
 - YAML: requires PyYAML dependency

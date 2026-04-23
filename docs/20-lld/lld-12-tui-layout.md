@@ -493,9 +493,9 @@ Purpose: Display current configuration, model info, and budget values. Read-only
 │          │  Configuration                                    │
 │  ■ Ch 34 │                                                   │
 │  ...     │  Models                                           │
-│          │    translator    Qwen2.5-32B-Q4_K_M               │
-│          │    analyst       Qwen2.5-14B-Q4_K_M               │
-│          │    embedding     bge-m3-Q8_0                      │
+│          │    translator    HY-MT1.5-7B                      │
+│          │    analyst       Qwen3.5-9B-GLM5.1                │
+│          │    embedding     bge-M3                           │
 │          │                                                   │
 │          │  LLM                                              │
 │          │    base_url      http://localhost:8080             │
