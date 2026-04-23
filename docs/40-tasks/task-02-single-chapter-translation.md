@@ -2,6 +2,7 @@
 
 - **Milestone:** M2
 - **Depends on:** M1
+- **Status:** Completed on 2026-04-24 (implementation + validation complete)
 
 ## Goal
 
@@ -39,8 +40,14 @@ Out:
 - Pass 2 correction test
 - resume from successful Pass 1 test
 
+Execution status:
+
+- [x] `uv run --extra dev pytest tests/translation tests/epub` passed (`12 passed`)
+- [x] `uv run --extra dev ruff check src/resemantica tests/translation tests/epub docs/30-operations/repo-map.md` passed
+- [x] `uv run --extra dev mypy src/resemantica` passed
+
 ## Done Criteria
 
-- a single chapter can produce pass artifacts and validation reports
-- structural failures halt the run
-- checkpoint semantics match the LLD
+- [x] a single chapter can produce pass artifacts and validation reports
+- [x] structural failures halt the run
+- [x] checkpoint semantics match the LLD

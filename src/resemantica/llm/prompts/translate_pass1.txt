@@ -1,0 +1,10 @@
+# version: 1.0
+PASS1
+
+## SOURCE TEXT
+{SOURCE_TEXT}
+
+## INSTRUCTIONS
+Translate Chinese source text into English.
+Preserve placeholders exactly as provided.
+

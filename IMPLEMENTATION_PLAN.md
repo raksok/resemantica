@@ -110,20 +110,20 @@ Use the EPUB foundation to prove the smallest translation slice: one chapter, st
 
 ### Action Items
 
-[ ] Add chapter-level source loaders that expose stable block text and placeholder references to the translation layer.
-[ ] Create `llm/` model client abstractions for `translator_name` and `analyst_name`, including prompt version tracking.
-[ ] Implement Pass 1 in `translation/pass1.py` with conservative draft generation and glossary-hook placeholders only.
-[ ] Implement structural restoration and basic output validators for non-empty output, placeholder preservation, and block mapping stability.
-[ ] Implement Pass 2 in `translation/pass2.py` to compare source and draft and produce corrected output plus fidelity flags.
-[ ] Implement a `translate-chapter` CLI command that runs extraction, Pass 1, restoration checks, Pass 2, and artifact emission.
-[ ] Persist pass artifacts, validation reports, and basic checkpoint metadata for the single-chapter flow.
-[ ] Add tests that cover placeholder-safe translation, Pass 2 correction flow, and hard-failure behavior on restoration errors.
+[x] Add chapter-level source loaders that expose stable block text and placeholder references to the translation layer.
+[x] Create `llm/` model client abstractions for `translator_name` and `analyst_name`, including prompt version tracking.
+[x] Implement Pass 1 in `translation/pass1.py` with conservative draft generation and glossary-hook placeholders only.
+[x] Implement structural restoration and basic output validators for non-empty output, placeholder preservation, and block mapping stability.
+[x] Implement Pass 2 in `translation/pass2.py` to compare source and draft and produce corrected output plus fidelity flags.
+[x] Implement a `translate-chapter` CLI command that runs extraction, Pass 1, restoration checks, Pass 2, and artifact emission.
+[x] Persist pass artifacts, validation reports, and basic checkpoint metadata for the single-chapter flow.
+[x] Add tests that cover placeholder-safe translation, Pass 2 correction flow, and hard-failure behavior on restoration errors.
 
 ### Validation
 
-[ ] Verify one chapter can produce raw and corrected outputs plus validation reports.
-[ ] Verify placeholder failures halt the workflow instead of being ignored.
-[ ] Verify Pass 2 output can be resumed or re-read without rerunning successful earlier steps.
+[x] Verify one chapter can produce raw and corrected outputs plus validation reports.
+[x] Verify placeholder failures halt the workflow instead of being ignored.
+[x] Verify Pass 2 output can be resumed or re-read without rerunning successful earlier steps.
 
 ## Milestone 3: Canonical Glossary System
 

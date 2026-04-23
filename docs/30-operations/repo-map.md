@@ -19,6 +19,14 @@ Implemented package layout (M1 slice):
 - `src/resemantica/db/sqlite.py`: SQLite connection and migration helpers
 - `src/resemantica/db/migrations/001_initial.sql`: initial manual migration script
 
+Implemented package layout (M2 slice):
+
+- `src/resemantica/llm/`: LLM client and prompt loading helpers
+- `src/resemantica/llm/prompts/translate_pass1.txt`, `translate_pass2.txt`: prompt templates with version headers
+- `src/resemantica/translation/`: pass1/pass2, validators, checkpoints, translate-chapter pipeline
+- `src/resemantica/db/migrations/002_translation_checkpoints.sql`: checkpoint table for chapter pass resume
+- `tests/translation/`: M2 translation tests
+
 ## Target State
 
 Primary code roots:
