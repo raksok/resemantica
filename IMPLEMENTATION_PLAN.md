@@ -1,7 +1,7 @@
 # Resemantica Implementation Plan
 
 Version: 1.0
-Sources: `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`
+Sources: `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`, `DECISIONS.md`
 Status: milestone implementation plan
 
 ## Approach
@@ -36,14 +36,16 @@ This plan turns the target milestones into buildable execution slices. Each mile
 
 ## Milestone Dependency Chain
 
+**Note:** Milestone order (M1–M14) governs execution priority. Task brief IDs are historical labels and do not determine execution sequence. See `docs/40-tasks/README.md` for the canonical milestone-to-task mapping.
+
 - M1 is the base for M2 and M14.
 - M2 depends on M1 extraction and restoration.
 - M3 and M4 depend on M1 extraction.
-- M5 depends on M3 and M4, and on the idiom contract skeleton.
-- M6 depends on M1, M3, and M4.
-- M7 depends on M5 and M6.
-- M8 depends on M6.
-- M9 depends on M2, M5, and M7.
+- M5 (idioms) depends on M1 and M3.
+- M6 (graph) depends on M1, M3, and M4.
+- M7 (world model) depends on M6.
+- M8 (packets with graph) depends on M3, M4, M5, and M7.
+- M9 (Pass 3 + risk) depends on M2 and M8.
 - M10 depends on M1 through M9 having stable callable entrypoints.
 - M11 depends on M10 run metadata and artifact registration.
 - M12 depends on M10 and M11.
@@ -192,40 +194,37 @@ Build continuity memory as a separate authority layer after glossary. Chinese su
 [ ] Verify future-knowledge leaks are caught during continuity validation.
 [ ] Verify `story_so_far_zh` derivation never uses repaired English outputs as source truth.
 
-## Milestone 5: Chapter Packets
+## Milestone 5: Idiom Workflow
 
 ### Approach
 
-Turn validated authority memory into runtime-ready chapter packets and paragraph bundle rules. This milestone is where runtime context shifts from ad hoc loading to explicit packet-driven execution.
+Build idiom detection, normalization, and storage as a preprocessing authority layer after glossary, making idiom policies available for packet assembly.
 
 ### Scope
 
 - In:
-  - Chapter packet schema
-  - Packet builder
-  - Version hashes and invalidation metadata
-  - Paragraph bundle builder
+  - idiom detection from source chapters
+  - normalization and duplicate detection
+  - idiom policy store in SQLite
+  - exact-match retrieval for packet assembly
+
 - Out:
-  - Graph enrichment beyond local placeholders
-  - Pass 3
-  - Full orchestration UI
+  - packet integration
+  - translation-time matching beyond exact match
 
 ### Action Items
 
-[ ] Add typed schemas in `packets/` for chapter packets and paragraph bundles, including version and provenance fields.
-[ ] Implement packet metadata persistence in SQLite and JSON packet artifact emission on disk.
-[ ] Build the chapter packet assembler using locked glossary, validated summaries, idiom placeholders or initial policy records, and chapter metadata.
-[ ] Implement packet reproducibility fields such as source hash, glossary hash, summary hash, builder version, and build timestamp.
-[ ] Implement paragraph bundle derivation logic that selects local glossary hits, continuity notes, evidence summaries, and risk placeholders.
-[ ] Add stale-artifact detection so packet rebuilds can be triggered when upstream authority hashes change.
-[ ] Add a CLI or preprocessing entrypoint to build or rebuild chapter packets for a chapter or range.
-[ ] Add tests for packet schema validity, reproducibility metadata presence, and minimal paragraph bundle content rules.
+[ ] Define the `Idiom` model and SQLite schema in `idioms/repo.py` aligned with `DATA_CONTRACT.md`.
+[ ] Implement `idioms.extractor.extract_idioms` using the `analyst_name` model to find idioms in chapter text.
+[ ] Implement normalization and duplicate detection in `idioms.validators`.
+[ ] Add the `preprocess idioms` CLI command.
+[ ] Add tests for detection, storage, and retrieval.
 
 ### Validation
 
-[ ] Verify chapter packets are immutable artifacts with enough metadata to reproduce or invalidate them.
-[ ] Verify paragraph bundles contain only local context and not broad full-chapter dumps.
-[ ] Verify packet rebuilds trigger when upstream authority hashes change.
+[ ] Idioms can be extracted from a chapter and stored in SQLite.
+[ ] Duplicates are correctly identified and merged or rejected.
+[ ] Idioms are available for exact-match retrieval by source text.
 
 ## Milestone 6: Graph MVP Foundation
 
@@ -263,41 +262,7 @@ Add the graph only after glossary and summary foundations exist. Keep the graph 
 [ ] Verify chapter-safe filtering blocks future reveals and expired relationships.
 [ ] Verify the graph can be snapshotted or hashed for downstream packet versioning.
 
-## Milestone 7: Packet Integration
-
-### Approach
-
-Wire the graph into packet assembly without turning packets into graph dumps. This milestone upgrades packet quality while preserving the runtime rule that translation reads compact local memory.
-
-### Scope
-
-- In:
-  - Graph-to-packet assembly
-  - Active entity extraction
-  - Chapter-safe relationship snippets
-  - Packet size control
-- Out:
-  - Rich role-state timelines
-  - Pass 3 changes
-  - TUI work
-
-### Action Items
-
-[ ] Extend the packet builder to read confirmed graph snapshots and select only relevant chapter-safe entity and relationship context.
-[ ] Implement packet-side alias resolution candidate lists and reveal-safe identity notes.
-[ ] Add packet size budgeting rules so graph enrichment can be trimmed without violating chapter safety.
-[ ] Extend paragraph bundle derivation to include locally relevant graph-backed relationships and alias resolutions.
-[ ] Implement retrieval arbitration in packet or bundle assembly so glossary and deterministic idiom matches outrank graph contributions.
-[ ] Persist graph snapshot hashes in chapter packet metadata and invalidation logic.
-[ ] Add tests for graph-to-packet filtering, packet size control, and retrieval precedence conflicts.
-
-### Validation
-
-[ ] Verify packets contain chapter-safe graph snippets rather than unrestricted subgraph exports.
-[ ] Verify exact glossary and idiom matches still outrank graph suggestions in paragraph bundles.
-[ ] Verify graph snapshot changes invalidate dependent packets.
-
-## Milestone 8: Lightweight World Model
+## Milestone 7: Lightweight World Model
 
 ### Approach
 
@@ -306,14 +271,15 @@ Extend the graph carefully with only the world-model features that materially im
 ### Scope
 
 - In:
-  - Hierarchy edges
-  - Containment edges
-  - Role-state changes
-  - Reveal-safe lore context
+  - hierarchy edges (faction, teacher-disciple lineage, rank/title)
+  - containment edges (location hierarchy, faction bases)
+  - role-state changes across chapters
+  - reveal-safe lore context
+
 - Out:
-  - General ontology modeling
-  - Freeform inferred cosmology
-  - Agentic reasoning on world state
+  - general ontology modeling
+  - freeform inferred cosmology
+  - agentic reasoning on world state
 
 ### Action Items
 
@@ -330,6 +296,49 @@ Extend the graph carefully with only the world-model features that materially im
 [ ] Verify new world-model features remain within the translation-support scope from the spec.
 [ ] Verify reveal-safe lore context only appears at or after the allowed chapter.
 [ ] Verify packet enrichment remains compact after the richer graph model lands.
+
+## Milestone 8: Chapter Packets with Graph Integration
+
+### Approach
+
+Build immutable chapter packets from validated upstream memory including confirmed graph state, and derive narrow paragraph bundles for translation-time use. This milestone merges packet building and graph integration since the graph is now available from M7.
+
+### Scope
+
+- In:
+  - chapter packet schema
+  - packet builder with graph context enrichment
+  - chapter-safe relationship snippets and alias resolution candidates
+  - paragraph bundle derivation
+  - packet versioning and stale detection
+  - retrieval arbitration (glossary and idiom outrank graph)
+
+- Out:
+  - Pass 3
+  - full production orchestration
+
+### Action Items
+
+[ ] Add typed schemas in `packets/` for chapter packets and paragraph bundles, including version and provenance fields.
+[ ] Implement packet metadata persistence in SQLite and JSON packet artifact emission on disk.
+[ ] Build the chapter packet assembler using locked glossary, validated summaries, idiom policies, chapter metadata, and confirmed graph context.
+[ ] Implement packet-side alias resolution candidate lists and reveal-safe identity notes from graph data.
+[ ] Add packet size budgeting rules so graph enrichment can be trimmed without violating chapter safety.
+[ ] Implement paragraph bundle derivation logic that selects local glossary hits, continuity notes, evidence summaries, risk placeholders, and locally relevant graph context.
+[ ] Implement retrieval arbitration in packet or bundle assembly so glossary and deterministic idiom matches outrank graph contributions.
+[ ] Implement packet reproducibility fields such as source hash, glossary hash, summary hash, graph snapshot hash, builder version, and build timestamp.
+[ ] Add stale-artifact detection so packet rebuilds can be triggered when upstream authority hashes change.
+[ ] Add a CLI or preprocessing entrypoint to build or rebuild chapter packets for a chapter or range.
+[ ] Add tests for packet schema validity, reproducibility metadata presence, minimal paragraph bundle content rules, graph-to-packet filtering, packet size control, and retrieval precedence conflicts.
+
+### Validation
+
+[ ] Verify chapter packets are immutable artifacts with enough metadata to reproduce or invalidate them.
+[ ] Verify paragraph bundles contain only local context and not broad full-chapter dumps.
+[ ] Verify packet rebuilds trigger when upstream authority hashes change.
+[ ] Verify packets contain chapter-safe graph snippets rather than unrestricted subgraph exports.
+[ ] Verify exact glossary and idiom matches still outrank graph suggestions in paragraph bundles.
+[ ] Verify graph snapshot changes invalidate dependent packets.
 
 ## Milestone 9: Full Three-Pass Workflow and Stronger Risk Handling
 

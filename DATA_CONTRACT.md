@@ -212,9 +212,12 @@ Required fields:
 - `chapter_number`
 - `source_document_path`
 - `block_id`
+- `segment_id` nullable — present only when a block was split; format `ch{NNN}_blk{NNN}_seg{NN}`
+- `parent_block_id` — references the original `block_id`; equals `block_id` for unsplit blocks
 - `block_order`
+- `segment_order` nullable — ordinal within the parent block's segments; null for unsplit blocks
 - `source_text_zh`
-- `placeholder_map_ref`
+- `placeholder_map_ref` — filesystem path to the placeholder map JSON file: `artifacts/releases/{release_id}/extracted/placeholders/chapter-{chapter_number}.json`. The file is an `immutable_artifact` keyed by `block_id`. Reconstruction (Phase 2) loads this file by path. No BLOB storage, no SQLite inline storage.
 - `chapter_source_hash`
 - `schema_version`
 
@@ -224,6 +227,7 @@ Validation requirements:
 - stable block ordering present
 - placeholder mapping reversible for supported types
 - extracted text traceable back to original block
+- segments ordered within parent block; concatenation of all segments for a block must equal the original block text
 
 Downstream consumers:
 
@@ -273,9 +277,23 @@ Recommended fields:
 Validation requirements:
 
 - normalized duplicate detection
-- category validation
+- category validation against mandatory enum
 - explicit conflict recording
 - separation between discovered term and approved canon
+
+Mandatory category enum:
+- `character`
+- `alias`
+- `title_honorific`
+- `faction`
+- `location`
+- `technique`
+- `item_artifact`
+- `realm_concept`
+- `creature_race`
+- `generic_role`
+- `event`
+- `idiom`
 
 Promotion rule:
 
@@ -356,6 +374,8 @@ Supported summary types:
 - `story_so_far_zh`
 - `arc_summary_zh`
 - `previous_3_bundle_zh` if materialized
+
+Persistence rule: every supported summary type must be materialized as a distinct row in the summary store at the end of its Phase 0 generation stage. Downstream consumers (packet assembly, translation) must never need to parse a parent JSON object to extract a child field. For example, `chapter_summary_zh_short` is derived from the `narrative_progression` field of the structured summary but is written as its own row with `summary_type = 'chapter_summary_zh_short'` and `content_zh` = the `narrative_progression` string.
 
 Validation requirements:
 
@@ -462,14 +482,19 @@ Required fields:
 - `entity_id`
 - `entity_type`
 - `canonical_name`
+- `glossary_entry_id` — required for entities in glossary-covered categories (character, faction, location, technique, item_artifact, realm_concept, creature_race, event). Must reference a valid locked glossary entry. Nullable only for entity types that have no glossary counterpart (e.g., generic structural nodes).
 - `first_seen_chapter`
 - `last_seen_chapter`
+- `revealed_chapter`
 - `status`
 - `schema_version`
 
+Identity authority rule:
+
+For glossary-covered categories, the Locked Glossary is the source of truth for identity creation. A graph entity must not be created for a term in a glossary-covered category unless a corresponding locked glossary entry exists. The entity extractor should defer entity creation for unmatched terms and flag them for retry after glossary promotion. This prevents dual-truth scenarios where graph entity names diverge from glossary names.
+
 Recommended fields:
 
-- `glossary_entry_id`
 - `description_ref`
 - `is_reader_safe`
 
@@ -477,7 +502,7 @@ Validation requirements:
 
 - supported node type
 - stable identifier
-- canonical link to glossary where applicable
+- canonical link to glossary where applicable — entities in glossary-covered categories must carry a valid `glossary_entry_id`
 - no unsupported inferred ontology
 
 ### 8. Graph Aliases
@@ -788,6 +813,7 @@ Required checkpoint fields:
 - `stage_name`
 - `checkpoint_status`
 - `latest_artifact_ref`
+- `manual_approval_flag` (boolean, explicit operator override)
 - `updated_at`
 - `schema_version`
 
@@ -995,3 +1021,4 @@ Resemantica is compliant with this contract when:
 3. chapter packets and paragraph bundles are reproducible from explicit upstream versions
 4. runtime translation cannot silently consume future-unsafe or lower-priority conflicting memory
 5. runs can be resumed, inspected, and cleaned up without corrupting authority data
+ing authority data

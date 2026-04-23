@@ -1,7 +1,7 @@
 # Resemantica Architecture
 
 Version: 1.0
-Source: derived from `SPEC.md`
+Sources: derived from `SPEC.md`; `DECISIONS.md` is the active source of truth for resolved implementation decisions.
 Status: implementation-facing architecture baseline
 
 ## Purpose
@@ -462,10 +462,10 @@ Implementation should follow the validated slices already implied by the spec:
 2. single-chapter translation MVP with Pass 1 and Pass 2
 3. canonical glossary system
 4. summary memory
-5. chapter packets
-6. graph MVP foundation
-7. graph-to-packet integration
-8. lightweight world model
+5. idiom workflow
+6. graph MVP foundation with LadybugDB as the graph store
+7. lightweight world model
+8. chapter packets with graph integration
 9. full three-pass translation with stronger risk handling
 10. centralized orchestration and production workflow
 11. reset and cleanup workflow

@@ -4,6 +4,12 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## 0. Project-Specific Rules
+
+**Milestone order governs execution.** Task brief IDs (task-01 through task-15) are historical labels. Always execute in milestone order M1→M14. See `docs/40-tasks/README.md` for the canonical mapping table and dependency chain.
+
+**Graph database: LadybugDB, NOT Kuzu.** The package is `ladybug` (`uv add ladybug`). The import is `import ladybug as lb`. Do NOT use `import kuzu` — LadybugDB was formerly Kuzu but the Python package has been renamed. API reference: https://docs.ladybugdb.com/client-apis/python
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**

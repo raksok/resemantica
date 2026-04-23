@@ -2,6 +2,7 @@
 Version: 1.0
 Status: Consolidated target spec
 Scope: Unified project spec replacing the older baseline + upgrade-plan split
+Decision authority: `DECISIONS.md` resolves implementation-level conflicts.
 
 ---
 
@@ -136,10 +137,9 @@ Working state may guide validation or review but must not be silently treated as
 
 ### 5.3 Core stack
 
-- `llama.cpp` for local inference
+- `llama.cpp` for local inference (router mode with OpenAI-compatible API)
 - SQLite for structured storage, checkpoints, cache, glossary, summaries, and packet metadata
 - LadybugDB for graph-backed entity and relationship memory
-- LangChain + LangGraph for workflow orchestration
 - MLflow for observability, artifacts, metrics, evaluation, and run comparison
 - ebooklib + BeautifulSoup + lxml for EPUB/XHTML handling
 - Textual for the unified operator TUI
@@ -296,7 +296,7 @@ After candidate translation:
 - locked glossary = SQLite
 - graph DB is not the primary glossary authority
 
-### 9.7 Recommended categories
+### 9.7 Mandatory category enum
 
 - `character`
 - `alias`
@@ -1180,11 +1180,11 @@ Reduced-budget runs must remain structurally safe and chapter-safe.
 - derived English summaries
 - previous-3 and story-so-far support
 
-### Milestone 5 — Chapter packets
-- chapter packet schema
-- packet builder
-- packet versioning
-- paragraph bundle builder
+### Milestone 5 — Idiom workflow
+- idiom detection and extraction
+- idiom normalization and duplicate detection
+- idiom policy store
+- exact-match retrieval for packet assembly
 
 ### Milestone 6 — Graph MVP foundation
 - LadybugDB client
@@ -1194,17 +1194,18 @@ Reduced-budget runs must remain structurally safe and chapter-safe.
 - graph validation
 - chapter-safe filtering
 
-### Milestone 7 — Packet integration
-- graph-to-packet assembly
-- active entity extraction
-- chapter-safe relationship snippets
-- packet size control
-
-### Milestone 8 — Lightweight world model
+### Milestone 7 — Lightweight world model
 - hierarchy edges
 - containment edges
 - role-state changes
 - reveal-safe lore context
+
+### Milestone 8 — Chapter packets with graph integration
+- chapter packet schema
+- packet builder with graph context
+- packet versioning
+- paragraph bundle builder
+- chapter-safe relationship snippets and packet size control
 
 ### Milestone 9 — Full three-pass workflow with stronger paragraph risk classification
 - Pass 3
@@ -1282,7 +1283,7 @@ The working target is achieved when the system can:
 1. unpack and validate an EPUB
 2. preprocess chapters into stable memory artifacts
 3. build reproducible chapter packets
-4. translate chapters through controlled passes
+4. translate chapters through controlled passes (Pass 1 and Pass 2 are required; Pass 3 is strictly optional but must be supported for low-risk paragraphs)
 5. validate structure, fidelity, and glossary consistency
 6. checkpoint and resume safely
 7. run through a centralized production workflow
