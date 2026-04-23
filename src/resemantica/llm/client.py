@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import time
 from typing import Any, Callable
 
+from resemantica.llm.prompts import render_named_sections
+
 
 GenerationHook = Callable[[str, str], str]
 
@@ -40,6 +42,25 @@ class LLMClient:
             raise RuntimeError("LLM generation failed with unknown error.")
         raise RuntimeError(f"LLM generation failed: {last_error}") from last_error
 
+    def translate_glossary_candidate(
+        self,
+        *,
+        model_name: str,
+        prompt_template: str,
+        source_term: str,
+        category: str,
+        evidence_snippet: str,
+    ) -> str:
+        prompt = render_named_sections(
+            prompt_template,
+            sections={
+                "SOURCE_TERM": source_term,
+                "CATEGORY": category,
+                "EVIDENCE_SNIPPET": evidence_snippet,
+            },
+        )
+        return self.generate_text(model_name=model_name, prompt=prompt).strip()
+
     def _build_openai_client(self) -> Any:
         try:
             from openai import OpenAI  # type: ignore
@@ -54,4 +75,3 @@ class LLMClient:
             api_key="not-required-for-local-router",
             timeout=self.timeout_seconds,
         )
-

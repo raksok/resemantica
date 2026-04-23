@@ -145,20 +145,20 @@ Build the first authority store after extraction: glossary candidates and locked
 
 ### Action Items
 
-[ ] Add SQLite setup and repositories in `db/` for glossary candidates and locked glossary entries.
-[ ] Encode typed glossary schemas and status enums aligned with `DATA_CONTRACT.md`.
-[ ] Implement glossary discovery using extracted chapter text, evidence snippets, chapter ranges, and category assignment.
-[ ] Implement candidate English translation with prompt routing metadata and translator provenance capture.
-[ ] Implement deterministic normalization, duplicate detection, naming-policy checks, and explicit conflict recording.
-[ ] Implement promotion logic that moves validated candidates into locked glossary without mutating candidate history.
-[ ] Add CLI or preprocessing subcommands that can run discovery, candidate translation, validation, and promotion independently.
-[ ] Add tests for duplicate detection, conflict handling, and exact-match retrieval precedence.
+[x] Add SQLite setup and repositories in `db/` for glossary candidates and locked glossary entries.
+[x] Encode typed glossary schemas and status enums aligned with `DATA_CONTRACT.md`.
+[x] Implement glossary discovery using extracted chapter text, evidence snippets, chapter ranges, and category assignment.
+[x] Implement candidate English translation with prompt routing metadata and translator provenance capture.
+[x] Implement deterministic normalization, duplicate detection, naming-policy checks, and explicit conflict recording.
+[x] Implement promotion logic that moves validated candidates into locked glossary without mutating candidate history.
+[x] Add CLI or preprocessing subcommands that can run discovery, candidate translation, validation, and promotion independently.
+[x] Add tests for duplicate detection, conflict handling, and exact-match retrieval precedence.
 
 ### Validation
 
-[ ] Verify candidate discovery never writes directly to locked glossary.
-[ ] Verify approved glossary entries are stored separately from provisional or rejected candidates.
-[ ] Verify exact glossary matches win over all lower-priority future retrieval sources.
+[x] Verify candidate discovery never writes directly to locked glossary.
+[x] Verify approved glossary entries are stored separately from provisional or rejected candidates.
+[x] Verify exact glossary matches win over all lower-priority future retrieval sources.
 
 ## Milestone 4: Summary Memory
 

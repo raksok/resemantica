@@ -1,0 +1,10 @@
+# version: 1.0
+
+## GLOSSARY_TRANSLATE
+Translate the source term into concise canonical English.
+Return only the translated term with no extra commentary.
+
+SOURCE TERM: {SOURCE_TERM}
+CATEGORY: {CATEGORY}
+EVIDENCE: {EVIDENCE_SNIPPET}
+

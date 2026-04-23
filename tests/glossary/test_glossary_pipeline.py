@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import sqlite3
+from pathlib import Path
+import zipfile
+
+import pytest
+
+from resemantica.db.glossary_repo import (
+    ensure_glossary_schema,
+    list_conflicts,
+    list_locked_entries,
+    promote_locked_entries,
+)
+from resemantica.db.sqlite import open_connection
+from resemantica.epub.extractor import extract_epub
+from resemantica.glossary.models import LockedGlossaryEntry
+from resemantica.glossary.pipeline import (
+    discover_glossary_candidates,
+    promote_glossary_candidates,
+    resolve_locked_glossary_term,
+    translate_glossary_candidates,
+)
+from resemantica.glossary.validators import normalize_term
+from resemantica.settings import derive_paths, load_config
+
+
+def _write_fixture_epub(epub_path: Path, chapter_xhtml: str) -> None:
+    workspace = epub_path.parent / "fixture_book_glossary"
+    meta_inf = workspace / "META-INF"
+    oebps = workspace / "OEBPS"
+    meta_inf.mkdir(parents=True, exist_ok=True)
+    oebps.mkdir(parents=True, exist_ok=True)
+
+    (workspace / "mimetype").write_text("application/epub+zip", encoding="utf-8")
+    (meta_inf / "container.xml").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+""",
+        encoding="utf-8",
+    )
+    (oebps / "content.opf").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.0" xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fixture</dc:title>
+    <dc:language>zh-CN</dc:language>
+    <dc:identifier>fixture-book</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="chap1"/>
+  </spine>
+</package>
+""",
+        encoding="utf-8",
+    )
+    (oebps / "chapter1.xhtml").write_text(chapter_xhtml, encoding="utf-8")
+
+    with zipfile.ZipFile(epub_path, "w") as archive:
+        archive.write(workspace / "mimetype", arcname="mimetype", compress_type=zipfile.ZIP_STORED)
+        for file_path in sorted(workspace.rglob("*")):
+            if not file_path.is_file() or file_path.name == "mimetype":
+                continue
+            archive.write(
+                file_path,
+                arcname=file_path.relative_to(workspace).as_posix(),
+                compress_type=zipfile.ZIP_DEFLATED,
+            )
+
+
+def _extract_one_chapter(tmp_path: Path, *, release_id: str, source_text: str) -> None:
+    input_epub = tmp_path / f"{release_id}.epub"
+    chapter_xhtml = (
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>"""
+        + source_text
+        + "</p></body></html>"
+    )
+    _write_fixture_epub(input_epub, chapter_xhtml)
+    result = extract_epub(input_path=input_epub, release_id=release_id)
+    assert result.status == "success"
+
+
+class StaticGlossaryTranslator:
+    def __init__(self, target_term: str) -> None:
+        self.target_term = target_term
+
+    def translate_glossary_candidate(  # noqa: D401
+        self,
+        *,
+        model_name: str,  # noqa: ARG002
+        prompt_template: str,  # noqa: ARG002
+        source_term: str,  # noqa: ARG002
+        category: str,  # noqa: ARG002
+        evidence_snippet: str,  # noqa: ARG002
+    ) -> str:
+        return self.target_term
+
+
+def test_discovery_writes_candidates_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _extract_one_chapter(
+        tmp_path,
+        release_id="m3-discovery",
+        source_text="青云门弟子张三来到青云山。",
+    )
+
+    result = discover_glossary_candidates(
+        release_id="m3-discovery",
+        run_id="discover-001",
+    )
+    assert result["status"] == "success"
+    assert result["candidates_written"] > 0
+
+    config = load_config()
+    paths = derive_paths(config, release_id="m3-discovery")
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM glossary_candidates WHERE release_id = ?",
+            ("m3-discovery",),
+        ).fetchone()
+        locked_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM locked_glossary WHERE release_id = ?",
+            ("m3-discovery",),
+        ).fetchone()
+        assert candidate_count is not None and int(candidate_count["count"]) > 0
+        assert locked_count is not None and int(locked_count["count"]) == 0
+    finally:
+        conn.close()
+
+
+def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _extract_one_chapter(
+        tmp_path,
+        release_id="m3-conflict",
+        source_text="青云门。苍云门。",
+    )
+
+    discover_glossary_candidates(release_id="m3-conflict", run_id="discover-001")
+    translate_glossary_candidates(
+        release_id="m3-conflict",
+        run_id="translate-001",
+        llm_client=StaticGlossaryTranslator("Azure Sect"),
+    )
+    result = promote_glossary_candidates(
+        release_id="m3-conflict",
+        run_id="promote-001",
+    )
+
+    assert result["promoted_count"] == 0
+    assert result["conflict_count"] > 0
+
+    config = load_config()
+    paths = derive_paths(config, release_id="m3-conflict")
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        locked = list_locked_entries(conn, release_id="m3-conflict")
+        conflicts = list_conflicts(conn, release_id="m3-conflict")
+        assert not locked
+        assert any(conflict.conflict_type == "duplicate_target" for conflict in conflicts)
+    finally:
+        conn.close()
+
+
+def test_promotion_insert_is_transactional(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    paths = derive_paths(config, release_id="m3-transaction")
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    approved_at = datetime.now(UTC).isoformat()
+
+    entry_a = LockedGlossaryEntry(
+        glossary_entry_id="glex_txn_a",
+        release_id="m3-transaction",
+        source_term="青云门",
+        normalized_source_term=normalize_term("青云门"),
+        target_term="Azure Sect",
+        normalized_target_term=normalize_term("Azure Sect"),
+        category="faction",
+        status="approved",
+        approved_at=approved_at,
+        approval_run_id="promote-001",
+        source_candidate_id="gcan_txn_a",
+        schema_version=1,
+    )
+    entry_b = LockedGlossaryEntry(
+        glossary_entry_id="glex_txn_b",
+        release_id="m3-transaction",
+        source_term="苍云门",
+        normalized_source_term=normalize_term("苍云门"),
+        target_term="Azure Sect",
+        normalized_target_term=normalize_term("Azure Sect"),
+        category="faction",
+        status="approved",
+        approved_at=approved_at,
+        approval_run_id="promote-001",
+        source_candidate_id="gcan_txn_b",
+        schema_version=1,
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        promote_locked_entries(conn, entries=[entry_a, entry_b])
+
+    locked = list_locked_entries(conn, release_id="m3-transaction")
+    assert locked == []
+    conn.close()
+
+
+def test_exact_match_precedence_over_fallback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    paths = derive_paths(config, release_id="m3-precedence")
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        promote_locked_entries(
+            conn,
+            entries=[
+                LockedGlossaryEntry(
+                    glossary_entry_id="glex_precedence",
+                    release_id="m3-precedence",
+                    source_term="青云门",
+                    normalized_source_term=normalize_term("青云门"),
+                    target_term="Azure Sect",
+                    normalized_target_term=normalize_term("Azure Sect"),
+                    category="faction",
+                    status="approved",
+                    approved_at=datetime.now(UTC).isoformat(),
+                    approval_run_id="promote-001",
+                    source_candidate_id="gcan_precedence",
+                    schema_version=1,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    resolved = resolve_locked_glossary_term(
+        release_id="m3-precedence",
+        source_term="青云门",
+        category="faction",
+        fallback_target_term="Fuzzy Candidate Name",
+    )
+    assert resolved == "Azure Sect"

@@ -5,8 +5,29 @@ from pathlib import Path
 import sys
 
 from resemantica.epub.extractor import extract_epub
+from resemantica.glossary.pipeline import (
+    discover_glossary_candidates,
+    promote_glossary_candidates,
+    translate_glossary_candidates,
+)
 from resemantica.settings import load_config
 from resemantica.translation.pipeline import translate_chapter
+
+
+def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: str) -> None:
+    parser.add_argument("--release", required=True, help="Release identifier.")
+    parser.add_argument(
+        "--run",
+        required=False,
+        default=default_run,
+        help=f"Run identifier (default: {default_run}).",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional path to resemantica.toml",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -44,6 +65,33 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to resemantica.toml",
     )
+
+    preprocess = subparsers.add_parser(
+        "preprocess",
+        help="Run preprocessing stage tasks.",
+    )
+    preprocess_subparsers = preprocess.add_subparsers(
+        dest="preprocess_command",
+        required=True,
+    )
+
+    glossary_discover = preprocess_subparsers.add_parser(
+        "glossary-discover",
+        help="Discover glossary candidates from extracted chapters.",
+    )
+    _add_common_release_args(glossary_discover, default_run="glossary-discover")
+
+    glossary_translate = preprocess_subparsers.add_parser(
+        "glossary-translate",
+        help="Translate discovered glossary candidates to provisional English terms.",
+    )
+    _add_common_release_args(glossary_translate, default_run="glossary-translate")
+
+    glossary_promote = preprocess_subparsers.add_parser(
+        "glossary-promote",
+        help="Validate and promote glossary candidates into locked glossary.",
+    )
+    _add_common_release_args(glossary_promote, default_run="glossary-promote")
     return parser
 
 
@@ -79,6 +127,48 @@ def main(argv: list[str] | None = None) -> int:
         print(f"structure_report={translation_result['structure_report']}")
         print(f"fidelity_report={translation_result['fidelity_report']}")
         return 0
+
+    if args.command == "preprocess":
+        config = load_config(args.config)
+
+        if args.preprocess_command == "glossary-discover":
+            result = discover_glossary_candidates(
+                release_id=args.release,
+                run_id=args.run,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"candidates_written={result['candidates_written']}")
+            print(f"candidates_artifact={result['candidates_artifact']}")
+            return 0
+
+        if args.preprocess_command == "glossary-translate":
+            result = translate_glossary_candidates(
+                release_id=args.release,
+                run_id=args.run,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"translated_count={result['translated_count']}")
+            print(f"candidates_artifact={result['candidates_artifact']}")
+            return 0
+
+        if args.preprocess_command == "glossary-promote":
+            result = promote_glossary_candidates(
+                release_id=args.release,
+                run_id=args.run,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"candidate_count={result['candidate_count']}")
+            print(f"promoted_count={result['promoted_count']}")
+            print(f"conflict_count={result['conflict_count']}")
+            print(f"candidates_artifact={result['candidates_artifact']}")
+            print(f"conflicts_artifact={result['conflicts_artifact']}")
+            return 0
+
+        parser.print_help()
+        return 2
 
     parser.print_help()
     return 2

@@ -27,6 +27,14 @@ Implemented package layout (M2 slice):
 - `src/resemantica/db/migrations/002_translation_checkpoints.sql`: checkpoint table for chapter pass resume
 - `tests/translation/`: M2 translation tests
 
+Implemented package layout (M3 slice):
+
+- `src/resemantica/glossary/`: candidate discovery, promotion validators, and glossary pipeline orchestration
+- `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, locked glossary, and conflicts
+- `src/resemantica/db/migrations/003_glossary.sql`: glossary tables and constraints
+- `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`: M3 glossary prompt files
+- `tests/glossary/`: glossary discovery, conflict, transaction, and precedence tests
+
 ## Target State
 
 Primary code roots:

@@ -1,0 +1,5 @@
+# version: 1.0
+
+## GLOSSARY_DISCOVER
+This prompt is reserved for future model-assisted glossary discovery.
+
