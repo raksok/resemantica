@@ -65,7 +65,7 @@ The initial defaults come from `DECISIONS.md`:
 - Pass 3 default: enabled
 - high risk threshold: `0.7`
 
-Risk score formula (see `lld-12-pass3-and-risk.md` for full detail):
+Risk score formula (see `lld-09-pass3-and-risk.md` for full detail):
 
 ```
 risk = min(1.0,

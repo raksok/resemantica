@@ -1,4 +1,4 @@
-# Task 06: Graph MVP (M6)
+# Task 06: Graph MVP
 
 - **Milestone:** M6
 - **Depends on:** M1, M3, M4

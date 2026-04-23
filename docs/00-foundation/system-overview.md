@@ -48,5 +48,5 @@ docs/
 ## Reading Paths
 
 - New implementer: start with this file, then `decision-rules.md`, `module-boundaries.md`, and the relevant LLD.
-- Task owner: read the task brief in `docs/40-tasks/` and its referenced LLD.
+- Task owner: read the next milestone's task brief in `docs/40-tasks/` and its referenced LLD.
 - Reviewer: read the LLD, then compare the code and tests against the acceptance criteria.

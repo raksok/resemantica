@@ -36,7 +36,7 @@ This plan turns the target milestones into buildable execution slices. Each mile
 
 ## Milestone Dependency Chain
 
-**Note:** Milestone order (M1–M14) governs execution priority. Task brief IDs are historical labels and do not determine execution sequence. See `docs/40-tasks/README.md` for the canonical milestone-to-task mapping.
+**Note:** Milestone order (M1–M14) governs execution priority. Task brief IDs now match milestone order (`task-01` through `task-14`). See `docs/40-tasks/README.md` for the canonical milestone-to-task mapping.
 
 - M1 is the base for M2 and M14.
 - M2 depends on M1 extraction and restoration.

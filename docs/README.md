@@ -23,4 +23,5 @@ Rules:
 - `docs/20-lld/` defines implementation behavior for each subsystem slice.
 - `docs/30-operations/repo-map.md` tracks the actual code layout as it evolves.
 - `docs/40-tasks/` contains bounded execution briefs sized for one coder agent each.
+- Numeric task and LLD prefixes match milestone order where applicable: M5 uses `task-05-*` and `lld-05-*`, M14 uses `task-14-*` and `lld-14-*`.
 - Any change to a public interface, artifact shape, or package boundary must update the relevant doc in this tree.

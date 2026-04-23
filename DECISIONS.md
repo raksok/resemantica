@@ -317,7 +317,7 @@ src/resemantica/llm/prompts/
 
 **Decision:** Move the idiom workflow to M5 position, immediately after summaries (M4) and before packets.
 
-**Rationale:** The spec places idioms in Phase 0 preprocessing. M5 (packets) depends on the idiom contract being available. Placing idioms between summaries and packets keeps the dependency chain clean: M1 → M3 → M4 → Idioms → M5.
+**Rationale:** The spec places idioms in Phase 0 preprocessing. M8 (packets) depends on the idiom contract being available. Placing idioms before graph enrichment and packets keeps the dependency chain clean: M1 → M3 → M4 → M5 idioms → M6/M7 graph → M8 packets.
 
 ---
 
@@ -331,21 +331,21 @@ src/resemantica/llm/prompts/
 | M2 | Single-Chapter Translation | task-02 |
 | M3 | Canonical Glossary | task-03 |
 | M4 | Summary Memory | task-04 |
-| M5 | Idiom Workflow | task-09 |
+| M5 | Idiom Workflow | task-05 |
 | M6 | Graph MVP | task-06 |
-| M7 | Lightweight World Model | task-11 |
-| M8 | Chapter Packets (with graph) | task-05 + task-10 merged |
-| M9 | Pass 3 + Risk Handling | task-12 |
-| M10 | Orchestration + Production | task-07 |
-| M11 | Cleanup Workflow | task-13 |
-| M12 | CLI + TUI | task-08 |
-| M13 | Observability + Evaluation | task-14 |
-| M14 | Batch Pilot | task-15 |
+| M7 | Lightweight World Model | task-07 |
+| M8 | Chapter Packets (with graph) | task-08 |
+| M9 | Pass 3 + Risk Handling | task-09 |
+| M10 | Orchestration + Production | task-10 |
+| M11 | Cleanup Workflow | task-11 |
+| M12 | CLI + TUI | task-12 |
+| M13 | Observability + Evaluation | task-13 |
+| M14 | Batch Pilot | task-14 |
 
 Key changes from original:
-- Idioms moved to M5 (was task-09, late placement).
+- Idioms moved to M5 and now use `task-05-idioms.md`.
 - Graph MVP (M6) and World Model (M7) now come before Packets (M8).
-- Packet Integration (old M7) is merged into M8 since graph data is available from the start.
+- Packet Integration is merged into M8 since graph data is available from the start.
 - Total remains 14 milestones but ordering reflects actual dependency chain.
 
 **Rationale:** Building the full graph (MVP + World Model) before packets allows packets to incorporate graph data from the start, eliminating the separate "Packet Integration" milestone. This is simpler and avoids retrofitting.
@@ -592,16 +592,16 @@ Example structure:
 
 ---
 
-## Required Document Updates
+## Document Alignment Status
 
-These decisions require updates to existing project documents:
+These decisions have been applied to the existing project documents:
 
-1. **SPEC.md** — Keep section 5.3 limited to the chosen stack. Update milestone section 26 to match revised ordering.
-2. **ARCHITECT.md** — Update core stack references. Update build order to match revised milestones.
-3. **DATA_CONTRACT.md** — No changes needed (contracts are format-neutral).
-4. **IMPLEMENTATION_PLAN.md** — Rewrite milestone section to reflect revised M1-M14 order with idiom placement and packet integration merge.
-5. **docs/10-architecture/module-boundaries.md** — Add `llm/prompts/` and `db/migrations/` to file layout.
-6. **docs/10-architecture/storage-topology.md** — Add `artifacts/graph.ladybug` and `artifacts/mlflow.db`.
-7. **docs/30-operations/repo-map.md** — Note that `src/resemantica/` package does not yet exist (still accurate).
-8. **Task briefs** — Realign task numbering with new milestone order. Merge task-10 into task-05.
-9. **docs/20-lld/** — Add LLD for llm/ client, add LLD for db/ foundation, update LLD-01 for block/placeholder spec.
+1. **SPEC.md** — section 5.3 stays limited to the chosen stack, and milestone section 26 matches the revised ordering.
+2. **ARCHITECT.md** — build order matches the revised milestones.
+3. **DATA_CONTRACT.md** — contracts remain format-neutral and now have a clean ending.
+4. **IMPLEMENTATION_PLAN.md** — milestone order reflects idiom placement and packet integration merge.
+5. **docs/10-architecture/module-boundaries.md** — includes `llm/prompts/` and `db/migrations/`.
+6. **docs/10-architecture/storage-topology.md** — includes `artifacts/graph.ladybug` and `artifacts/mlflow.db`.
+7. **docs/30-operations/repo-map.md** — notes that `src/resemantica/` does not yet exist.
+8. **Task briefs** — task numbering now follows milestone order; retired packet integration is no longer a claimable task.
+9. **docs/20-lld/** — LLD numbering now follows milestone order; retired packet integration is no longer a claimable LLD.

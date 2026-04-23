@@ -1061,4 +1061,3 @@ Resemantica is compliant with this contract when:
 3. chapter packets and paragraph bundles are reproducible from explicit upstream versions
 4. runtime translation cannot silently consume future-unsafe or lower-priority conflicting memory
 5. runs can be resumed, inspected, and cleaned up without corrupting authority data
-ing authority data

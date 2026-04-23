@@ -12,7 +12,7 @@
 - Model output never writes directly into authority state without validation.
 - Placeholder preservation and XHTML restoration are deterministic code responsibilities.
 - The graph database is LadybugDB (`import ladybug as lb`). Using `import kuzu` is a hard error.
-- Milestone order (M1→M14) governs execution. Task brief IDs are historical labels, not priority.
+- Milestone order (M1→M14) governs execution. Task brief IDs match milestone order: `task-01` maps to M1 through `task-14` maps to M14.
 
 ## Dependency Direction
 
