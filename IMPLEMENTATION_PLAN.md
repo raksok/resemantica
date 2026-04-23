@@ -180,20 +180,20 @@ Build continuity memory as a separate authority layer after glossary. Chinese su
 
 ### Action Items
 
-[ ] Add summary repositories and schemas in `db/` for draft summaries, validated Chinese summaries, and derived English summaries.
-[ ] Implement chapter summary generation in `summaries/` with clear separation between structured draft output and validated continuity output.
-[ ] Implement terminology, schema, continuity, and future-knowledge validation for Chinese summaries.
-[ ] Implement `story_so_far_zh` update logic as a deterministic derivation from the previous validated state plus the current validated chapter summary.
-[ ] Implement derived English summary generation that uses validated Chinese summaries plus locked glossary and records provenance hashes.
+[x] Add summary repositories and schemas in `db/` for draft summaries, validated Chinese summaries, and derived English summaries.
+[x] Implement chapter summary generation in `summaries/` with clear separation between structured draft output and validated continuity output.
+[x] Implement terminology, schema, continuity, and future-knowledge validation for Chinese summaries.
+[x] Implement `story_so_far_zh` update logic as a deterministic derivation from the previous validated state plus the current validated chapter summary.
+[x] Implement derived English summary generation that uses validated Chinese summaries plus locked glossary and records provenance hashes.
 [ ] Add materialization logic for previous-3 chapter bundles and arc summary placeholders where available.
-[ ] Expose summary generation and validation through the preprocessing workflow or CLI subcommands.
-[ ] Add tests for continuity conflicts, glossary conflicts, and the rule that English summaries never become authority memory.
+[x] Expose summary generation and validation through the preprocessing workflow or CLI subcommands.
+[x] Add tests for continuity conflicts, glossary conflicts, and the rule that English summaries never become authority memory.
 
 ### Validation
 
-[ ] Verify Chinese summaries and English summaries are stored as separate datasets with separate statuses.
-[ ] Verify future-knowledge leaks are caught during continuity validation.
-[ ] Verify `story_so_far_zh` derivation never uses repaired English outputs as source truth.
+[x] Verify Chinese summaries and English summaries are stored as separate datasets with separate statuses.
+[x] Verify future-knowledge leaks are caught during continuity validation.
+[x] Verify `story_so_far_zh` derivation never uses repaired English outputs as source truth.
 
 ## Milestone 5: Idiom Workflow
 

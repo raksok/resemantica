@@ -69,6 +69,7 @@ class DerivedPaths:
     glossary_dir: Path
     glossary_candidates_path: Path
     glossary_conflicts_path: Path
+    summaries_dir: Path
     rebuilt_epub_path: Path
     db_path: Path
 
@@ -270,6 +271,7 @@ def derive_paths(
         glossary_dir=release_root / "glossary",
         glossary_candidates_path=release_root / "glossary" / "candidates.json",
         glossary_conflicts_path=release_root / "glossary" / "conflicts.json",
+        summaries_dir=release_root / "summaries",
         rebuilt_epub_path=release_root / "rebuild" / "reconstructed.epub",
         db_path=artifact_root / config.paths.db_filename,
     )

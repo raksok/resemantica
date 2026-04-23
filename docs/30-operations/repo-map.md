@@ -7,7 +7,7 @@ Current top-level files:
 - `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`, `IMPLEMENTATION_PLAN.md`: project contracts and milestone plan
 - `docs/`: implementation-facing documentation suite
 - `src/resemantica/`: active package root for milestone implementation
-- `tests/epub/`: EPUB round-trip and placeholder tests for M1
+- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`)
 - `main.py`: placeholder entrypoint kept for compatibility with the starter project
 - `pyproject.toml`: Python project metadata
 
@@ -34,6 +34,14 @@ Implemented package layout (M3 slice):
 - `src/resemantica/db/migrations/003_glossary.sql`: glossary tables and constraints
 - `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`: M3 glossary prompt files
 - `tests/glossary/`: glossary discovery, conflict, transaction, and precedence tests
+
+Implemented package layout (M4 slice):
+
+- `src/resemantica/summaries/`: chapter summary generation, deterministic validation, and summary derivation pipeline
+- `src/resemantica/db/summary_repo.py`: SQLite repository for summary drafts, validated Chinese summaries, and derived English summaries
+- `src/resemantica/db/migrations/004_summaries.sql`: summary tables and constraints
+- `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_en_derive.txt`: M4 summary prompt files
+- `tests/summaries/`: continuity conflict, glossary conflict, future-leak, and deterministic story rebuild tests
 
 ## Target State
 

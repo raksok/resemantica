@@ -2,6 +2,7 @@
 
 - **Milestone:** M4
 - **Depends on:** M1
+- **Status:** Completed on 2026-04-24 (implementation + validation complete)
 
 ## Goal
 
@@ -36,8 +37,16 @@ Out:
 - glossary conflict handling
 - deterministic `story_so_far_zh` rebuild
 
+Execution status:
+
+- [x] `uv run --extra dev pytest tests/summaries tests/glossary tests/translation tests/epub` passed (`21 passed`)
+- [x] `uv run --extra dev ruff check src/resemantica tests/summaries tests/glossary tests/translation tests/epub` passed
+- [x] `uv run --extra dev mypy src/resemantica` passed
+- [x] `uv run python -m resemantica.cli preprocess --help` passed (includes `summaries`)
+- [x] `uv run python -m resemantica.cli preprocess summaries --help` passed
+
 ## Done Criteria
 
-- Chinese authority and English derived datasets are separate
-- validation rules are enforced in code
-- provenance hashes are persisted for English outputs
+- [x] Chinese authority and English derived datasets are separate
+- [x] validation rules are enforced in code
+- [x] provenance hashes are persisted for English outputs

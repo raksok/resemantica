@@ -1,0 +1,13 @@
+# version: 1.0
+SUMMARY_EN_DERIVE
+
+## LOCKED GLOSSARY
+{LOCKED_GLOSSARY}
+
+## SOURCE TEXT (ZH)
+{SOURCE_TEXT_ZH}
+
+## INSTRUCTIONS
+Translate the Chinese summary into concise English.
+Return only English summary text.
+

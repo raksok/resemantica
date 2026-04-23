@@ -1,0 +1,24 @@
+# version: 1.0
+SUMMARY_ZH_STRUCTURED
+
+## CHAPTER NUMBER
+{CHAPTER_NUMBER}
+
+## LOCKED GLOSSARY
+{LOCKED_GLOSSARY}
+
+## SOURCE TEXT
+{SOURCE_TEXT}
+
+## INSTRUCTIONS
+Return JSON only and follow this schema exactly:
+{{
+  "chapter_number": 0,
+  "characters_mentioned": [],
+  "key_events": [],
+  "new_terms": [],
+  "relationships_changed": [{{"entity": "", "change": ""}}],
+  "setting": "",
+  "tone": "",
+  "narrative_progression": ""
+}}

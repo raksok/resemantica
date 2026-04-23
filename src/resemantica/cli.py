@@ -11,6 +11,7 @@ from resemantica.glossary.pipeline import (
     translate_glossary_candidates,
 )
 from resemantica.settings import load_config
+from resemantica.summaries.pipeline import preprocess_summaries
 from resemantica.translation.pipeline import translate_chapter
 
 
@@ -92,6 +93,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Validate and promote glossary candidates into locked glossary.",
     )
     _add_common_release_args(glossary_promote, default_run="glossary-promote")
+
+    summaries = preprocess_subparsers.add_parser(
+        "summaries",
+        help="Generate validated Chinese summaries and derived English summaries.",
+    )
+    _add_common_release_args(summaries, default_run="summaries")
     return parser
 
 
@@ -165,6 +172,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"conflict_count={result['conflict_count']}")
             print(f"candidates_artifact={result['candidates_artifact']}")
             print(f"conflicts_artifact={result['conflicts_artifact']}")
+            return 0
+
+        if args.preprocess_command == "summaries":
+            result = preprocess_summaries(
+                release_id=args.release,
+                run_id=args.run,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"chapters_processed={result['chapters_processed']}")
             return 0
 
         parser.print_help()
