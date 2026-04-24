@@ -1,0 +1,169 @@
+Screen {
+    background: #292D3E;
+}
+
+HeaderBar {
+    dock: top;
+    height: 1;
+    background: #1E1F2B;
+    color: #D4D5F0;
+}
+
+#header-container {
+    layout: horizontal;
+    height: 1;
+}
+
+#pulse-bar {
+    width: 32;
+    color: #89DDFF;
+}
+
+#header-run-info {
+    width: 1fr;
+    color: #EEFFFF;
+}
+
+#header-chapter-progress {
+    width: 12;
+    color: #D4D5F0;
+}
+
+#header-pass {
+    width: 14;
+    color: #89DDFF;
+}
+
+ChapterSpine {
+    dock: left;
+    width: 18;
+    background: #1E1F2B;
+    overflow-y: auto;
+}
+
+#spine-title {
+    color: #676E95;
+    text-style: bold;
+    padding: 0 1;
+}
+
+.spine-item {
+    padding: 0 1;
+    height: 1;
+}
+
+.spine-item-focused {
+    background: #34324A;
+    color: #82AAFF;
+}
+
+.spine-status-not-started {
+    color: #676E95;
+}
+
+.spine-status-in-progress {
+    color: #89DDFF;
+}
+
+.spine-status-complete {
+    color: #C3E88D;
+}
+
+.spine-status-failed {
+    color: #FF5370;
+}
+
+.spine-status-high-risk {
+    color: #F78C6C;
+}
+
+#main-content {
+    width: 1fr;
+    height: 1fr;
+    padding: 1;
+}
+
+FooterBar {
+    dock: bottom;
+    height: 1;
+    background: #1E1F2B;
+    color: #D4D5F0;
+}
+
+#footer-container {
+    layout: horizontal;
+    height: 1;
+}
+
+#footer-block-progress {
+    width: 20;
+    color: #D4D5F0;
+}
+
+#footer-warnings {
+    width: 16;
+    color: #676E95;
+}
+
+#footer-failures {
+    width: 16;
+    color: #676E95;
+}
+
+#footer-elapsed {
+    width: 12;
+    color: #D4D5F0;
+}
+
+#footer-keys {
+    width: 1fr;
+    color: #676E95;
+    text-align: right;
+}
+
+.status-complete {
+    color: #C3E88D;
+}
+
+.status-active {
+    color: #89DDFF;
+}
+
+.status-failed {
+    color: #FF5370;
+}
+
+.status-warning {
+    color: #F78C6C;
+}
+
+.status-pending {
+    color: #676E95;
+}
+
+.section-title {
+    color: #EEFFFF;
+    text-style: bold;
+    padding: 0 0 0 0;
+}
+
+.key-value-key {
+    color: #82AAFF;
+}
+
+.key-value-value {
+    color: #D4D5F0;
+}
+
+.dimmed {
+    color: #676E95;
+}
+
+.bright {
+    color: #EEFFFF;
+}
+
+.app-title {
+    color: #C792EA;
+    text-style: bold;
+}

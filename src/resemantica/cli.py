@@ -7,7 +7,6 @@ import sys
 from resemantica.epub.extractor import extract_epub
 from resemantica.graph.pipeline import preprocess_graph
 from resemantica.glossary.pipeline import (
-    discover_glossary_candidates,
     promote_glossary_candidates,
     translate_glossary_candidates,
 )
@@ -136,6 +135,60 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional chapter number. If omitted, all extracted chapters are built.",
     )
 
+    rebuild = subparsers.add_parser(
+        "rebuild-epub",
+        help="Rebuild EPUB from unpacked release content.",
+    )
+    rebuild.add_argument("--release", required=True, help="Release identifier.")
+    rebuild.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional path to resemantica.toml",
+    )
+
+    translate_range = subparsers.add_parser(
+        "translate-range",
+        help="Translate a range of chapters.",
+    )
+    translate_range.add_argument("--release", required=True, help="Release identifier.")
+    translate_range.add_argument("--run", required=True, help="Run identifier.")
+    translate_range.add_argument(
+        "--start", required=True, type=int, help="Starting chapter number."
+    )
+    translate_range.add_argument(
+        "--end", required=True, type=int, help="Ending chapter number (inclusive)."
+    )
+    translate_range.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional path to resemantica.toml",
+    )
+
+    tui_cmd = subparsers.add_parser(
+        "tui",
+        help="Launch the Textual TUI.",
+    )
+    tui_cmd.add_argument(
+        "--release",
+        required=False,
+        default=None,
+        help="Release identifier to show in the TUI.",
+    )
+    tui_cmd.add_argument(
+        "--run",
+        required=False,
+        default=None,
+        help="Run identifier to show in the TUI.",
+    )
+    tui_cmd.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional path to resemantica.toml",
+    )
+
     run = subparsers.add_parser(
         "run",
         help="Orchestration run commands.",
@@ -232,20 +285,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"structure_report={translation_result['structure_report']}")
         print(f"fidelity_report={translation_result['fidelity_report']}")
         return 0
-
-    if args.command == "preprocess":
-        config = load_config(args.config)
-
-        if args.preprocess_command == "glossary-discover":
-            result = discover_glossary_candidates(
-                release_id=args.release,
-                run_id=args.run,
-                config=config,
-            )
-            print(f"status={result['status']}")
-            print(f"candidates_written={result['candidates_written']}")
-            print(f"candidates_artifact={result['candidates_artifact']}")
-            return 0
 
         if args.preprocess_command == "glossary-translate":
             result = translate_glossary_candidates(
@@ -397,6 +436,46 @@ def main(argv: list[str] | None = None) -> int:
                 for e in cleanup_result['errors']:
                     print(f"  - {e}")
             return 0
+
+    if args.command == "rebuild-epub":
+        config = load_config(args.config)
+        from resemantica.epub.rebuild import rebuild_epub
+        from resemantica.settings import derive_paths
+        _dp = derive_paths(config, args.release)
+        rebuild_result = rebuild_epub(_dp.unpacked_dir, _dp.rebuilt_epub_path)
+        print(f"Rebuilt EPUB: {rebuild_result}")
+        return 0
+
+    if args.command == "translate-range":
+        config = load_config(args.config)
+        from resemantica.translation.pipeline import translate_chapter as _tc_range
+        success_count = 0
+        fail_count = 0
+        for ch in range(args.start, args.end + 1):
+            print(f"Translating chapter {ch}...")
+            try:
+                _tc_range(
+                    release_id=args.release,
+                    chapter_number=ch,
+                    run_id=args.run,
+                    config=config,
+                )
+                success_count += 1
+            except Exception as exc:
+                print(f"  Chapter {ch} failed: {exc}")
+                fail_count += 1
+        print(f"Done: {success_count} succeeded, {fail_count} failed")
+        return 0 if fail_count == 0 else 1
+
+    if args.command == "tui":
+        from resemantica.tui import ResemanticaApp
+        app = ResemanticaApp(
+            release_id=args.release,
+            run_id=args.run,
+            config_path=args.config,
+        )
+        app.run()
+        return 0
 
         parser.print_help()
         return 2

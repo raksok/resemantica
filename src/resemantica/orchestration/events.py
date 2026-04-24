@@ -1,9 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from collections import defaultdict
+from typing import Any, Callable, Optional
 
 from resemantica.tracking.models import Event
 from resemantica.tracking.repo import ensure_tracking_db, save_event
+
+_EventCallback = Callable[[Event], None]
+_subscribers: dict[str, list[_EventCallback]] = defaultdict(list)
+
+
+def subscribe(event_type: str, callback: _EventCallback) -> None:
+    _subscribers[event_type].append(callback)
+
+
+def unsubscribe(event_type: str, callback: _EventCallback) -> None:
+    _subscribers[event_type].remove(callback)
 
 
 def emit_event(
@@ -34,4 +46,8 @@ def emit_event(
         save_event(conn, event)
     finally:
         conn.close()
+
+    for cb in _subscribers.get(event_type, []):
+        cb(event)
+
     return event
