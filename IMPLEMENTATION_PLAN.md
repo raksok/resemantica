@@ -431,19 +431,19 @@ Add safe destruction only after orchestration knows what exists. Cleanup must pr
 
 ### Action Items
 
-[ ] Implement cleanup planning models and storage for cleanup plans and cleanup reports.
-[ ] Implement scope resolution for `run`, `translation`, `preprocess`, `cache`, and `all`.
-[ ] Implement dry-run analysis that enumerates deletable filesystem artifacts, SQLite rows, and preserved assets.
-[ ] Implement scoped deletion actions that preserve inputs, config, prompts, and manual overrides by default.
-[ ] Integrate cleanup execution into orchestration so it emits structured events and final reports.
-[ ] Add a `reset` CLI command with `--dry-run`, run-scoped targeting, and non-zero exit behavior on hard failures.
-[ ] Add tests for scope isolation, preservation rules, and release-aware cleanup behavior.
+[x] Implement cleanup planning models and storage for cleanup plans and cleanup reports.
+[x] Implement scope resolution for `run`, `translation`, `preprocess`, `cache`, and `all`.
+[x] Implement dry-run analysis that enumerates deletable filesystem artifacts, SQLite rows, and preserved assets.
+[x] Implement scoped deletion actions that preserve inputs, config, prompts, and manual overrides by default.
+[x] Integrate cleanup execution into orchestration so it emits structured events and final reports.
+[x] Add a `reset` CLI command with `--dry-run`, run-scoped targeting, and non-zero exit behavior on hard failures.
+[x] Add tests for scope isolation, preservation rules, and release-aware cleanup behavior.
 
 ### Validation
 
-[ ] Verify dry-run previews exactly what would be deleted before any destructive action occurs.
-[ ] Verify cleanup can target run-level or translation-only state without wiping authority data by accident.
-[ ] Verify cleanup reports and events are written for both preview and execution paths.
+[x] Verify dry-run previews exactly what would be deleted before any destructive action occurs.
+[x] Verify cleanup can target run-level or translation-only state without wiping authority data by accident.
+[x] Verify cleanup reports and events are written for both preview and execution paths.
 
 ## Milestone 12: Unified Textual TUI
 

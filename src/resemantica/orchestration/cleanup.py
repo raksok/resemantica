@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import json
+import shutil
 
 from .events import emit_event
 from resemantica.settings import load_config
@@ -11,6 +12,73 @@ from resemantica.settings import load_config
 def _get_cleanup_plan_path(release_id: str) -> Path:
     cfg = load_config()
     return Path(cfg.paths.artifact_root) / release_id / "cleanup_plan.json"
+
+
+def _get_cleanup_report_path(release_id: str) -> Path:
+    cfg = load_config()
+    return Path(cfg.paths.artifact_root) / release_id / "cleanup_report.json"
+
+
+def _collect_scope_artifacts(
+    release_id: str, run_id: str, scope: str
+) -> tuple[list[Path], list[Path]]:
+    cfg = load_config()
+    release_root = Path(cfg.paths.artifact_root) / release_id
+    deletable: list[Path] = []
+    preserved: list[Path] = []
+
+    if not release_root.exists():
+        return deletable, preserved
+
+    if scope == "run":
+        run_dir = release_root / "runs" / run_id
+        if run_dir.exists():
+            deletable.append(run_dir)
+
+    elif scope == "translation":
+        run_dir = release_root / "runs" / run_id
+        translation_dir = run_dir / "translation"
+        if translation_dir.exists():
+            deletable.append(translation_dir)
+
+    elif scope == "preprocess":
+        for subdir in ["extracted", "glossary", "summaries", "idioms", "graph", "packets"]:
+            target = release_root / subdir
+            if target.exists():
+                deletable.append(target)
+
+    elif scope == "cache":
+        cache_dir = release_root / ".cache"
+        if cache_dir.exists():
+            deletable.append(cache_dir)
+
+    elif scope == "all":
+        for p in release_root.iterdir():
+            if p.name in ("tracking.db", "cleanup_plan.json", "cleanup_report.json"):
+                preserved.append(p)
+            else:
+                deletable.append(p)
+
+    return deletable, preserved
+
+
+def _estimate_size(paths: list[Path]) -> int:
+    total = 0
+    for p in paths:
+        if p.exists():
+            if p.is_file():
+                try:
+                    total += p.stat().st_size
+                except OSError:
+                    pass
+            elif p.is_dir():
+                for f in p.rglob("*"):
+                    if f.is_file():
+                        try:
+                            total += f.stat().st_size
+                        except OSError:
+                            pass
+    return total
 
 
 def plan_cleanup(
@@ -22,34 +90,22 @@ def plan_cleanup(
 ) -> dict[str, Any]:
     plan_path = _get_cleanup_plan_path(release_id)
 
+    deletable, preserved = _collect_scope_artifacts(release_id, run_id, scope)
+
     plan: dict[str, Any] = {
         "release_id": release_id,
         "run_id": run_id,
         "scope": scope,
         "dry_run": dry_run,
-        "deletable_artifacts": [],
-        "preserved_artifacts": [],
+        "deletable_artifacts": [str(p) for p in deletable],
+        "preserved_artifacts": [str(p) for p in preserved],
         "sqlite_rows": [],
-        "estimated_space_bytes": 0,
+        "estimated_space_bytes": _estimate_size(deletable),
     }
-
-    cfg = load_config()
-    artifacts_dir = Path(cfg.paths.artifact_root) / release_id
-
-    if scope in ("run", "translation", "preprocess", "cache", "all"):
-        if artifacts_dir.exists():
-            for p in artifacts_dir.rglob("*"):
-                if p.is_file():
-                    rel = str(p.relative_to(artifacts_dir))
-                    plan["deletable_artifacts"].append(rel)
-                    try:
-                        plan["estimated_space_bytes"] += p.stat().st_size
-                    except OSError:
-                        pass
 
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     with open(plan_path, "w") as f:
-        json.dump(plan, f, indent=2)
+        json.dump(plan, f, indent=2, default=str)
 
     emit_event(
         run_id, release_id, "cleanup.plan_created",
@@ -93,25 +149,48 @@ def apply_cleanup(
         "run_id": run_id,
         "scope": scope,
         "deleted_files": [],
+        "deleted_dirs": [],
+        "sqlite_rows_deleted": 0,
         "errors": [],
     }
 
-    cfg = load_config()
-    artifacts_dir = Path(cfg.paths.artifact_root) / release_id
-
-    for rel in plan.get("deletable_artifacts", []):
-        target = artifacts_dir / rel
+    for artifact_str in plan.get("deletable_artifacts", []):
+        target = Path(artifact_str)
         if target.exists():
             try:
-                target.unlink()
-                report["deleted_files"].append(rel)
+                if target.is_file():
+                    target.unlink()
+                    report["deleted_files"].append(artifact_str)
+                elif target.is_dir():
+                    shutil.rmtree(target)
+                    report["deleted_dirs"].append(artifact_str)
             except Exception as exc:
                 report["errors"].append(str(exc))
+
+    from resemantica.tracking.repo import ensure_tracking_db
+    try:
+        conn = ensure_tracking_db(release_id)
+        try:
+            cursor = conn.execute(
+                "DELETE FROM events WHERE release_id = ? AND run_id = ?",
+                (release_id, run_id)
+            )
+            report["sqlite_rows_deleted"] = cursor.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        report["errors"].append(f"SQLite cleanup error: {exc}")
+
+    report_path = _get_cleanup_report_path(release_id)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2, default=str)
 
     emit_event(
         run_id, release_id, "cleanup.apply_completed",
         "cleanup",
-        message=f"Cleanup applied: {len(report['deleted_files'])} files deleted",
+        message=f"Cleanup applied: {len(report['deleted_files'])} files, {len(report['deleted_dirs'])} dirs deleted",
         payload=report
     )
 

@@ -367,14 +367,35 @@ def main(argv: list[str] | None = None) -> int:
             plan = plan_cleanup(
                 args.release, args.run, scope=args.scope, dry_run=True
             )
-            print(f"Cleanup plan created: {plan}")
+            print(f"\nCleanup Plan (scope: {plan['scope']})")
+            print(f"Release: {plan['release_id']}, Run: {plan['run_id']}")
+            print(f"Estimated space to free: {plan['estimated_space_bytes']} bytes")
+            print(f"\nDeletable artifacts ({len(plan['deletable_artifacts'])}):")
+            for artifact in plan['deletable_artifacts']:
+                print(f"  - {artifact}")
+            print(f"\nPreserved artifacts ({len(plan['preserved_artifacts'])}):")
+            for artifact in plan['preserved_artifacts']:
+                print(f"  - {artifact}")
+            print(f"\nDry-run: {plan['dry_run']} (no files will be deleted)")
             return 0
 
         if args.run_command == "cleanup-apply":
             cleanup_result = apply_cleanup(
                 args.release, args.run, scope=args.scope, force=args.force
             )
-            print(f"Cleanup applied: {cleanup_result}")
+            print(f"\nCleanup Report (scope: {cleanup_result['scope']})")
+            print(f"Release: {cleanup_result['release_id']}, Run: {cleanup_result['run_id']}")
+            print(f"\nDeleted files ({len(cleanup_result['deleted_files'])}):")
+            for f in cleanup_result['deleted_files']:
+                print(f"  - {f}")
+            print(f"\nDeleted directories ({len(cleanup_result['deleted_dirs'])}):")
+            for d in cleanup_result['deleted_dirs']:
+                print(f"  - {d}")
+            print(f"\nSQLite rows deleted: {cleanup_result['sqlite_rows_deleted']}")
+            if cleanup_result['errors']:
+                print(f"\nErrors ({len(cleanup_result['errors'])}):")
+                for e in cleanup_result['errors']:
+                    print(f"  - {e}")
             return 0
 
         parser.print_help()
