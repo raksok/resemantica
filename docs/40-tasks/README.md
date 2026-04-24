@@ -35,4 +35,5 @@ Always follow the milestone sequence below.
 | M11 | task-11 | M10 | Cleanup Workflow |
 | M12 | task-12 | M10, M11 | CLI + TUI |
 | M13 | task-13 | M10 | Observability + Evaluation |
-| M14 | task-14 | M10–M13 | Batch Pilot |
+| M14A | task-14a | M13 | Graph Pipeline Drift Fix — LLM Extraction |
+| M14B | task-14b | M14A, M10–M13 | Batch Pilot |

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
+import re
 import sqlite3
 from pathlib import Path
 import zipfile
@@ -24,6 +26,21 @@ from resemantica.glossary.pipeline import (
 )
 from resemantica.glossary.validators import normalize_term
 from resemantica.settings import derive_paths, load_config
+
+
+class ScriptedGlossaryLLM:
+    def __init__(self, rows_by_chapter: dict[int, list[dict[str, str]]]) -> None:
+        self.rows_by_chapter = rows_by_chapter
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+        if chapter_match is None:
+            raise RuntimeError("chapter number missing from glossary prompt")
+        chapter_number = int(chapter_match.group(1))
+        return json.dumps(
+            {"glossary_terms": self.rows_by_chapter.get(chapter_number, [])},
+            ensure_ascii=False,
+        )
 
 
 def _write_fixture_epub(epub_path: Path, chapter_xhtml: str) -> None:
@@ -113,9 +130,18 @@ def test_discovery_writes_candidates_only(tmp_path: Path, monkeypatch) -> None:
         source_text="青云门弟子张三来到青云山。",
     )
 
+    llm = ScriptedGlossaryLLM({
+        1: [
+            {"source_term": "青云门", "category": "faction", "evidence_snippet": "青云门弟子张三来到青云山"},
+            {"source_term": "张三", "category": "character", "evidence_snippet": "青云门弟子张三来到青云山"},
+            {"source_term": "青云山", "category": "location", "evidence_snippet": "青云门弟子张三来到青云山"},
+        ],
+    })
+
     result = discover_glossary_candidates(
         release_id="m3-discovery",
         run_id="discover-001",
+        llm_client=llm,
     )
     assert result["status"] == "success"
     assert result["candidates_written"] > 0
@@ -147,7 +173,14 @@ def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch)
         source_text="青云门。苍云门。",
     )
 
-    discover_glossary_candidates(release_id="m3-conflict", run_id="discover-001")
+    llm = ScriptedGlossaryLLM({
+        1: [
+            {"source_term": "青云门", "category": "faction", "evidence_snippet": "青云门"},
+            {"source_term": "苍云门", "category": "faction", "evidence_snippet": "苍云门"},
+        ],
+    })
+
+    discover_glossary_candidates(release_id="m3-conflict", run_id="discover-001", llm_client=llm)
     translate_glossary_candidates(
         release_id="m3-conflict",
         run_id="translate-001",

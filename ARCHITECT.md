@@ -481,7 +481,8 @@ Implementation should follow the validated slices already implied by the spec:
 11. reset and cleanup workflow
 12. unified Textual TUI
 13. observability, evaluation, and dashboards
-14. batch pilot and final rebuild
+14a. graph pipeline drift fix — LLM extraction (fixes deterministic entity/relationship extraction to use analyst model per SPEC §5.2, §12.3, §13.4)
+14b. batch pilot and final rebuild
 
 This order preserves the main architectural constraint: expensive memory construction happens offline before runtime translation becomes richer.
 

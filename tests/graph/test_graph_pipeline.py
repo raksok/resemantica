@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+import re
 
 from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_entries
 from resemantica.db.graph_repo import ensure_graph_schema, list_deferred_entities, list_graph_snapshots
@@ -101,6 +102,29 @@ def _insert_locked_glossary_entry(
         )
     finally:
         conn.close()
+
+
+class ScriptedGraphLLM:
+    def __init__(
+        self,
+        entities_by_chapter: dict[int, list[dict]],
+        relationships_by_chapter: dict[int, list[dict]] | None = None,
+    ) -> None:
+        self.entities_by_chapter = entities_by_chapter
+        self.relationships_by_chapter = relationships_by_chapter or {}
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+        if chapter_match is None:
+            return '{"entities": [], "relationships": []}'
+        chapter_number = int(chapter_match.group(1))
+        return json.dumps(
+            {
+                "entities": self.entities_by_chapter.get(chapter_number, []),
+                "relationships": self.relationships_by_chapter.get(chapter_number, []),
+            },
+            ensure_ascii=False,
+        )
 
 
 def test_alias_reveal_gating() -> None:
@@ -295,6 +319,12 @@ def test_deferred_entity_lifecycle_and_confirmed_state_only(
         source_text="苍云门，势力扩张。",
     )
 
+    mock_llm = ScriptedGraphLLM({
+        1: [
+            {"source_term": "苍云门", "entity_type": "faction", "aliases": [], "evidence_snippet": "苍云门，势力扩张。"},
+        ],
+    })
+
     backend = InMemoryGraphBackend()
     client = GraphClient(backend=backend)
 
@@ -302,6 +332,7 @@ def test_deferred_entity_lifecycle_and_confirmed_state_only(
         release_id=release_id,
         run_id="graph-001",
         graph_client=client,
+        llm_client=mock_llm,
     )
     assert first["status"] == "success"
     assert first["deferred_pending_count"] >= 1
@@ -332,6 +363,7 @@ def test_deferred_entity_lifecycle_and_confirmed_state_only(
         release_id=release_id,
         run_id="graph-002",
         graph_client=client,
+        llm_client=mock_llm,
     )
     assert second["status"] == "success"
     assert second["deferred_graph_created_count"] >= 1
@@ -373,10 +405,17 @@ def test_snapshot_metadata_written_for_packet_reproducibility(
         category="faction",
     )
 
+    mock_llm = ScriptedGraphLLM({
+        1: [
+            {"source_term": "青云门", "entity_type": "faction", "aliases": [], "evidence_snippet": "青云门今日议事。"},
+        ],
+    })
+
     result = preprocess_graph(
         release_id=release_id,
         run_id="graph-001",
         graph_client=GraphClient(backend=InMemoryGraphBackend()),
+        llm_client=mock_llm,
     )
     assert result["status"] == "success"
     assert len(result["snapshot_hash"]) == 64
@@ -433,11 +472,33 @@ def test_role_state_transition_across_chapters(
         category="title_honorific",
     )
 
+    mock_llm = ScriptedGraphLLM(
+        entities_by_chapter={
+            1: [
+                {"source_term": "张三", "entity_type": "character", "aliases": [], "evidence_snippet": "张三成为外门弟子。"},
+                {"source_term": "外门弟子", "entity_type": "generic_role", "aliases": [], "evidence_snippet": "张三成为外门弟子。"},
+            ],
+            2: [
+                {"source_term": "张三", "entity_type": "character", "aliases": [], "evidence_snippet": "张三晋升长老。"},
+                {"source_term": "长老", "entity_type": "title_honorific", "aliases": [], "evidence_snippet": "张三晋升长老。"},
+            ],
+        },
+        relationships_by_chapter={
+            1: [
+                {"type": "RANKED_AS", "source_term": "张三", "target_term": "外门弟子", "evidence_snippet": "张三成为外门弟子。", "confidence": 0.9, "lore_text": None, "is_masked_identity": False},
+            ],
+            2: [
+                {"type": "RANKED_AS", "source_term": "张三", "target_term": "长老", "evidence_snippet": "张三晋升长老。", "confidence": 0.9, "lore_text": None, "is_masked_identity": False},
+            ],
+        },
+    )
+
     client = GraphClient(backend=InMemoryGraphBackend())
     result = preprocess_graph(
         release_id=release_id,
         run_id="graph-001",
         graph_client=client,
+        llm_client=mock_llm,
     )
     assert result["status"] == "success"
 
@@ -490,11 +551,33 @@ def test_containment_visibility_by_chapter(
         category="location",
     )
 
+    mock_llm = ScriptedGraphLLM(
+        entities_by_chapter={
+            1: [
+                {"source_term": "张三", "entity_type": "character", "aliases": [], "evidence_snippet": "张三在青云山修炼。"},
+                {"source_term": "青云山", "entity_type": "location", "aliases": [], "evidence_snippet": "张三在青云山修炼。"},
+            ],
+            2: [
+                {"source_term": "张三", "entity_type": "character", "aliases": [], "evidence_snippet": "张三来到天云城。"},
+                {"source_term": "天云城", "entity_type": "location", "aliases": [], "evidence_snippet": "张三来到天云城。"},
+            ],
+        },
+        relationships_by_chapter={
+            1: [
+                {"type": "LOCATED_IN", "source_term": "张三", "target_term": "青云山", "evidence_snippet": "张三在青云山修炼。", "confidence": 0.9, "lore_text": None, "is_masked_identity": False},
+            ],
+            2: [
+                {"type": "LOCATED_IN", "source_term": "张三", "target_term": "天云城", "evidence_snippet": "张三来到天云城。", "confidence": 0.9, "lore_text": None, "is_masked_identity": False},
+            ],
+        },
+    )
+
     client = GraphClient(backend=InMemoryGraphBackend())
     result = preprocess_graph(
         release_id=release_id,
         run_id="graph-001",
         graph_client=client,
+        llm_client=mock_llm,
     )
     assert result["status"] == "success"
 

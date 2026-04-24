@@ -25,11 +25,19 @@ WORLD_MODEL_EDGE_TYPES: set[str] = {
     "LOCATED_IN",
     "HELD_BY",
     "RANKED_AS",
+    "ALIAS_OF",
+    "APPEARS_IN",
+    "DISCIPLE_OF",
+    "MASTER_OF",
+    "ALLY_OF",
+    "ENEMY_OF",
+    "OWNS",
+    "USES_TECHNIQUE",
+    "PART_OF_ARC",
+    "NEXT_CHAPTER",
 }
 
 SUPPORTED_RELATIONSHIP_TYPES: set[str] = {
-    "teacher_of",
-    "ally_of",
     *WORLD_MODEL_EDGE_TYPES,
 }
 

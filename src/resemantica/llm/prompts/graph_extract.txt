@@ -1,0 +1,73 @@
+# version: 1.0
+
+## TASK
+GRAPH_EXTRACT
+
+## CHAPTER NUMBER
+{CHAPTER_NUMBER}
+
+## SOURCE TEXT (ZH)
+{SOURCE_TEXT_ZH}
+
+## LOCKED GLOSSARY (known entities in this release)
+{GLOSSARY_CONTEXT}
+
+## INSTRUCTIONS
+Identify all significant entities and the relationships among them from the source text.
+
+### Entities
+For each entity, provide:
+- source_term: the exact Chinese text as it appears
+- entity_type: one of [character, alias, title_honorific, faction, location, technique, item_artifact, realm_concept, creature_race, generic_role, event]
+- aliases: list of alternate names/titles used for this entity in this chapter
+- evidence_snippet: roughly 40 characters of surrounding context
+
+Exclude common vocabulary, generic verbs, and ordinary nouns. Focus on proper nouns and setting-specific terminology.
+
+### Relationships
+For meaningful relationships between entities, provide:
+- type: one of [ALIAS_OF, APPEARS_IN, MEMBER_OF, DISCIPLE_OF, MASTER_OF, ALLY_OF, ENEMY_OF, LOCATED_IN, OWNS, USES_TECHNIQUE, PART_OF_ARC, NEXT_CHAPTER]
+- source_term: the entity playing the source role (for ALIAS_OF: the alias, for MEMBER_OF: the member, for LOCATED_IN: what is located, etc.)
+- target_term: the entity playing the target role (for ALIAS_OF: the canonical entity, for MEMBER_OF: the group, for LOCATED_IN: the location, etc.)
+- evidence_snippet: the sentence or phrase that supports this relationship
+- confidence: a float between 0.0 and 1.0
+- lore_text: include only if the sentence suggests hidden lore or a secret identity (e.g. "actually", "in truth", "real identity")
+- is_masked_identity: true only if the relationship reveals a disguised or secret identity
+
+Relationship types explained:
+- ALIAS_OF: a name/title is an alias for an entity
+- APPEARS_IN: an entity appears in this chapter
+- MEMBER_OF: an entity belongs to a faction/group
+- DISCIPLE_OF: a character is a student/disciple of another
+- MASTER_OF: a character is a teacher/master of another
+- ALLY_OF: characters/groups are allied
+- ENEMY_OF: characters/groups are enemies
+- LOCATED_IN: an entity is located at a place
+- OWNS: an entity owns an item/artifact
+- USES_TECHNIQUE: an entity uses a technique/skill
+- PART_OF_ARC: a chapter is part of a story arc (if arc context is known)
+- NEXT_CHAPTER: sequential chapter linking (do not use within a single chapter)
+
+Only propose relationships you have clear textual evidence for.
+
+## OUTPUT FORMAT
+Return a JSON object with two keys: "entities" and "relationships".
+
+Entities schema:
+{{
+  "source_term": str,
+  "entity_type": str,
+  "aliases": [str],
+  "evidence_snippet": str
+}}
+
+Relationships schema:
+{{
+  "type": str,
+  "source_term": str,
+  "target_term": str,
+  "evidence_snippet": str,
+  "confidence": float,
+  "lore_text": str | null,
+  "is_masked_identity": bool
+}}

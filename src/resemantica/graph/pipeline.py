@@ -20,6 +20,8 @@ from resemantica.graph.extractor import extract_entities
 from resemantica.graph.models import GraphAppearance, GraphEntity
 from resemantica.graph.validators import validate_graph_state
 from resemantica.db.glossary_repo import ensure_glossary_schema, find_exact_locked_entry, list_locked_entries
+from resemantica.llm.client import LLMClient
+from resemantica.llm.prompts import load_prompt
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 
@@ -70,6 +72,16 @@ def _merge_appearances(appearances: list[GraphAppearance]) -> list[GraphAppearan
     return sorted(by_id.values(), key=lambda row: (row.chapter_number, row.appearance_id))
 
 
+def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMClient:
+    if llm_client is not None:
+        return llm_client
+    return LLMClient(
+        base_url=config.llm.base_url,
+        timeout_seconds=config.llm.timeout_seconds,
+        max_retries=config.llm.max_retries,
+    )
+
+
 def preprocess_graph(
     *,
     release_id: str,
@@ -77,12 +89,16 @@ def preprocess_graph(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     graph_client: GraphClient | None = None,
+    llm_client: LLMClient | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     graph = _build_graph_client(paths, graph_client)
+
+    prompt = load_prompt("graph_extract.txt")
+    llm_client_internal = _build_llm_client(config_obj, llm_client)
 
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
@@ -96,6 +112,9 @@ def preprocess_graph(
             release_id=release_id,
             extracted_chapters_dir=paths.extracted_chapters_dir,
             locked_glossary=locked_glossary,
+            llm_client=llm_client_internal,
+            model_name=config_obj.models.analyst_name,
+            prompt_template=prompt.template,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
         )

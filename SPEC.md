@@ -1248,7 +1248,12 @@ Reduced-budget runs must remain structurally safe and chapter-safe.
 - regression / golden set support
 - quality trend dashboards
 
-### Milestone 14 — Batch pilot and final rebuild
+### Milestone 14A — Graph pipeline drift fix — LLM extraction
+- replace deterministic keyword-heuristic graph extraction with `analyst_name` LLM
+- add all missing SPEC-defined edge types (ALIAS_OF, DISCIPLE_OF, MASTER_OF, ALLY_OF, ENEMY_OF, OWNS, USES_TECHNIQUE, PART_OF_ARC, NEXT_CHAPTER)
+- keep deterministic ID generation, deferred-entity registry, validation, and promotion
+
+### Milestone 14B — Batch pilot and final rebuild
 - 10–50 chapter pilot
 - final EPUB rebuild from translated outputs
 - validation report

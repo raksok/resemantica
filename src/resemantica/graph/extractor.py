@@ -19,19 +19,18 @@ from resemantica.graph.models import (
     GraphRelationship,
     WORLD_MODEL_EDGE_TYPES,
 )
+from resemantica.llm.client import LLMClient
+from resemantica.llm.prompts import render_named_sections
+
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
-_CJK_TERM_RE = re.compile(r"[\u4e00-\u9fff]{2,12}")
-_FACTION_SUFFIXES = ("门", "派", "宗", "帮", "盟")
-_LOCATION_SUFFIXES = ("山", "城", "宫", "谷", "峰", "州", "国", "镇", "村")
-_SENTENCE_SPLIT_RE = re.compile(r"[。！？\n]+")
-_MEMBER_OF_HINTS = ("弟子", "门人", "加入", "隶属", "归属", "效力")
-_LOCATED_IN_HINTS = ("在", "位于", "驻扎", "身处", "来到", "留在", "坐镇")
-_HELD_BY_HINTS = ("持有", "获得", "佩戴", "执掌", "拥有", "掌握")
-_RANKED_AS_HINTS = ("成为", "晋升", "被封", "任命", "升为", "担任")
-_LORE_HINTS = ("其实", "原来", "真实身份", "真身", "秘密")
-_MASKED_HINTS = ("真实身份", "真身", "伪装", "假扮")
+
+_VALID_ENTITY_TYPES: set[str] = {
+    "character", "alias", "title_honorific", "faction", "location",
+    "technique", "item_artifact", "realm_concept", "creature_race",
+    "generic_role", "event",
+}
 
 
 @dataclass(slots=True)
@@ -60,6 +59,26 @@ class _WorldModelObservation:
     source_entity_id: str
     target_entity_id: str
     chapter_number: int
+    lore_text: str | None
+    is_masked_identity: bool
+    confidence: float
+
+
+@dataclass(slots=True)
+class _LLMEntity:
+    source_term: str
+    entity_type: str
+    aliases: list[str]
+    evidence_snippet: str
+
+
+@dataclass(slots=True)
+class _LLMRelationship:
+    type: str
+    source_term: str
+    target_term: str
+    evidence_snippet: str
+    confidence: float
     lore_text: str | None
     is_masked_identity: bool
 
@@ -131,44 +150,91 @@ def _snippet(text: str, term: str) -> str:
     return text[start:end]
 
 
-def _infer_category(term: str) -> str | None:
-    if term.endswith(_FACTION_SUFFIXES):
-        return "faction"
-    if term.endswith(_LOCATION_SUFFIXES):
-        return "location"
-    if 2 <= len(term) <= 3:
-        return "character"
+def _resolve_entity_id(
+    normalized_source: str,
+    entity_id_by_key: dict[tuple[str, str], str],
+) -> str | None:
+    for (_cat, norm), eid in entity_id_by_key.items():
+        if norm == normalized_source:
+            return eid
     return None
 
 
-def _split_sentences(text: str) -> list[str]:
-    return [segment.strip() for segment in _SENTENCE_SPLIT_RE.split(text) if segment.strip()]
+def _parse_llm_response(raw: str) -> tuple[list[_LLMEntity], list[_LLMRelationship]]:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
 
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
 
-def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
-    return any(hint in text for hint in hints)
+    entities_raw = parsed.get("entities", [])
+    if not isinstance(entities_raw, list):
+        entities_raw = []
 
-
-def _find_present_entity_ids(
-    *,
-    sentence: str,
-    entries: list[LockedGlossaryEntry],
-    entity_id_by_key: dict[tuple[str, str], str],
-) -> list[str]:
-    present: list[str] = []
-    seen: set[str] = set()
-    for entry in entries:
-        key = (entry.category, entry.normalized_source_term)
-        entity_id = entity_id_by_key.get(key)
-        if entity_id is None:
+    entities: list[_LLMEntity] = []
+    for item in entities_raw:
+        if not isinstance(item, dict):
             continue
-        if entry.source_term not in sentence:
+        source_term = str(item.get("source_term", "")).strip()
+        entity_type = str(item.get("entity_type", "")).strip()
+        if not source_term or not entity_type or entity_type not in _VALID_ENTITY_TYPES:
             continue
-        if entity_id in seen:
+        aliases_raw = item.get("aliases", [])
+        aliases = (
+            [str(a) for a in aliases_raw if isinstance(a, str) and a.strip()]
+            if isinstance(aliases_raw, list)
+            else []
+        )
+        evidence = str(item.get("evidence_snippet", "")).strip()
+        entities.append(_LLMEntity(
+            source_term=source_term,
+            entity_type=entity_type,
+            aliases=aliases,
+            evidence_snippet=evidence,
+        ))
+
+    rels_raw = parsed.get("relationships", [])
+    if not isinstance(rels_raw, list):
+        rels_raw = []
+
+    relationships: list[_LLMRelationship] = []
+    for item in rels_raw:
+        if not isinstance(item, dict):
             continue
-        present.append(entity_id)
-        seen.add(entity_id)
-    return present
+        rel_type = str(item.get("type", "")).strip()
+        if not rel_type or rel_type not in WORLD_MODEL_EDGE_TYPES:
+            continue
+        source_term = str(item.get("source_term", "")).strip()
+        target_term = str(item.get("target_term", "")).strip()
+        if not source_term or not target_term:
+            continue
+        try:
+            confidence = float(item.get("confidence", 0.5))
+        except (ValueError, TypeError):
+            confidence = 0.5
+        lore_text = item.get("lore_text")
+        if lore_text is not None:
+            lore_text = str(lore_text).strip() or None
+        is_masked = bool(item.get("is_masked_identity", False))
+        evidence = str(item.get("evidence_snippet", "")).strip()
+        relationships.append(_LLMRelationship(
+            type=rel_type,
+            source_term=source_term,
+            target_term=target_term,
+            evidence_snippet=evidence,
+            confidence=confidence,
+            lore_text=lore_text,
+            is_masked_identity=is_masked,
+        ))
+
+    return entities, relationships
 
 
 def _append_observation(
@@ -180,6 +246,7 @@ def _append_observation(
     chapter_number: int,
     lore_text: str | None,
     is_masked_identity: bool,
+    confidence: float,
 ) -> None:
     if not source_entity_ids or not target_entity_ids:
         return
@@ -201,6 +268,7 @@ def _append_observation(
                     chapter_number=chapter_number,
                     lore_text=lore_text,
                     is_masked_identity=is_masked_identity,
+                    confidence=confidence,
                 )
             )
 
@@ -229,6 +297,7 @@ def _build_world_model_relationships(
         current_start = ordered[0].chapter_number
         current_lore = ordered[0].lore_text
         current_masked = ordered[0].is_masked_identity
+        current_confidence = ordered[0].confidence
 
         def _flush(end_chapter: int | None) -> None:
             relationships.append(
@@ -248,7 +317,7 @@ def _build_world_model_relationships(
                     start_chapter=current_start,
                     end_chapter=end_chapter,
                     revealed_chapter=current_start,
-                    confidence=0.7,
+                    confidence=current_confidence,
                     status="provisional",
                     lore_text=current_lore,
                     is_masked_identity=current_masked,
@@ -261,12 +330,13 @@ def _build_world_model_relationships(
                 if current_lore is None and item.lore_text is not None:
                     current_lore = item.lore_text
                 current_masked = current_masked or item.is_masked_identity
+                current_confidence = max(current_confidence, item.confidence)
                 continue
             if item.chapter_number == current_start:
-                # Deterministic single-state policy per chapter: keep the first target in sort order.
                 if current_lore is None and item.lore_text is not None:
                     current_lore = item.lore_text
                 current_masked = current_masked or item.is_masked_identity
+                current_confidence = max(current_confidence, item.confidence)
                 continue
 
             _flush(item.chapter_number - 1)
@@ -274,10 +344,16 @@ def _build_world_model_relationships(
             current_start = item.chapter_number
             current_lore = item.lore_text
             current_masked = item.is_masked_identity
+            current_confidence = item.confidence
 
         _flush(None)
 
     return sorted(relationships, key=lambda row: row.relationship_id)
+
+
+def _build_glossary_context(entries: list[LockedGlossaryEntry]) -> str:
+    lines = [f"{e.source_term} | {e.category}" for e in entries]
+    return "\n".join(lines) if lines else "(none)"
 
 
 def extract_entities(
@@ -285,6 +361,9 @@ def extract_entities(
     release_id: str,
     extracted_chapters_dir: Path,
     locked_glossary: list[LockedGlossaryEntry],
+    llm_client: LLMClient,
+    model_name: str,
+    prompt_template: str,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
 ) -> GraphExtractionResult:
@@ -293,22 +372,15 @@ def extract_entities(
         for entry in locked_glossary
         if entry.category in GRAPH_ENTITY_CATEGORIES
     ]
-    glossary_index = {
-        (entry.category, entry.normalized_source_term): entry
-        for entry in tracked_entries
-        if entry.category in GLOSSARY_COVERED_CATEGORIES
-    }
-    tracked_entries = sorted(
-        tracked_entries,
-        key=lambda row: (row.category, row.normalized_source_term),
-    )
-    entries_by_category: dict[str, list[LockedGlossaryEntry]] = {}
+    glossary_idx: dict[tuple[str, str], LockedGlossaryEntry] = {}
     for entry in tracked_entries:
-        entries_by_category.setdefault(entry.category, []).append(entry)
+        key = (entry.category, entry.normalized_source_term)
+        glossary_idx[key] = entry
 
     entities_by_id: dict[str, GraphEntity] = {}
     entity_id_by_key: dict[tuple[str, str], str] = {}
     appearances_by_id: dict[str, GraphAppearance] = {}
+    aliases: list[GraphAlias] = []
     world_model_observations: list[_WorldModelObservation] = []
     deferred_by_key: dict[tuple[str, str], _DeferredAggregate] = {}
     warnings: list[str] = []
@@ -323,6 +395,9 @@ def extract_entities(
             if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
             and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
         ]
+
+    glossary_context_str = _build_glossary_context(tracked_entries)
+
     for chapter_file in chapter_files:
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))
@@ -330,153 +405,177 @@ def extract_entities(
         if not source_text:
             continue
 
-        for entry in tracked_entries:
-            count = source_text.count(entry.source_term)
-            if count <= 0:
+        prompt = render_named_sections(
+            prompt_template,
+            {
+                "CHAPTER_NUMBER": str(chapter_number),
+                "SOURCE_TEXT_ZH": source_text,
+                "GLOSSARY_CONTEXT": glossary_context_str,
+            },
+        )
+
+        raw = llm_client.generate_text(model_name=model_name, prompt=prompt)
+
+        try:
+            llm_entities, llm_relationships = _parse_llm_response(raw)
+        except (json.JSONDecodeError, ValueError):
+            warnings.append(f"warning_emitted: LLM parse error chapter={chapter_number}, skipping")
+            continue
+
+        for llm_ent in llm_entities:
+            normalized_source = normalize_term(llm_ent.source_term)
+            if not normalized_source:
                 continue
-            normalized_source = entry.normalized_source_term
-            entity_id = _entity_id(
-                release_id=release_id,
-                category=entry.category,
-                normalized_source=normalized_source,
-            )
-            entity_id_by_key[(entry.category, normalized_source)] = entity_id
-            current = entities_by_id.get(entity_id)
-            if current is None:
-                entities_by_id[entity_id] = GraphEntity(
-                    entity_id=entity_id,
+
+            glossary_key = (llm_ent.entity_type, normalized_source)
+            glossary_entry = glossary_idx.get(glossary_key)
+
+            if glossary_entry is not None:
+                entity_id = _entity_id(
                     release_id=release_id,
-                    entity_type=entry.category,
-                    canonical_name=entry.target_term,
-                    glossary_entry_id=entry.glossary_entry_id,
-                    first_seen_chapter=chapter_number,
-                    last_seen_chapter=chapter_number,
-                    revealed_chapter=chapter_number,
-                    status="provisional",
-                    schema_version=1,
+                    category=glossary_entry.category,
+                    normalized_source=glossary_entry.normalized_source_term,
                 )
+                entity_id_by_key[glossary_key] = entity_id
+
+                current = entities_by_id.get(entity_id)
+                if current is None:
+                    entities_by_id[entity_id] = GraphEntity(
+                        entity_id=entity_id,
+                        release_id=release_id,
+                        entity_type=glossary_entry.category,
+                        canonical_name=glossary_entry.target_term,
+                        glossary_entry_id=glossary_entry.glossary_entry_id,
+                        first_seen_chapter=chapter_number,
+                        last_seen_chapter=chapter_number,
+                        revealed_chapter=chapter_number,
+                        status="provisional",
+                        schema_version=1,
+                    )
+                else:
+                    current.first_seen_chapter = min(current.first_seen_chapter, chapter_number)
+                    current.last_seen_chapter = max(current.last_seen_chapter, chapter_number)
+
+            elif llm_ent.entity_type in GLOSSARY_COVERED_CATEGORIES:
+                def_key = (llm_ent.entity_type, normalized_source)
+                current_deferred = deferred_by_key.get(def_key)
+                if current_deferred is None:
+                    deferred_by_key[def_key] = _DeferredAggregate(
+                        term_text=llm_ent.source_term,
+                        category=llm_ent.entity_type,
+                        evidence_snippet=llm_ent.evidence_snippet or _snippet(source_text, llm_ent.source_term),
+                        source_chapter=chapter_number,
+                        last_seen_chapter=chapter_number,
+                        appearance_count=1,
+                    )
+                    warnings.append(
+                        f"warning_emitted: deferred term {llm_ent.source_term!r} category={llm_ent.entity_type} chapter={chapter_number}"
+                    )
+                else:
+                    current_deferred.last_seen_chapter = max(
+                        current_deferred.last_seen_chapter, chapter_number
+                    )
+                    current_deferred.appearance_count += 1
+                continue
+
             else:
-                current.first_seen_chapter = min(current.first_seen_chapter, chapter_number)
-                current.last_seen_chapter = max(current.last_seen_chapter, chapter_number)
+                existing_id = _resolve_entity_id(normalized_source, entity_id_by_key)
+                if existing_id is not None:
+                    existing_key = None
+                    for (cat, norm), registered_eid in list(entity_id_by_key.items()):
+                        if registered_eid == existing_id:
+                            existing_key = (cat, norm)
+                            break
+                    if existing_key is not None and existing_key[0] != llm_ent.entity_type:
+                        warnings.append(
+                            f"warning_emitted: type conflict for {llm_ent.source_term!r} "
+                            f"(was {existing_key[0]}, LLM says {llm_ent.entity_type}) chapter={chapter_number}"
+                        )
+                        continue
+
+                entity_id = _entity_id(
+                    release_id=release_id,
+                    category=llm_ent.entity_type,
+                    normalized_source=normalized_source,
+                )
+                entity_id_by_key[(llm_ent.entity_type, normalized_source)] = entity_id
+
+                current = entities_by_id.get(entity_id)
+                if current is None:
+                    entities_by_id[entity_id] = GraphEntity(
+                        entity_id=entity_id,
+                        release_id=release_id,
+                        entity_type=llm_ent.entity_type,
+                        canonical_name=llm_ent.source_term,
+                        glossary_entry_id=None,
+                        first_seen_chapter=chapter_number,
+                        last_seen_chapter=chapter_number,
+                        revealed_chapter=chapter_number,
+                        status="provisional",
+                        schema_version=1,
+                    )
+                else:
+                    current.first_seen_chapter = min(current.first_seen_chapter, chapter_number)
+                    current.last_seen_chapter = max(current.last_seen_chapter, chapter_number)
+
+            eid = _resolve_entity_id(normalized_source, entity_id_by_key)
+            if eid is None:
+                continue
 
             appearance_id = _appearance_id(
                 release_id=release_id,
-                entity_id=entity_id,
+                entity_id=eid,
                 chapter_number=chapter_number,
             )
-            appearances_by_id[appearance_id] = GraphAppearance(
-                appearance_id=appearance_id,
-                release_id=release_id,
-                entity_id=entity_id,
-                chapter_number=chapter_number,
-                evidence_snippet=_snippet(source_text, entry.source_term),
-                status="provisional",
+            if appearance_id not in appearances_by_id:
+                appearances_by_id[appearance_id] = GraphAppearance(
+                    appearance_id=appearance_id,
+                    release_id=release_id,
+                    entity_id=eid,
+                    chapter_number=chapter_number,
+                    evidence_snippet=llm_ent.evidence_snippet or _snippet(source_text, llm_ent.source_term),
+                    status="provisional",
                     schema_version=1,
                 )
 
-        for sentence in _split_sentences(source_text):
-            characters = _find_present_entity_ids(
-                sentence=sentence,
-                entries=entries_by_category.get("character", []),
-                entity_id_by_key=entity_id_by_key,
-            )
-            factions = _find_present_entity_ids(
-                sentence=sentence,
-                entries=entries_by_category.get("faction", []),
-                entity_id_by_key=entity_id_by_key,
-            )
-            locations = _find_present_entity_ids(
-                sentence=sentence,
-                entries=entries_by_category.get("location", []),
-                entity_id_by_key=entity_id_by_key,
-            )
-            items = _find_present_entity_ids(
-                sentence=sentence,
-                entries=entries_by_category.get("item_artifact", [])
-                + entries_by_category.get("technique", []),
-                entity_id_by_key=entity_id_by_key,
-            )
-            ranks = _find_present_entity_ids(
-                sentence=sentence,
-                entries=entries_by_category.get("title_honorific", [])
-                + entries_by_category.get("generic_role", []),
-                entity_id_by_key=entity_id_by_key,
-            )
-            locatables = sorted(set(characters + factions + items))
-            lore_text = sentence if _contains_any(sentence, _LORE_HINTS) else None
-            is_masked_identity = _contains_any(sentence, _MASKED_HINTS)
-
-            if _contains_any(sentence, _MEMBER_OF_HINTS):
-                _append_observation(
-                    world_model_observations,
-                    edge_type="MEMBER_OF",
-                    source_entity_ids=characters,
-                    target_entity_ids=factions,
-                    chapter_number=chapter_number,
-                    lore_text=lore_text,
-                    is_masked_identity=is_masked_identity,
-                )
-            if _contains_any(sentence, _LOCATED_IN_HINTS):
-                _append_observation(
-                    world_model_observations,
-                    edge_type="LOCATED_IN",
-                    source_entity_ids=locatables,
-                    target_entity_ids=locations,
-                    chapter_number=chapter_number,
-                    lore_text=lore_text,
-                    is_masked_identity=is_masked_identity,
-                )
-            if _contains_any(sentence, _HELD_BY_HINTS):
-                _append_observation(
-                    world_model_observations,
-                    edge_type="HELD_BY",
-                    source_entity_ids=items,
-                    target_entity_ids=characters,
-                    chapter_number=chapter_number,
-                    lore_text=lore_text,
-                    is_masked_identity=is_masked_identity,
-                )
-            if _contains_any(sentence, _RANKED_AS_HINTS):
-                _append_observation(
-                    world_model_observations,
-                    edge_type="RANKED_AS",
-                    source_entity_ids=characters,
-                    target_entity_ids=ranks,
-                    chapter_number=chapter_number,
-                    lore_text=lore_text,
-                    is_masked_identity=is_masked_identity,
-                )
-
-        term_counts: dict[str, int] = {}
-        for term in _CJK_TERM_RE.findall(source_text):
-            term_counts[term] = term_counts.get(term, 0) + 1
-
-        for term, count in term_counts.items():
-            category = _infer_category(term)
-            if category is None or category not in GLOSSARY_COVERED_CATEGORIES:
-                continue
-            normalized = normalize_term(term)
-            if (category, normalized) in glossary_index:
-                continue
-
-            key = (category, normalized)
-            current_deferred = deferred_by_key.get(key)
-            if current_deferred is None:
-                deferred_by_key[key] = _DeferredAggregate(
-                    term_text=term,
-                    category=category,
-                    evidence_snippet=_snippet(source_text, term),
-                    source_chapter=chapter_number,
+            for alias_text in llm_ent.aliases:
+                alias_id_hash = sha256(f"{release_id}:{eid}:{alias_text}".encode("utf-8")).hexdigest()[:24]
+                aliases.append(GraphAlias(
+                    alias_id=f"als_{alias_id_hash}",
+                    release_id=release_id,
+                    entity_id=eid,
+                    alias_text=alias_text,
+                    alias_language="zh",
+                    first_seen_chapter=chapter_number,
                     last_seen_chapter=chapter_number,
-                    appearance_count=count,
-                )
-                warnings.append(
-                    f"warning_emitted: deferred term {term!r} category={category} chapter={chapter_number}"
-                )
+                    revealed_chapter=chapter_number,
+                    confidence=0.7,
+                    is_masked_identity=False,
+                    status="provisional",
+                    schema_version=1,
+                ))
+
+        for llm_rel in llm_relationships:
+            src_normalized = normalize_term(llm_rel.source_term)
+            tgt_normalized = normalize_term(llm_rel.target_term)
+            if not src_normalized or not tgt_normalized:
                 continue
 
-            current_deferred.last_seen_chapter = max(current_deferred.last_seen_chapter, chapter_number)
-            current_deferred.appearance_count += count
+            src_eid = _resolve_entity_id(src_normalized, entity_id_by_key)
+            tgt_eid = _resolve_entity_id(tgt_normalized, entity_id_by_key)
+            if src_eid is None or tgt_eid is None:
+                continue
+
+            _append_observation(
+                world_model_observations,
+                edge_type=llm_rel.type,
+                source_entity_ids=[src_eid],
+                target_entity_ids=[tgt_eid],
+                chapter_number=chapter_number,
+                lore_text=llm_rel.lore_text,
+                is_masked_identity=llm_rel.is_masked_identity,
+                confidence=llm_rel.confidence,
+            )
 
     deferred_entities = [
         DeferredEntityRecord(
@@ -502,7 +601,7 @@ def extract_entities(
 
     return GraphExtractionResult(
         provisional_entities=sorted(entities_by_id.values(), key=lambda row: row.entity_id),
-        provisional_aliases=[],
+        provisional_aliases=aliases,
         provisional_appearances=sorted(
             appearances_by_id.values(),
             key=lambda row: (row.chapter_number, row.appearance_id),
