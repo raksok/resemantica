@@ -7,7 +7,7 @@ Current top-level files:
 - `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`, `IMPLEMENTATION_PLAN.md`: project contracts and milestone plan
 - `docs/`: implementation-facing documentation suite
 - `src/resemantica/`: active package root for milestone implementation
-- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`)
+- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/`)
 - `main.py`: placeholder entrypoint kept for compatibility with the starter project
 - `pyproject.toml`: Python project metadata
 
@@ -65,6 +65,15 @@ Implemented package layout (M7 slice):
 - `src/resemantica/graph/filters.py`: `get_hierarchy_context()`, `get_revealed_lore()`, and local world-model edge selectors
 - `src/resemantica/graph/validators.py`: unsupported edge-type rejection and reveal-safe lore validation checks
 - `tests/graph/`: M7 tests for role-state transitions, containment visibility, reveal-safe lore gating, and unsupported expansion rejection
+
+Implemented package layout (M8 slice):
+
+- `src/resemantica/packets/`: chapter packet schemas, graph-enriched packet builder, paragraph bundle derivation, and stale detection
+- `src/resemantica/db/packet_repo.py`: SQLite packet metadata repository for reproducibility and stale checks
+- `src/resemantica/db/migrations/007_packets.sql`: packet metadata table and indexes
+- `src/resemantica/llm/tokens.py`: cl100k token counting utility for packet/bundle budgeting with 5% safety-buffer enforcement
+- `src/resemantica/cli.py`: `packets build` command wiring
+- `tests/packets/`: packet schema, provenance, stale rebuild, graph filtering, size budget, and retrieval precedence tests
 
 ## Target State
 

@@ -12,6 +12,7 @@ from resemantica.glossary.pipeline import (
     translate_glossary_candidates,
 )
 from resemantica.idioms.pipeline import preprocess_idioms
+from resemantica.packets.builder import build_packets
 from resemantica.settings import load_config
 from resemantica.summaries.pipeline import preprocess_summaries
 from resemantica.translation.pipeline import translate_chapter
@@ -113,6 +114,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Extract, validate, and promote Graph MVP state from preprocessing assets.",
     )
     _add_common_release_args(graph, default_run="graph")
+
+    packets = subparsers.add_parser(
+        "packets",
+        help="Build immutable chapter packets and paragraph bundles.",
+    )
+    packets_subparsers = packets.add_subparsers(
+        dest="packets_command",
+        required=True,
+    )
+    packets_build = packets_subparsers.add_parser(
+        "build",
+        help="Build chapter packets from validated upstream authority state.",
+    )
+    _add_common_release_args(packets_build, default_run="packets-build")
+    packets_build.add_argument(
+        "--chapter",
+        required=False,
+        type=int,
+        default=None,
+        help="Optional chapter number. If omitted, all extracted chapters are built.",
+    )
     return parser
 
 
@@ -230,6 +252,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"warnings_artifact={result['warnings_artifact']}")
             return 0
 
+        parser.print_help()
+        return 2
+
+    if args.command == "packets":
+        config = load_config(args.config)
+        if args.packets_command == "build":
+            result = build_packets(
+                release_id=args.release,
+                run_id=args.run,
+                chapter_number=args.chapter,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"chapters_requested={result['chapters_requested']}")
+            print(f"chapters_built={result['chapters_built']}")
+            print(f"chapters_up_to_date={result['chapters_up_to_date']}")
+            return 0
         parser.print_help()
         return 2
 

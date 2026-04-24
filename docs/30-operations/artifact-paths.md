@@ -25,7 +25,8 @@ artifacts/releases/{release_id}/
   graph/
     snapshot-{snapshot_id}.json
   packets/
-    chapter-{chapter_number}.json
+    chapter-{chapter_number}-{packet_id}.json
+    chapter-{chapter_number}-{packet_id}-bundles.json
 ```
 
 ## Run-Scoped Paths

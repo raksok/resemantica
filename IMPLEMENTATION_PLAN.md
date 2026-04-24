@@ -320,26 +320,26 @@ Build immutable chapter packets from validated upstream memory including confirm
 
 ### Action Items
 
-[ ] Add typed schemas in `packets/` for chapter packets and paragraph bundles, including version and provenance fields.
-[ ] Implement packet metadata persistence in SQLite and JSON packet artifact emission on disk.
-[ ] Build the chapter packet assembler using locked glossary, validated summaries, idiom policies, chapter metadata, and confirmed graph context.
-[ ] Implement packet-side alias resolution candidate lists and reveal-safe identity notes from graph data.
-[ ] Add packet size budgeting rules so graph enrichment can be trimmed without violating chapter safety.
-[ ] Implement paragraph bundle derivation logic that selects local glossary hits, continuity notes, evidence summaries, risk placeholders, and locally relevant graph context.
-[ ] Implement retrieval arbitration in packet or bundle assembly so glossary and deterministic idiom matches outrank graph contributions.
-[ ] Implement packet reproducibility fields such as source hash, glossary hash, summary hash, graph snapshot hash, builder version, and build timestamp.
-[ ] Add stale-artifact detection so packet rebuilds can be triggered when upstream authority hashes change.
-[ ] Add a CLI or preprocessing entrypoint to build or rebuild chapter packets for a chapter or range.
-[ ] Add tests for packet schema validity, reproducibility metadata presence, minimal paragraph bundle content rules, graph-to-packet filtering, packet size control, and retrieval precedence conflicts.
+[x] Add typed schemas in `packets/` for chapter packets and paragraph bundles, including version and provenance fields.
+[x] Implement packet metadata persistence in SQLite and JSON packet artifact emission on disk.
+[x] Build the chapter packet assembler using locked glossary, validated summaries, idiom policies, chapter metadata, and confirmed graph context.
+[x] Implement packet-side alias resolution candidate lists and reveal-safe identity notes from graph data.
+[x] Add packet size budgeting rules so graph enrichment can be trimmed without violating chapter safety.
+[x] Implement paragraph bundle derivation logic that selects local glossary hits, continuity notes, evidence summaries, risk placeholders, and locally relevant graph context.
+[x] Implement retrieval arbitration in packet or bundle assembly so glossary and deterministic idiom matches outrank graph contributions.
+[x] Implement packet reproducibility fields such as source hash, glossary hash, summary hash, graph snapshot hash, builder version, and build timestamp.
+[x] Add stale-artifact detection so packet rebuilds can be triggered when upstream authority hashes change.
+[x] Add a CLI or preprocessing entrypoint to build or rebuild chapter packets for a chapter or range.
+[x] Add tests for packet schema validity, reproducibility metadata presence, minimal paragraph bundle content rules, graph-to-packet filtering, packet size control, and retrieval precedence conflicts.
 
 ### Validation
 
-[ ] Verify chapter packets are immutable artifacts with enough metadata to reproduce or invalidate them.
-[ ] Verify paragraph bundles contain only local context and not broad full-chapter dumps.
-[ ] Verify packet rebuilds trigger when upstream authority hashes change.
-[ ] Verify packets contain chapter-safe graph snippets rather than unrestricted subgraph exports.
-[ ] Verify exact glossary and idiom matches still outrank graph suggestions in paragraph bundles.
-[ ] Verify graph snapshot changes invalidate dependent packets.
+[x] Verify chapter packets are immutable artifacts with enough metadata to reproduce or invalidate them.
+[x] Verify paragraph bundles contain only local context and not broad full-chapter dumps.
+[x] Verify packet rebuilds trigger when upstream authority hashes change.
+[x] Verify packets contain chapter-safe graph snippets rather than unrestricted subgraph exports.
+[x] Verify exact glossary and idiom matches still outrank graph suggestions in paragraph bundles.
+[x] Verify graph snapshot changes invalidate dependent packets.
 
 ## Milestone 9: Full Three-Pass Workflow and Stronger Risk Handling
 

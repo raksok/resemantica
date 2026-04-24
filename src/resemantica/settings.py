@@ -78,6 +78,7 @@ class DerivedPaths:
     graph_snapshot_path: Path
     graph_warnings_path: Path
     graph_db_path: Path
+    packets_dir: Path
     rebuilt_epub_path: Path
     db_path: Path
 
@@ -288,6 +289,7 @@ def derive_paths(
         graph_snapshot_path=release_root / "graph" / "snapshot.json",
         graph_warnings_path=release_root / "graph" / "warnings.json",
         graph_db_path=artifact_root / "graph.ladybug",
+        packets_dir=release_root / "packets",
         rebuilt_epub_path=release_root / "rebuild" / "reconstructed.epub",
         db_path=artifact_root / config.paths.db_filename,
     )
