@@ -18,7 +18,13 @@ from resemantica.translation.checkpoints import (
 )
 from resemantica.translation.pass1 import translate_pass1
 from resemantica.translation.pass2 import translate_pass2
-from resemantica.translation.validators import validate_basic_fidelity, validate_structure
+from resemantica.translation.pass3 import translate_pass3
+from resemantica.translation.risk import classify_paragraph_risk_from_text
+from resemantica.translation.validators import (
+    validate_basic_fidelity,
+    validate_pass3_integrity,
+    validate_structure,
+)
 
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
 
@@ -126,11 +132,14 @@ def translate_chapter(
     validation_dir = run_root / "validation" / f"chapter-{chapter_number}"
     pass1_artifact_path = translation_dir / "pass1.json"
     pass2_artifact_path = translation_dir / "pass2.json"
+    pass3_artifact_path = translation_dir / "pass3.json"
     structure_report_path = validation_dir / "structure.json"
     fidelity_report_path = validation_dir / "fidelity.json"
+    chapter_report_path = validation_dir / "chapter.json"
 
     pass1_prompt = load_prompt("translate_pass1.txt")
     pass2_prompt = load_prompt("translate_pass2.txt")
+    pass3_prompt = load_prompt("translate_pass3.txt")
     model_name = config_obj.models.translator_name
     client = _build_llm_client(config_obj, llm_client)
 
@@ -496,6 +505,113 @@ def translate_chapter(
             artifact_path=str(pass2_artifact_path),
         )
 
+        pass3_enabled = config_obj.translation.pass3_default
+        threshold_high = config_obj.translation.risk_threshold_high
+        pass3_blocks: list[dict[str, Any]] = []
+        risk_classifications: list[dict[str, Any]] = []
+        pass3_integrity_checks: list[dict[str, Any]] = []
+
+        if pass3_enabled and not pass2_failed:
+            for block in pass2_blocks:
+                source_text = str(block["source_text_zh"])
+                pass2_output = str(block["output_text_en"])
+                block_id = str(block["block_id"])
+
+                risk = classify_paragraph_risk_from_text(
+                    source_text=source_text,
+                    pass2_text=pass2_output,
+                    threshold_high=threshold_high,
+                )
+                risk_record = {"block_id": block_id, **risk.to_dict()}
+                risk_classifications.append(risk_record)
+
+                if risk.risk_class == "HIGH":
+                    pass3_blocks.append(
+                        {
+                            "block_id": block_id,
+                            "parent_block_id": block.get("parent_block_id", block_id),
+                            "source_text_zh": source_text,
+                            "pass2_output": pass2_output,
+                            "pass3_output": None,
+                            "final_output": pass2_output,
+                            "risk_class": risk.risk_class,
+                            "risk_score": risk.risk_score,
+                            "pass_decision": "skipped_high_risk",
+                        }
+                    )
+                    continue
+
+                polished_text = translate_pass3(
+                    client=client,
+                    model_name=model_name,
+                    prompt_template=pass3_prompt.template,
+                    source_text=source_text,
+                    pass2_output=pass2_output,
+                    glossary_text="",
+                )
+
+                integrity = validate_pass3_integrity(
+                    source_text=source_text,
+                    pass2_output=pass2_output,
+                    pass3_output=polished_text,
+                )
+                pass3_integrity_checks.append(
+                    {
+                        "block_id": block_id,
+                        "status": integrity.status,
+                        "errors": integrity.errors,
+                        "warnings": integrity.warnings,
+                    }
+                )
+
+                if integrity.is_valid:
+                    final_output = polished_text
+                    pass_decision = "pass3_accepted"
+                else:
+                    final_output = pass2_output
+                    pass_decision = "pass3_rejected_integrity_failure"
+
+                pass3_blocks.append(
+                    {
+                        "block_id": block_id,
+                        "parent_block_id": block.get("parent_block_id", block_id),
+                        "source_text_zh": source_text,
+                        "pass2_output": pass2_output,
+                        "pass3_output": polished_text if integrity.is_valid else None,
+                        "final_output": final_output,
+                        "risk_class": risk.risk_class,
+                        "risk_score": risk.risk_score,
+                        "pass_decision": pass_decision,
+                    }
+                )
+
+        if pass3_enabled and pass3_blocks:
+            pass3_payload = {
+                "release_id": release_id,
+                "run_id": run_id,
+                "chapter_number": chapter_number,
+                "pass_name": "pass3",
+                "model_name": model_name,
+                "prompt_version": pass3_prompt.version,
+                "source_hash": source_hash,
+                "blocks": pass3_blocks,
+                "risk_classifications": risk_classifications,
+                "integrity_checks": pass3_integrity_checks,
+                "status": "success",
+            }
+            _write_json(pass3_artifact_path, pass3_payload)
+            save_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                pass_name="pass3",
+                source_hash=source_hash,
+                prompt_version=pass3_prompt.version,
+                status="success",
+                artifact_path=str(pass3_artifact_path),
+            )
+
         structure_report = {
             "release_id": release_id,
             "run_id": run_id,
@@ -517,6 +633,21 @@ def translate_chapter(
         _write_json(structure_report_path, structure_report)
         _write_json(fidelity_report_path, fidelity_report)
 
+        chapter_report = {
+            "release_id": release_id,
+            "run_id": run_id,
+            "chapter_number": chapter_number,
+            "validation_type": "chapter_level",
+            "status": "failed" if pass2_failed else "success",
+            "pass1_status": str(pass1_payload.get("status", "unknown")),
+            "pass2_status": str(pass2_payload.get("status", "unknown")),
+            "pass3_enabled": pass3_enabled,
+            "pass3_status": "success" if pass3_enabled and pass3_blocks else "skipped",
+            "risk_classifications": risk_classifications,
+            "integrity_checks": pass3_integrity_checks,
+        }
+        _write_json(chapter_report_path, chapter_report)
+
         if pass2_failed:
             raise RuntimeError("Pass 2 failed validation.")
 
@@ -524,8 +655,10 @@ def translate_chapter(
             "status": "success",
             "pass1_artifact": str(pass1_artifact_path),
             "pass2_artifact": str(pass2_artifact_path),
+            "pass3_artifact": str(pass3_artifact_path) if pass3_enabled and pass3_blocks else None,
             "structure_report": str(structure_report_path),
             "fidelity_report": str(fidelity_report_path),
+            "chapter_report": str(chapter_report_path),
         }
     finally:
         conn.close()

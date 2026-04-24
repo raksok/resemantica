@@ -1,0 +1,16 @@
+# version: 1.0
+PASS3
+
+## SOURCE TEXT
+{SOURCE_TEXT}
+
+## PASS2 OUTPUT
+{PASS2_OUTPUT}
+
+## GLOSSARY
+{GLOSSARY}
+
+## INSTRUCTIONS
+Polish the Pass 2 output for readability without changing meaning, terminology, facts, or event order.
+Preserve all named entities and glossary terms exactly.
+Preserve placeholders exactly as provided.

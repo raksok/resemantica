@@ -52,3 +52,37 @@ def validate_basic_fidelity(source_text: str, output_text: str) -> ValidationRes
 
     return ValidationResult(status="failed" if errors else "success", errors=errors, warnings=warnings)
 
+
+def validate_pass3_integrity(
+    *,
+    source_text: str,
+    pass2_output: str,
+    pass3_output: str,
+    glossary_terms: list[str] | None = None,
+) -> ValidationResult:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not pass3_output.strip():
+        errors.append("Pass 3 output is empty.")
+        return ValidationResult(status="failed", errors=errors, warnings=warnings)
+
+    source_placeholders = _placeholder_tokens(source_text)
+    pass3_placeholders = _placeholder_tokens(pass3_output)
+    if source_placeholders != pass3_placeholders:
+        errors.append("Placeholder mismatch between source and Pass 3 output.")
+
+    pass2_placeholders = _placeholder_tokens(pass2_output)
+    if pass2_placeholders != pass3_placeholders:
+        errors.append("Placeholder mismatch between Pass 2 and Pass 3 output.")
+
+    terms = glossary_terms or []
+    for term in terms:
+        if term in pass2_output and term not in pass3_output:
+            errors.append(f"Terminology drift: '{term}' lost in Pass 3.")
+
+    if pass3_output.strip() == source_text.strip():
+        warnings.append("Pass 3 output is identical to source text (meaning drift suspected).")
+
+    return ValidationResult(status="failed" if errors else "success", errors=errors, warnings=warnings)
+

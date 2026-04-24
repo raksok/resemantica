@@ -75,6 +75,15 @@ Implemented package layout (M8 slice):
 - `src/resemantica/cli.py`: `packets build` command wiring
 - `tests/packets/`: packet schema, provenance, stale rebuild, graph filtering, size budget, and retrieval precedence tests
 
+Implemented package layout (M9 slice):
+
+- `src/resemantica/translation/pass3.py`: Pass 3 readability polish with fidelity/terminology guardrails
+- `src/resemantica/translation/risk.py`: deterministic paragraph risk classifier using D21 weighted formula
+- `src/resemantica/translation/validators.py`: `validate_pass3_integrity()` for terminology drift and meaning drift detection
+- `src/resemantica/translation/pipeline.py`: Pass 3 integration with risk-based skip, integrity validation, and fallback to Pass 2
+- `src/resemantica/llm/prompts/translate_pass3.txt`: Pass 3 prompt template with version header
+- `tests/translation/test_pass3_and_risk.py`: risk scoring, threshold edge, sub-score saturation, skip behavior, integrity fallback, and chapter-level validation tests
+
 ## Target State
 
 Primary code roots:

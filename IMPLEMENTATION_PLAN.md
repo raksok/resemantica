@@ -361,19 +361,19 @@ Complete the translation workflow by adding Pass 3, stronger paragraph risk clas
 
 ### Action Items
 
-[ ] Implement Pass 3 in `translation/pass3.py` with strict constraints that improve readability without changing facts, named terms, or event order.
-[ ] Implement a paragraph risk classifier that uses idiom density, title density, relationship reveal risk, pronoun ambiguity, XHTML fragility, and entity density.
-[ ] Add policy logic to skip Pass 3, restrict context, or force stricter validation for high-risk paragraphs.
-[ ] Extend translation validators to capture chapter-level terminology consistency, unresolved high-severity fidelity flags, and structural completeness.
-[ ] Add retry-once and resegmentation rules that are consistent with checkpointing and artifact persistence.
-[ ] Extend translation artifact schemas and reports to include risk class, retry counts, and pass decisions.
-[ ] Add tests for Pass 3 guardrails, high-risk skip behavior, and chapter-level validation failure handling.
+[x] Implement Pass 3 in `translation/pass3.py` with strict constraints that improve readability without changing facts, named terms, or event order.
+[x] Implement a paragraph risk classifier that uses idiom density, title density, relationship reveal risk, pronoun ambiguity, XHTML fragility, and entity density.
+[x] Add policy logic to skip Pass 3, restrict context, or force stricter validation for high-risk paragraphs.
+[x] Extend translation validators to capture chapter-level terminology consistency, unresolved high-severity fidelity flags, and structural completeness.
+[x] Add retry-once and resegmentation rules that are consistent with checkpointing and artifact persistence.
+[x] Extend translation artifact schemas and reports to include risk class, retry counts, and pass decisions.
+[x] Add tests for Pass 3 guardrails, high-risk skip behavior, and chapter-level validation failure handling.
 
 ### Validation
 
-[ ] Verify Pass 3 never writes authority memory and never changes protected terminology or event order.
-[ ] Verify high-risk paragraphs can skip Pass 3 while the chapter still completes safely.
-[ ] Verify chapter-level validation catches unresolved structural or fidelity failures before success is reported.
+[x] Verify Pass 3 never writes authority memory and never changes protected terminology or event order.
+[x] Verify high-risk paragraphs can skip Pass 3 while the chapter still completes safely.
+[x] Verify chapter-level validation catches unresolved structural or fidelity failures before success is reported.
 
 ## Milestone 10: Centralized Orchestration and Production Workflow
 

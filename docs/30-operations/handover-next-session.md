@@ -1,4 +1,4 @@
-# Handover Prompt: Resemantica (Post-M8)
+# Handover Prompt: Resemantica (Post-M9)
 
 Use this prompt in the next session:
 
@@ -16,7 +16,7 @@ You are continuing implementation of **Resemantica** in `D:\Project\resemantica`
 
 ## Current Status
 
-M1, M2, M3, M4, M5, M6, M7, and M8 are implemented and validated.
+M1, M2, M3, M4, M5, M6, M7, M8, and M9 are implemented and validated.
 
 Completed and verified:
 
@@ -45,19 +45,24 @@ Completed and verified:
   - retrieval precedence where glossary/idiom authority outranks graph alias suggestions
   - stale detection and stale rebuild behavior based on upstream hashes
   - packet CLI wiring (`packets build`)
-- Tests in `tests/epub/`, `tests/translation/`, `tests/glossary/`, `tests/summaries/`, `tests/idioms/`, `tests/graph/`, and `tests/packets/` passing.
-- `docs/30-operations/repo-map.md` updated for M8 layout.
-- `docs/30-operations/artifact-paths.md` updated for packet + bundle artifact naming.
-- `IMPLEMENTATION_PLAN.md` M8 checklist updated to complete.
+- M9 Pass 3 + risk flow includes:
+  - `translation.pass3.translate_pass3()` readability polish with fidelity/terminology guardrails
+  - `translation.risk.classify_paragraph_risk()` deterministic D21 weighted formula with all sub-scores persisted
+  - High-risk skip behavior (risk >= 0.7) where final output remains validated Pass 2 output
+  - `translation.validators.validate_pass3_integrity()` catches terminology drift and placeholder mismatch
+  - Pass 3 integrity fallback to Pass 2 output on validation failure
+  - Pass 3 artifacts (`pass3.json`) with risk classifications, integrity checks, and pass decisions per block
+  - Chapter-level validation report (`chapter.json`) with pass statuses, risk classifications, and integrity checks
+- Tests in `tests/epub/`, `tests/translation/`, `tests/glossary/`, `tests/summaries/`, `tests/idioms/`, `tests/graph/`, and `tests/packets/` passing (64 total).
+- `docs/30-operations/repo-map.md` updated for M9 layout.
+- `docs/30-operations/artifact-paths.md` already includes `pass3.json` and `chapter.json`.
+- `IMPLEMENTATION_PLAN.md` M9 checklist updated to complete.
 
 Verified commands from the previous session:
 
-- `uv run --extra dev ruff check src\resemantica tests\packets docs\30-operations\repo-map.md`
+- `uv run --extra dev ruff check src\resemantica tests\translation`
 - `uv run --extra dev mypy src\resemantica`
-- `uv run --extra dev pytest tests\packets tests\graph tests\idioms tests\summaries tests\glossary tests\translation tests\epub` (40 passed)
-- `uv run python -m resemantica.cli --help` (includes `packets`)
-- `uv run python -m resemantica.cli packets --help`
-- `uv run python -m resemantica.cli packets build --help`
+- `uv run --extra dev pytest tests\epub tests\translation tests\glossary tests\summaries tests\idioms tests\graph tests\packets` (64 passed)
 
 ## Working Tree State (Not Committed Yet)
 
@@ -72,8 +77,14 @@ Current local changes:
 - `src/resemantica/db/migrations/007_packets.sql`
 - `src/resemantica/db/packet_repo.py`
 - `src/resemantica/llm/tokens.py`
+- `src/resemantica/llm/prompts/translate_pass3.txt`
 - `src/resemantica/packets/` (new package)
+- `src/resemantica/translation/pass3.py`
+- `src/resemantica/translation/risk.py`
+- `src/resemantica/translation/pipeline.py`
+- `src/resemantica/translation/validators.py`
 - `tests/packets/` (new test suite)
+- `tests/translation/test_pass3_and_risk.py`
 
 No push has been performed.
 
@@ -87,27 +98,19 @@ No push has been performed.
 
 ## Next Objective
 
-Start **M9** only:
+Start **M10** only:
 
-- Task brief: `docs/40-tasks/task-09-pass3-and-risk.md`
-- LLD: `docs/20-lld/lld-09-pass3-and-risk.md`
+- Task brief: `docs/40-tasks/task-10-orchestration.md`
+- LLD: `docs/20-lld/lld-10-orchestration.md`
 
-Focus for M9:
+## Existing M9 Files (orientation)
 
-1. Implement `translation.pass3.translate_pass3()` readability polish with strict fidelity/terminology guardrails.
-2. Implement deterministic risk classifier (`translation.risk.classify_paragraph_risk()`) using the D21 weighted formula and persisted sub-scores.
-3. Enforce high-risk skip behavior (`risk >= 0.7`) so final output remains validated Pass 2 output for high-risk paragraphs.
-4. Add Pass 3 integrity validator (`translation.validators.validate_pass3_integrity()`) to catch terminology drift and meaning drift.
-5. Persist Pass 3 artifacts + risk reports and include pass decisions in chapter validation outputs.
-6. Add tests in `tests/translation/` for risk skip behavior, deterministic scoring, threshold edge at `0.7`, integrity fallback, and chapter-level failure behavior.
-
-## Existing M8 Files (orientation)
-
-- `src/resemantica/packets/` (`models.py`, `builder.py`, `bundler.py`, `invalidation.py`)
-- `src/resemantica/db/packet_repo.py`
-- `src/resemantica/db/migrations/007_packets.sql`
-- `src/resemantica/llm/tokens.py`
-- `tests/packets/test_packet_pipeline.py`
+- `src/resemantica/translation/pass3.py`
+- `src/resemantica/translation/risk.py`
+- `src/resemantica/translation/validators.py`
+- `src/resemantica/translation/pipeline.py`
+- `src/resemantica/llm/prompts/translate_pass3.txt`
+- `tests/translation/test_pass3_and_risk.py`
+- `tests/translation/test_translate_chapter.py`
 
 ---
-
