@@ -74,6 +74,10 @@ class DerivedPaths:
     idiom_policies_path: Path
     idiom_conflicts_path: Path
     summaries_dir: Path
+    graph_dir: Path
+    graph_snapshot_path: Path
+    graph_warnings_path: Path
+    graph_db_path: Path
     rebuilt_epub_path: Path
     db_path: Path
 
@@ -280,6 +284,10 @@ def derive_paths(
         idiom_policies_path=release_root / "idioms" / "policies.json",
         idiom_conflicts_path=release_root / "idioms" / "conflicts.json",
         summaries_dir=release_root / "summaries",
+        graph_dir=release_root / "graph",
+        graph_snapshot_path=release_root / "graph" / "snapshot.json",
+        graph_warnings_path=release_root / "graph" / "warnings.json",
+        graph_db_path=artifact_root / "graph.ladybug",
         rebuilt_epub_path=release_root / "rebuild" / "reconstructed.epub",
         db_path=artifact_root / config.paths.db_filename,
     )

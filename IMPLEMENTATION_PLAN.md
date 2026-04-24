@@ -248,20 +248,20 @@ Add the graph only after glossary and summary foundations exist. Keep the graph 
 
 ### Action Items
 
-[ ] Add `graph/` models, repositories, and a LadybugDB client wrapper with explicit boundaries around provisional versus confirmed state.
-[ ] Implement entity extraction support using chapter text and glossary anchors, with supported node types only.
-[ ] Implement alias storage with reveal-aware fields and support for both alias arrays and explicit `ALIAS_OF` edges.
-[ ] Implement relationship storage for the MVP edge set, including chapter interval fields and reveal metadata.
-[ ] Implement deterministic graph validation for entity references, relationship types, chapter-safe intervals, and promotion status.
-[ ] Implement chapter-safe filtering utilities that can produce eligible entity, alias, and relationship sets for chapter `N`.
-[ ] Add graph snapshot or export metadata sufficient for packet reproducibility.
-[ ] Add tests for alias reveal gating, relationship eligibility logic, and separation of provisional versus confirmed graph state.
+[x] Add `graph/` models, repositories, and a LadybugDB client wrapper with explicit boundaries around provisional versus confirmed state.
+[x] Implement entity extraction support using chapter text and glossary anchors, with supported node types only.
+[x] Implement alias storage with reveal-aware fields and support for both alias arrays and explicit `ALIAS_OF` edges.
+[x] Implement relationship storage for the MVP edge set, including chapter interval fields and reveal metadata.
+[x] Implement deterministic graph validation for entity references, relationship types, chapter-safe intervals, and promotion status.
+[x] Implement chapter-safe filtering utilities that can produce eligible entity, alias, and relationship sets for chapter `N`.
+[x] Add graph snapshot or export metadata sufficient for packet reproducibility.
+[x] Add tests for alias reveal gating, relationship eligibility logic, and separation of provisional versus confirmed graph state.
 
 ### Validation
 
-[ ] Verify provisional graph state is never treated as confirmed runtime truth without promotion.
-[ ] Verify chapter-safe filtering blocks future reveals and expired relationships.
-[ ] Verify the graph can be snapshotted or hashed for downstream packet versioning.
+[x] Verify provisional graph state is never treated as confirmed runtime truth without promotion.
+[x] Verify chapter-safe filtering blocks future reveals and expired relationships.
+[x] Verify the graph can be snapshotted or hashed for downstream packet versioning.
 
 ## Milestone 7: Lightweight World Model
 

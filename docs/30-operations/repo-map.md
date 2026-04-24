@@ -7,7 +7,7 @@ Current top-level files:
 - `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`, `IMPLEMENTATION_PLAN.md`: project contracts and milestone plan
 - `docs/`: implementation-facing documentation suite
 - `src/resemantica/`: active package root for milestone implementation
-- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`)
+- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`)
 - `main.py`: placeholder entrypoint kept for compatibility with the starter project
 - `pyproject.toml`: Python project metadata
 
@@ -50,6 +50,13 @@ Implemented package layout (M5 slice):
 - `src/resemantica/db/migrations/005_idioms.sql`: idiom tables and constraints
 - `src/resemantica/llm/prompts/idiom_detect.txt`: M5 idiom detection prompt file
 - `tests/idioms/`: idiom extraction, duplicate/conflict, storage, and retrieval precedence tests
+
+Implemented package layout (M6 slice):
+
+- `src/resemantica/graph/`: graph models, Ladybug client wrapper, deterministic extraction, validation, filtering, and preprocessing pipeline
+- `src/resemantica/db/graph_repo.py`: SQLite repository for deferred entities and graph snapshot metadata
+- `src/resemantica/db/migrations/006_graph.sql`: deferred entity and graph snapshot tables
+- `tests/graph/`: alias reveal gating, relationship chapter eligibility, validation, deferred lifecycle, and snapshot metadata tests
 
 ## Target State
 

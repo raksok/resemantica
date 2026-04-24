@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from resemantica.epub.extractor import extract_epub
+from resemantica.graph.pipeline import preprocess_graph
 from resemantica.glossary.pipeline import (
     discover_glossary_candidates,
     promote_glossary_candidates,
@@ -106,6 +107,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Detect, validate, and promote idiom policies from extracted chapters.",
     )
     _add_common_release_args(idioms, default_run="idioms")
+
+    graph = preprocess_subparsers.add_parser(
+        "graph",
+        help="Extract, validate, and promote Graph MVP state from preprocessing assets.",
+    )
+    _add_common_release_args(graph, default_run="graph")
     return parser
 
 
@@ -205,6 +212,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"candidates_artifact={result['candidates_artifact']}")
             print(f"policies_artifact={result['policies_artifact']}")
             print(f"conflicts_artifact={result['conflicts_artifact']}")
+            return 0
+
+        if args.preprocess_command == "graph":
+            result = preprocess_graph(
+                release_id=args.release,
+                run_id=args.run,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"provisional_entities={result['provisional_entities']}")
+            print(f"confirmed_entities={result['confirmed_entities']}")
+            print(f"deferred_pending_count={result['deferred_pending_count']}")
+            print(f"deferred_graph_created_count={result['deferred_graph_created_count']}")
+            print(f"snapshot_hash={result['snapshot_hash']}")
+            print(f"snapshot_artifact={result['snapshot_artifact']}")
+            print(f"warnings_artifact={result['warnings_artifact']}")
             return 0
 
         parser.print_help()
