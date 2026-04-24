@@ -7,7 +7,12 @@ import zipfile
 import pytest
 
 from resemantica.epub.extractor import extract_epub
-from resemantica.translation.pipeline import translate_chapter
+from resemantica.translation.pipeline import (
+    translate_chapter_pass1,
+    translate_chapter_pass2,
+    translate_chapter_pass3,
+)
+from resemantica.settings import derive_paths, load_config
 from resemantica.translation.risk import classify_paragraph_risk, classify_paragraph_risk_from_text
 from resemantica.translation.validators import validate_pass3_integrity
 
@@ -69,6 +74,39 @@ def _extract_one_chapter(tmp_path: Path, chapter_xhtml: str, release_id: str) ->
     assert result.status == "success"
 
 
+def _run_full_pipeline(
+    *,
+    release_id: str,
+    chapter_number: int,
+    run_id: str,
+    llm_client,
+    config=None,
+    project_root=None,
+):
+    r1 = translate_chapter_pass1(
+        release_id=release_id, chapter_number=chapter_number,
+        run_id=run_id, llm_client=llm_client, config=config, project_root=project_root,
+    )
+    r2 = translate_chapter_pass2(
+        release_id=release_id, chapter_number=chapter_number,
+        run_id=run_id, llm_client=llm_client, config=config, project_root=project_root,
+    )
+    r3 = translate_chapter_pass3(
+        release_id=release_id, chapter_number=chapter_number,
+        run_id=run_id, llm_client=llm_client, config=config, project_root=project_root,
+    )
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    validation_dir = paths.release_root / "runs" / run_id / "validation" / f"chapter-{chapter_number}"
+    return {
+        "status": "success",
+        "pass1_artifact": r1.get("pass1_artifact"),
+        "pass2_artifact": r2.get("pass2_artifact"),
+        "pass3_artifact": r3.get("pass3_artifact"),
+        "chapter_report": str(validation_dir / "chapter.json"),
+    }
+
+
 class ScriptedLLMPass3:
     def __init__(self) -> None:
         self.pass1_calls = 0
@@ -77,26 +115,25 @@ class ScriptedLLMPass3:
         self.pass3_override: str | None = None
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:
-        first_line = prompt.split("\n", 1)[0].strip()
-        if first_line == "PASS1":
-            self.pass1_calls += 1
-            if "⟦B_1⟧" in prompt:
-                return "You ⟦B_1⟧good⟦/B_1⟧?"
-            return "Draft text."
-
-        if first_line == "PASS2":
-            self.pass2_calls += 1
-            if "⟦B_1⟧" in prompt:
-                return "You ⟦B_1⟧really good⟦/B_1⟧?"
-            return "Corrected text."
-
-        if first_line == "PASS3":
+        if "PASS3" in prompt:
             self.pass3_calls += 1
             if self.pass3_override is not None:
                 return self.pass3_override
             if "⟦B_1⟧" in prompt:
                 return "You ⟦B_1⟧are really quite good⟦/B_1⟧!"
             return "Polished text."
+
+        if "## INSTRUCTIONS" in prompt:
+            self.pass1_calls += 1
+            if "⟦B_1⟧" in prompt:
+                return "You ⟦B_1⟧good⟦/B_1⟧?"
+            return "Draft text."
+
+        if "Correct the English" in prompt:
+            self.pass2_calls += 1
+            if "⟦B_1⟧" in prompt:
+                return "You ⟦B_1⟧really good⟦/B_1⟧?"
+            return "Corrected text."
 
         return "Unexpected."
 
@@ -344,7 +381,7 @@ class TestPass3SkipAndPipeline:
         monkeypatch.setattr(pipeline_mod, "classify_paragraph_risk_from_text", _force_high)
 
         client = ScriptedLLMPass3()
-        result = translate_chapter(
+        result = _run_full_pipeline(
             release_id="m9-skip-high",
             chapter_number=1,
             run_id="run-skip-high",
@@ -372,7 +409,7 @@ class TestPass3SkipAndPipeline:
         )
 
         client = ScriptedLLMPass3()
-        result = translate_chapter(
+        result = _run_full_pipeline(
             release_id="m9-low-risk",
             chapter_number=1,
             run_id="run-low-risk",
@@ -399,7 +436,7 @@ class TestPass3SkipAndPipeline:
 
         client = ScriptedLLMPass3()
         client.pass3_override = "No placeholders here"
-        result = translate_chapter(
+        result = _run_full_pipeline(
             release_id="m9-fallback",
             chapter_number=1,
             run_id="run-fallback",
@@ -424,7 +461,7 @@ class TestPass3SkipAndPipeline:
         )
 
         client = ScriptedLLMPass3()
-        result = translate_chapter(
+        result = _run_full_pipeline(
             release_id="m9-risk-report",
             chapter_number=1,
             run_id="run-risk-report",
@@ -453,7 +490,7 @@ class TestPass3SkipAndPipeline:
         )
 
         client = ScriptedLLMPass3()
-        result = translate_chapter(
+        result = _run_full_pipeline(
             release_id="m9-chapter-report",
             chapter_number=1,
             run_id="run-chapter-report",
@@ -477,12 +514,18 @@ class TestPass3SkipAndPipeline:
 
         class FailPass2:
             def generate_text(self, *, model_name: str, prompt: str) -> str:
-                if "PASS1" in prompt:
+                if "## INSTRUCTIONS" in prompt:
                     return "You ⟦B_1⟧good⟦/B_1⟧?"
                 return ""
         client = FailPass2()
+        r1 = translate_chapter_pass1(
+            release_id="m9-fail-report",
+            chapter_number=1,
+            run_id="run-fail-report",
+            llm_client=client,
+        )
         with pytest.raises(RuntimeError, match="Pass 2"):
-            translate_chapter(
+            translate_chapter_pass2(
                 release_id="m9-fail-report",
                 chapter_number=1,
                 run_id="run-fail-report",

@@ -173,9 +173,14 @@ def _execute_stage(release_id: str, run_id: str, stage_name: str) -> StageResult
             )
 
         elif stage_name == "epub-rebuild":
+            from resemantica.epub.rebuild import rebuild_epub
+            from resemantica.settings import derive_paths
+            paths = derive_paths(config, release_id=release_id)
+            output_path = rebuild_epub(paths.unpacked_dir, paths.rebuilt_epub_path)
             return StageResult(
-                success=False, stage_name=stage_name,
-                message="epub-rebuild not yet implemented in orchestration"
+                success=True, stage_name=stage_name,
+                message=f"EPUB rebuilt at {output_path}",
+                metadata={"output_path": str(output_path)},
             )
 
         else:

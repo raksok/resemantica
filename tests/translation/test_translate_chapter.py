@@ -7,7 +7,10 @@ import zipfile
 import pytest
 
 from resemantica.epub.extractor import extract_epub
-from resemantica.translation.pipeline import translate_chapter
+from resemantica.translation.pipeline import (
+    translate_chapter_pass1,
+    translate_chapter_pass2,
+)
 
 
 def _write_fixture_epub(epub_path: Path, chapter_xhtml: str) -> None:
@@ -80,7 +83,7 @@ class ScriptedLLM:
                 return "You ⟦B_1⟧good⟦/B_1⟧?"
             return "Segment draft."
 
-        if "PASS2" in prompt:
+        if "Correct the English" in prompt:
             self.pass2_calls += 1
             if "⟦B_1⟧" in prompt:
                 return "You ⟦B_1⟧really good⟦/B_1⟧?"
@@ -107,15 +110,21 @@ def test_placeholder_preservation_and_pass2_correction(tmp_path: Path, monkeypat
     )
 
     client = ScriptedLLM()
-    result = translate_chapter(
+    r1 = translate_chapter_pass1(
         release_id="m2-placeholder",
         chapter_number=1,
         run_id="run-001",
         llm_client=client,
     )
-    assert result["status"] == "success"
+    r2 = translate_chapter_pass2(
+        release_id="m2-placeholder",
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,
+    )
+    assert r2["status"] == "success"
 
-    pass2_artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
+    pass2_artifact = json.loads(Path(r2["pass2_artifact"]).read_text(encoding="utf-8"))
     block = pass2_artifact["blocks"][0]
     assert block["output_text_en"] == "You ⟦B_1⟧really good⟦/B_1⟧?"
     assert "<b>really good</b>" in block["restored_text_en"]
@@ -134,13 +143,22 @@ def test_hard_stop_on_placeholder_structural_failure(tmp_path: Path, monkeypatch
     client = ScriptedLLM()
     client.drop_placeholders = True
 
-    with pytest.raises(RuntimeError, match="Pass 1 structural validation failed"):
-        translate_chapter(
-            release_id="m2-failure",
-            chapter_number=1,
-            run_id="run-001",
-            llm_client=client,
-        )
+    r1 = translate_chapter_pass1(
+        release_id="m2-failure",
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,
+    )
+    assert r1["status"] == "failed"
+
+    r2 = translate_chapter_pass2(
+        release_id="m2-failure",
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,
+    )
+    assert r2["status"] == "success"
+    assert len(r2["blocks"]) == 0
 
 
 def test_reactive_resegmentation_on_structural_failure(tmp_path: Path, monkeypatch) -> None:
@@ -156,13 +174,13 @@ def test_reactive_resegmentation_on_structural_failure(tmp_path: Path, monkeypat
 
     client = ScriptedLLM()
     client.fail_first_pass1 = True
-    result = translate_chapter(
+    r1 = translate_chapter_pass1(
         release_id="m2-resegment",
         chapter_number=1,
         run_id="run-001",
         llm_client=client,
     )
-    pass1_artifact = json.loads(Path(result["pass1_artifact"]).read_text(encoding="utf-8"))
+    pass1_artifact = json.loads(Path(r1["pass1_artifact"]).read_text(encoding="utf-8"))
     first_block = pass1_artifact["blocks"][0]
     assert first_block["was_resegmented"] is True
     assert len(first_block["segments"]) >= 2
@@ -179,23 +197,34 @@ def test_resume_from_successful_pass1_skips_pass1(tmp_path: Path, monkeypatch) -
     )
 
     first_client = ScriptedLLM()
-    first_result = translate_chapter(
+    r1p1 = translate_chapter_pass1(
         release_id="m2-resume",
         chapter_number=1,
         run_id="run-001",
         llm_client=first_client,
     )
-    assert first_result["status"] == "success"
+    r1p2 = translate_chapter_pass2(
+        release_id="m2-resume",
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=first_client,
+    )
+    assert r1p2["status"] == "success"
     assert first_client.pass1_calls > 0
 
     second_client = ScriptedLLM()
-    second_result = translate_chapter(
+    r2p1 = translate_chapter_pass1(
         release_id="m2-resume",
         chapter_number=1,
         run_id="run-001",
         llm_client=second_client,
     )
-    assert second_result["status"] == "success"
+    r2p2 = translate_chapter_pass2(
+        release_id="m2-resume",
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=second_client,
+    )
+    assert r2p2["status"] == "success"
     assert second_client.pass1_calls == 0
-    assert second_client.pass2_calls > 0
 

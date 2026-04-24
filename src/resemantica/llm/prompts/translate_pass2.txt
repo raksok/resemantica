@@ -1,19 +1,8 @@
 # version: 1.0
-PASS2
+Source: {SOURCE_TEXT}
+Draft: {DRAFT_TEXT}
+Full: {FULL_SOURCE_BLOCK}
+Prior: {PRIOR_SEGMENTS}
 
-## SOURCE TEXT
-{SOURCE_TEXT}
-
-## DRAFT TEXT
-{DRAFT_TEXT}
-
-## FULL SOURCE BLOCK
-{FULL_SOURCE_BLOCK}
-
-## PRIOR SEGMENT TRANSLATIONS
-{PRIOR_SEGMENTS}
-
-## INSTRUCTIONS
-Correct the draft for fidelity and readability.
-Preserve placeholders exactly as provided.
-
+Correct the English translation for fidelity.
+Preserve placeholders exactly.

@@ -1,0 +1,24 @@
+[llm]
+base_url = "http://127.0.0.1:8033"
+timeout_seconds = 600
+max_retries = 3
+context_window = 32768
+
+[models]
+translator_name = "HY-MT1.5-7B"
+analyst_name = "Qwen3.5-9B-GLM5.1"
+embedding_name = "bge-M3"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "resemantica.db"
+
+[budget]
+max_context_per_pass = 49152
+max_paragraph_chars = 2000
+max_bundle_bytes = 4096
+degrade_order = ["broad_continuity", "fuzzy_candidates", "rerank_depth", "pass3", "fallback_model"]
+
+[translation]
+pass3_default = false
+risk_threshold_high = 0.7

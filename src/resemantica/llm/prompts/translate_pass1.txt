@@ -1,10 +1,20 @@
-# version: 1.0
+# version: 2.0
 PASS1
 
-## SOURCE TEXT
-{SOURCE_TEXT}
+## GLOSSARY
+{GLOSSARY}
+
+## ALIAS RESOLUTIONS
+{ALIAS_RESOLUTIONS}
+
+## IDIOMS
+{MATCHED_IDIOMS}
+
+## CONTINUITY NOTES
+{CONTINUITY_NOTES}
 
 ## INSTRUCTIONS
 Translate Chinese source text into English.
-Preserve placeholders exactly as provided.
+Preserve all placeholders exactly as provided.
 
+{SOURCE_TEXT}

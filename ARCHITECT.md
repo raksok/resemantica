@@ -30,6 +30,16 @@ The system is intentionally a structured pipeline with precomputed memory assets
 - Centralized orchestration shared by CLI, TUI, and tracking
 - Safe cleanup/reset as a first-class operational capability
 
+## Hardware and Model Assumptions
+
+- Local inference via `llama.cpp` (OpenAI-compatible API)
+- Default backend: Vulkan (AMD GPU)
+- Three model roles with these defaults:
+  - `translator_name` = `HY-MT1.5-7B` — dedicated CN→EN translation model (Pass 1, glossary candidate translation)
+  - `analyst_name` = `Qwen3.5-9B-GLM5.1` — general-purpose model for preprocessing, analysis, editing (Pass 2, Pass 3, summaries, idioms, entity extraction)
+  - `embedding_name` = `bge-M3` — embedding model for fuzzy alias and epithet retrieval
+- Sequential execution is the required baseline
+
 ## Non-Goals
 
 - Cloud-native service design

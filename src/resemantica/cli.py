@@ -14,7 +14,11 @@ from resemantica.idioms.pipeline import preprocess_idioms
 from resemantica.packets.builder import build_packets
 from resemantica.settings import load_config
 from resemantica.summaries.pipeline import preprocess_summaries
-from resemantica.translation.pipeline import translate_chapter
+from resemantica.translation.pipeline import (
+    translate_chapter_pass1,
+    translate_chapter_pass2,
+    translate_chapter_pass3,
+)
 
 
 def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: str) -> None:
@@ -272,18 +276,31 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "translate-chapter":
         config = load_config(args.config)
-        translation_result = translate_chapter(
+        pass1_result = translate_chapter_pass1(
             release_id=args.release,
             chapter_number=args.chapter,
             run_id=args.run,
             config=config,
-            force_pass1=args.force_pass1,
+            force=bool(getattr(args, "force_pass1", False)),
         )
-        print(f"status={translation_result['status']}")
-        print(f"pass1_artifact={translation_result['pass1_artifact']}")
-        print(f"pass2_artifact={translation_result['pass2_artifact']}")
-        print(f"structure_report={translation_result['structure_report']}")
-        print(f"fidelity_report={translation_result['fidelity_report']}")
+        print(f"pass1_status={pass1_result['status']}")
+        print(f"pass1_artifact={pass1_result['pass1_artifact']}")
+        pass2_result = translate_chapter_pass2(
+            release_id=args.release,
+            chapter_number=args.chapter,
+            run_id=args.run,
+            config=config,
+        )
+        print(f"pass2_status={pass2_result['status']}")
+        print(f"pass2_artifact={pass2_result['pass2_artifact']}")
+        pass3_result = translate_chapter_pass3(
+            release_id=args.release,
+            chapter_number=args.chapter,
+            run_id=args.run,
+            config=config,
+        )
+        print(f"pass3_status={pass3_result['status']}")
+        print(f"pass3_artifact={pass3_result.get('pass3_artifact', '') or ''}")
         return 0
 
         if args.preprocess_command == "glossary-translate":
@@ -448,23 +465,51 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "translate-range":
         config = load_config(args.config)
-        from resemantica.translation.pipeline import translate_chapter as _tc_range
-        success_count = 0
-        fail_count = 0
+        pass1_failures: list[int] = []
+        pass2_failures: list[int] = []
         for ch in range(args.start, args.end + 1):
-            print(f"Translating chapter {ch}...")
+            print(f"Pass 1 chapter {ch}...")
             try:
-                _tc_range(
+                translate_chapter_pass1(
                     release_id=args.release,
                     chapter_number=ch,
                     run_id=args.run,
                     config=config,
                 )
-                success_count += 1
             except Exception as exc:
-                print(f"  Chapter {ch} failed: {exc}")
-                fail_count += 1
-        print(f"Done: {success_count} succeeded, {fail_count} failed")
+                print(f"  Chapter {ch} pass1 failed: {exc}")
+                pass1_failures.append(ch)
+        for ch in range(args.start, args.end + 1):
+            if ch in pass1_failures:
+                continue
+            print(f"Pass 2 chapter {ch}...")
+            try:
+                translate_chapter_pass2(
+                    release_id=args.release,
+                    chapter_number=ch,
+                    run_id=args.run,
+                    config=config,
+                )
+            except Exception as exc:
+                print(f"  Chapter {ch} pass2 failed: {exc}")
+                pass2_failures.append(ch)
+        if config.translation.pass3_default:
+            for ch in range(args.start, args.end + 1):
+                if ch in pass1_failures or ch in pass2_failures:
+                    continue
+                print(f"Pass 3 chapter {ch}...")
+                try:
+                    translate_chapter_pass3(
+                        release_id=args.release,
+                        chapter_number=ch,
+                        run_id=args.run,
+                        config=config,
+                    )
+                except Exception as exc:
+                    print(f"  Chapter {ch} pass3 failed: {exc}")
+        total = args.end - args.start + 1
+        fail_count = len(pass1_failures) + len(pass2_failures)
+        print(f"Done: {total - fail_count} succeeded, {fail_count} failed")
         return 0 if fail_count == 0 else 1
 
     if args.command == "tui":
