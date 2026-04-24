@@ -1,0 +1,44 @@
+[
+    {
+        "source_zh": "在下只是一介散修，岂敢与前辈相提并论。",
+        "expected_en": "I am but a wandering cultivator, how would I dare to compare myself with you, Senior.",
+        "category": "honorific",
+        "difficulty": 2
+    },
+    {
+        "source_zh": "画龙画虎难画骨，知人知面不知心。",
+        "expected_en": "Dragons and tigers are easy to draw, but bones are hard; a man's face and appearance are easy to know, but his heart is not.",
+        "category": "idiom",
+        "difficulty": 3
+    },
+    {
+        "source_zh": "那位大人修为深不可测，举手投足间便有移山填海之威能。",
+        "expected_en": "That lord's cultivation is unfathomably deep; with a mere gesture he possesses the might to move mountains and fill seas.",
+        "category": "lore_exposition",
+        "difficulty": 2
+    },
+    {
+        "source_zh": "他说完这句话，便转过身去，不再看她。",
+        "expected_en": "After saying these words, he turned around and no longer looked at her.",
+        "category": "pronoun_ambiguity",
+        "difficulty": 1
+    },
+    {
+        "source_zh": "此人竟敢冒充宗门长老，其心可诛！",
+        "expected_en": "This person dares to impersonate an elder of the sect — such intent deserves death!",
+        "category": "identity_concealment",
+        "difficulty": 2
+    },
+    {
+        "source_zh": "昔日你叫我师尊，今日却要我唤你一声师兄，这世事变幻真是妙不可言。",
+        "expected_en": "In the past you called me Master, but today you would have me address you as Brother — the changes of this world are truly beyond words.",
+        "category": "relationship_reversal",
+        "difficulty": 4
+    },
+    {
+        "source_zh": "<p>那柄飞剑划破长空，<em>剑光如虹</em>，直取敌首。</p>",
+        "expected_en": "<p>That flying sword tore through the sky, <em>its light like a rainbow</em>, straight for the enemy's head.</p>",
+        "category": "xhtml_heavy",
+        "difficulty": 3
+    }
+]
