@@ -10,6 +10,7 @@ from resemantica.glossary.pipeline import (
     promote_glossary_candidates,
     translate_glossary_candidates,
 )
+from resemantica.idioms.pipeline import preprocess_idioms
 from resemantica.settings import load_config
 from resemantica.summaries.pipeline import preprocess_summaries
 from resemantica.translation.pipeline import translate_chapter
@@ -99,6 +100,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Generate validated Chinese summaries and derived English summaries.",
     )
     _add_common_release_args(summaries, default_run="summaries")
+
+    idioms = preprocess_subparsers.add_parser(
+        "idioms",
+        help="Detect, validate, and promote idiom policies from extracted chapters.",
+    )
+    _add_common_release_args(idioms, default_run="idioms")
     return parser
 
 
@@ -182,6 +189,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"status={result['status']}")
             print(f"chapters_processed={result['chapters_processed']}")
+            return 0
+
+        if args.preprocess_command == "idioms":
+            result = preprocess_idioms(
+                release_id=args.release,
+                run_id=args.run,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"chapters_processed={result['chapters_processed']}")
+            print(f"candidates_written={result['candidates_written']}")
+            print(f"promoted_count={result['promoted_count']}")
+            print(f"conflict_count={result['conflict_count']}")
+            print(f"candidates_artifact={result['candidates_artifact']}")
+            print(f"policies_artifact={result['policies_artifact']}")
+            print(f"conflicts_artifact={result['conflicts_artifact']}")
             return 0
 
         parser.print_help()

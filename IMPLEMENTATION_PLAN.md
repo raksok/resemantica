@@ -215,17 +215,17 @@ Build idiom detection, normalization, and storage as a preprocessing authority l
 
 ### Action Items
 
-[ ] Define the `Idiom` model and SQLite schema in `idioms/repo.py` aligned with `DATA_CONTRACT.md`.
-[ ] Implement `idioms.extractor.extract_idioms` using the `analyst_name` model to find idioms in chapter text.
-[ ] Implement normalization and duplicate detection in `idioms.validators`.
-[ ] Add the `preprocess idioms` CLI command.
-[ ] Add tests for detection, storage, and retrieval.
+[x] Define the `Idiom` model and SQLite schema in `idioms/repo.py` aligned with `DATA_CONTRACT.md`.
+[x] Implement `idioms.extractor.extract_idioms` using the `analyst_name` model to find idioms in chapter text.
+[x] Implement normalization and duplicate detection in `idioms.validators`.
+[x] Add the `preprocess idioms` CLI command.
+[x] Add tests for detection, storage, and retrieval.
 
 ### Validation
 
-[ ] Idioms can be extracted from a chapter and stored in SQLite.
-[ ] Duplicates are correctly identified and merged or rejected.
-[ ] Idioms are available for exact-match retrieval by source text.
+[x] Idioms can be extracted from a chapter and stored in SQLite.
+[x] Duplicates are correctly identified and merged or rejected.
+[x] Idioms are available for exact-match retrieval by source text.
 
 ## Milestone 6: Graph MVP Foundation
 

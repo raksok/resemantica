@@ -1,0 +1,20 @@
+# version: 1.0
+
+## TASK
+IDIOM_DETECT
+
+## CHAPTER NUMBER
+{CHAPTER_NUMBER}
+
+## SOURCE TEXT (ZH)
+{SOURCE_TEXT_ZH}
+
+## OUTPUT FORMAT
+Return JSON only.
+Either a list or an object with key "idioms".
+Each row must include:
+- source_text
+- meaning_zh
+- preferred_rendering_en
+- usage_notes (optional)
+

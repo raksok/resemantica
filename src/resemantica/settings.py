@@ -69,6 +69,10 @@ class DerivedPaths:
     glossary_dir: Path
     glossary_candidates_path: Path
     glossary_conflicts_path: Path
+    idioms_dir: Path
+    idiom_candidates_path: Path
+    idiom_policies_path: Path
+    idiom_conflicts_path: Path
     summaries_dir: Path
     rebuilt_epub_path: Path
     db_path: Path
@@ -271,6 +275,10 @@ def derive_paths(
         glossary_dir=release_root / "glossary",
         glossary_candidates_path=release_root / "glossary" / "candidates.json",
         glossary_conflicts_path=release_root / "glossary" / "conflicts.json",
+        idioms_dir=release_root / "idioms",
+        idiom_candidates_path=release_root / "idioms" / "candidates.json",
+        idiom_policies_path=release_root / "idioms" / "policies.json",
+        idiom_conflicts_path=release_root / "idioms" / "conflicts.json",
         summaries_dir=release_root / "summaries",
         rebuilt_epub_path=release_root / "rebuild" / "reconstructed.epub",
         db_path=artifact_root / config.paths.db_filename,
