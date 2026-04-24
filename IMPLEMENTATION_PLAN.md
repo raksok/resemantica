@@ -397,19 +397,19 @@ Unify the working slices under one orchestration core. This is the milestone whe
 
 ### Action Items
 
-[ ] Create `orchestration/` state, controller, and workflow modules for preprocess, translate, and production runs.
-[ ] Implement run metadata creation, checkpoint coordination, and stage transition control backed by SQLite.
-[ ] Implement a shared event bus with structured events aligned to the data contract.
-[ ] Wrap preprocess, packet build, translation, validation, and EPUB rebuild into callable orchestration services rather than direct CLI-only code paths.
-[ ] Implement resume behavior at chapter, paragraph, and pass granularity using checkpoint state and latest stable artifact references.
-[ ] Implement `run-production` and `translate-range` CLI commands that go through orchestration services and emit artifact locations on failure.
-[ ] Add integration tests for end-to-end stage sequencing, resume behavior, and event emission.
+[x] Create `orchestration/` state, controller, and workflow modules for preprocess, translate, and production runs.
+[x] Implement run metadata creation, checkpoint coordination, and stage transition control backed by SQLite.
+[x] Implement a shared event bus with structured events aligned to the data contract.
+[x] Wrap preprocess, packet build, translation, validation, and EPUB rebuild into callable orchestration services rather than direct CLI-only code paths.
+[x] Implement resume behavior at chapter, paragraph, and pass granularity using checkpoint state and latest stable artifact references.
+[x] Implement `run-production` and `translate-range` CLI commands that go through orchestration services and emit artifact locations on failure.
+[x] Add integration tests for end-to-end stage sequencing, resume behavior, and event emission.
 
 ### Validation
 
-[ ] Verify production runs execute through orchestration rather than ad hoc script chaining.
-[ ] Verify resume can restart from the latest stable artifact without corrupting authority or packet state.
-[ ] Verify structured events exist for every major workflow transition.
+[x] Verify production runs execute through orchestration rather than ad hoc script chaining.
+[x] Verify resume can restart from the latest stable artifact without corrupting authority or packet state.
+[x] Verify structured events exist for every major workflow transition.
 
 ## Milestone 11: Reset and Cleanup Workflow
 

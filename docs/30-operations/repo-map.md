@@ -7,7 +7,7 @@ Current top-level files:
 - `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`, `IMPLEMENTATION_PLAN.md`: project contracts and milestone plan
 - `docs/`: implementation-facing documentation suite
 - `src/resemantica/`: active package root for milestone implementation
-- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/`)
+- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/`, `orchestration/`)
 - `main.py`: placeholder entrypoint kept for compatibility with the starter project
 - `pyproject.toml`: Python project metadata
 
@@ -83,6 +83,20 @@ Implemented package layout (M9 slice):
 - `src/resemantica/translation/pipeline.py`: Pass 3 integration with risk-based skip, integrity validation, and fallback to Pass 2
 - `src/resemantica/llm/prompts/translate_pass3.txt`: Pass 3 prompt template with version header
 - `tests/translation/test_pass3_and_risk.py`: risk scoring, threshold edge, sub-score saturation, skip behavior, integrity fallback, and chapter-level validation tests
+
+Implemented package layout (M10 slice):
+
+- `src/resemantica/orchestration/`: centralized run control, stage ordering, retries, resume behavior, cleanup planning, and structured events
+- `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER`
+- `src/resemantica/orchestration/runner.py`: `run_stage()` for stage execution with transition validation
+- `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
+- `src/resemantica/orchestration/cleanup.py`: `plan_cleanup()` and `apply_cleanup()` for two-step cleanup workflow
+- `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission
+- `src/resemantica/tracking/`: event and run state models with SQLite persistence
+- `src/resemantica/tracking/models.py`: `Event` and `RunState` dataclasses with schema versioning
+- `src/resemantica/tracking/repo.py`: SQLite persistence for events and run state
+- `src/resemantica/cli.py`: `run` command with `production`, `resume`, `cleanup-plan`, `cleanup-apply` subcommands
+- `tests/orchestration/`: stage transition, event emission, cleanup plan/apply, resume, and run stage tests
 
 ## Target State
 

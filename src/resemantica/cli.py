@@ -135,6 +135,68 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional chapter number. If omitted, all extracted chapters are built.",
     )
+
+    run = subparsers.add_parser(
+        "run",
+        help="Orchestration run commands.",
+    )
+    run_subparsers = run.add_subparsers(
+        dest="run_command",
+        required=True,
+    )
+
+    run_production = run_subparsers.add_parser(
+        "production",
+        help="Run full production workflow from preprocess through EPUB rebuild.",
+    )
+    _add_common_release_args(run_production, default_run="production")
+
+    run_resume = run_subparsers.add_parser(
+        "resume",
+        help="Resume a previous run from its last checkpoint.",
+    )
+    _add_common_release_args(run_resume, default_run="resume")
+    run_resume.add_argument(
+        "--from-stage",
+        required=False,
+        type=str,
+        default=None,
+        help="Stage to resume from (default: last checkpoint stage).",
+    )
+
+    run_cleanup_plan = run_subparsers.add_parser(
+        "cleanup-plan",
+        help="Plan cleanup by enumerating deletable artifacts.",
+    )
+    _add_common_release_args(run_cleanup_plan, default_run="cleanup-plan")
+    run_cleanup_plan.add_argument(
+        "--scope",
+        required=False,
+        type=str,
+        default="run",
+        choices=["run", "translation", "preprocess", "cache", "all"],
+        help="Cleanup scope (default: run).",
+    )
+
+    run_cleanup_apply = run_subparsers.add_parser(
+        "cleanup-apply",
+        help="Apply a previously planned cleanup.",
+    )
+    _add_common_release_args(run_cleanup_apply, default_run="cleanup-apply")
+    run_cleanup_apply.add_argument(
+        "--scope",
+        required=False,
+        type=str,
+        default="run",
+        choices=["run", "translation", "preprocess", "cache", "all"],
+        help="Cleanup scope (default: run).",
+    )
+    run_cleanup_apply.add_argument(
+        "--force",
+        action="store_true",
+        help="Force apply even if scope does not match plan.",
+    )
+
     return parser
 
 
@@ -269,6 +331,52 @@ def main(argv: list[str] | None = None) -> int:
             print(f"chapters_built={result['chapters_built']}")
             print(f"chapters_up_to_date={result['chapters_up_to_date']}")
             return 0
+        parser.print_help()
+        return 2
+
+    if args.command == "run":
+        config = load_config(args.config)
+        from resemantica.orchestration import (
+            run_stage,
+            resume_run,
+            plan_cleanup,
+            apply_cleanup,
+        )
+        from resemantica.orchestration.models import STAGE_ORDER
+
+        if args.run_command == "production":
+            for stage in STAGE_ORDER:
+                stage_result = run_stage(args.release, args.run, stage)
+                if not stage_result.success:
+                    print(f"Stage {stage} failed: {stage_result.message}")
+                    return 1
+            print("Production run completed successfully")
+            return 0
+
+        if args.run_command == "resume":
+            resume_result = resume_run(
+                args.release, args.run, from_stage=args.from_stage
+            )
+            if not resume_result.success:
+                print(f"Resume failed: {resume_result.message}")
+                return 1
+            print("Resume completed successfully")
+            return 0
+
+        if args.run_command == "cleanup-plan":
+            plan = plan_cleanup(
+                args.release, args.run, scope=args.scope, dry_run=True
+            )
+            print(f"Cleanup plan created: {plan}")
+            return 0
+
+        if args.run_command == "cleanup-apply":
+            cleanup_result = apply_cleanup(
+                args.release, args.run, scope=args.scope, force=args.force
+            )
+            print(f"Cleanup applied: {cleanup_result}")
+            return 0
+
         parser.print_help()
         return 2
 

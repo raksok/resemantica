@@ -12,6 +12,8 @@ artifacts/
 
 ```text
 artifacts/releases/{release_id}/
+  tracking.db
+  cleanup_plan.json
   extracted/
     chapters/chapter-{chapter_number}.json
     reports/xhtml-validation.json
@@ -43,13 +45,8 @@ artifacts/releases/{release_id}/runs/{run_id}/
       structure.json
       fidelity.json
       chapter.json
-  events/
-    stream.jsonl
   reconstruction/
     translated.epub
-    report.json
-  cleanup/
-    plan.json
     report.json
 ```
 
