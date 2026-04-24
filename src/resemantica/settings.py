@@ -49,12 +49,18 @@ class TranslationConfig:
 
 
 @dataclass(slots=True)
+class SummariesConfig:
+    exclude_chapter_patterns: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class AppConfig:
     models: ModelsConfig = field(default_factory=ModelsConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)
+    summaries: SummariesConfig = field(default_factory=SummariesConfig)
 
 
 @dataclass(slots=True)
@@ -153,6 +159,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     paths = _table(raw, "paths")
     budget = _table(raw, "budget")
     translation = _table(raw, "translation")
+    summaries = _table(raw, "summaries")
 
     config = AppConfig(
         models=ModelsConfig(
@@ -223,6 +230,15 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                     TranslationConfig().risk_threshold_high,
                 ),
                 "translation.risk_threshold_high",
+            ),
+        ),
+        summaries=SummariesConfig(
+            exclude_chapter_patterns=_as_str_list(
+                summaries.get(
+                    "exclude_chapter_patterns",
+                    SummariesConfig().exclude_chapter_patterns,
+                ),
+                "summaries.exclude_chapter_patterns",
             ),
         ),
     )

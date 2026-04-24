@@ -1,0 +1,25 @@
+# version: 1.0
+SUMMARY_ZH_VALIDATE
+
+## CHAPTER NUMBER
+{CHAPTER_NUMBER}
+
+## SOURCE TEXT
+{SOURCE_TEXT}
+
+## STRUCTURED SUMMARY
+{STRUCTURED_SUMMARY}
+
+## LOCKED GLOSSARY
+{LOCKED_GLOSSARY}
+
+## INSTRUCTIONS
+Validate this Chinese structured summary against the source text.
+Return JSON with two keys: "flags" (list of applicable flag strings) and "warnings" (list of warning strings).
+
+Available flags (include only those that apply):
+- unsupported_claim: summary asserts something not present in the source text
+- major_omission: summary omits an important event or character present in the source
+- wrong_referent: summary attributes an action or relationship to the wrong character
+- premature_reveal: summary reveals information from a later chapter
+- ambiguity_overwritten: summary resolves something the source text leaves ambiguous

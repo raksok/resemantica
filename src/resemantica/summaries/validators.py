@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import re
 from typing import Any
 
 from resemantica.glossary.models import LockedGlossaryEntry
+from resemantica.llm.client import LLMClient
+from resemantica.llm.prompts import render_named_sections
 
 _REQUIRED_FIELDS = {
     "chapter_number",
@@ -179,3 +182,41 @@ def validate_chinese_summary(
         errors=errors,
         warnings=[],
     )
+
+
+def _glossary_context(entries: list[LockedGlossaryEntry]) -> str:
+    if not entries:
+        return "(empty)"
+    return "\n".join(
+        f"- {entry.source_term} => {entry.target_term} ({entry.category})"
+        for entry in entries
+    )
+
+
+def validate_chinese_summary_content(
+    *,
+    llm_client: LLMClient,
+    model_name: str,
+    prompt_template: str,
+    source_text_zh: str,
+    structured_summary: dict[str, object],
+    locked_glossary: list[LockedGlossaryEntry],
+) -> list[str]:
+    prompt = render_named_sections(
+        prompt_template,
+        sections={
+            "CHAPTER_NUMBER": str(structured_summary.get("chapter_number", "")),
+            "SOURCE_TEXT": source_text_zh,
+            "STRUCTURED_SUMMARY": json.dumps(structured_summary, ensure_ascii=False, indent=2),
+            "LOCKED_GLOSSARY": _glossary_context(locked_glossary),
+        },
+    )
+    raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    flags = parsed.get("flags", []) if isinstance(parsed, dict) else []
+    if not isinstance(flags, list):
+        return []
+    return [str(f) for f in flags]

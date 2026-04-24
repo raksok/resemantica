@@ -22,3 +22,6 @@ degrade_order = ["broad_continuity", "fuzzy_candidates", "rerank_depth", "pass3"
 [translation]
 pass3_default = false
 risk_threshold_high = 0.7
+
+[summaries]
+exclude_chapter_patterns = ["titlepage", "nav\\.xhtml", "toc", "book.?2", "front.?matter"]

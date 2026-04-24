@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -21,8 +22,13 @@ from resemantica.summaries.pipeline import preprocess_summaries
 
 
 class ScriptedSummaryLLM:
-    def __init__(self, structured_by_chapter: dict[int, dict[str, object]]) -> None:
+    def __init__(
+        self,
+        structured_by_chapter: dict[int, dict[str, object]],
+        validation_flags: dict[int, list[str]] | None = None,
+    ) -> None:
         self.structured_by_chapter = structured_by_chapter
+        self.validation_flags = validation_flags or {}
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
         if "SUMMARY_ZH_STRUCTURED" in prompt:
@@ -36,6 +42,12 @@ class ScriptedSummaryLLM:
             source_match = re.search(r"## SOURCE TEXT \(ZH\)\s+(.+?)\s+## INSTRUCTIONS", prompt, re.S)
             source = "" if source_match is None else source_match.group(1).strip()
             return f"EN::{source}"
+
+        if "SUMMARY_ZH_VALIDATE" in prompt:
+            chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+            chapter_number = int(chapter_match.group(1)) if chapter_match else 0
+            flags = self.validation_flags.get(chapter_number, [])
+            return json.dumps({"flags": flags, "warnings": []}, ensure_ascii=False)
 
         raise RuntimeError("Unexpected prompt")
 
@@ -184,6 +196,8 @@ def test_preprocess_summaries_materializes_authority_and_derived_rows(
         )
         assert chapter2_story is not None
         assert chapter2_story.content_zh == "第1章：张三初入山门。\n第2章：张三完成第一次试炼。"
+        expected_composite = hashlib.sha256(b"hash-ch1|hash-ch2").hexdigest()
+        assert chapter2_story.derived_from_chapter_hash == expected_composite
 
         chapter2_short = get_validated_summary(
             conn,
@@ -391,3 +405,111 @@ def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> N
         assert second_story.content_zh == first_content
     finally:
         conn.close()
+
+
+def test_chapter_exclusion_patterns(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m4-exclude"
+    for i in [1, 2, 3]:
+        doc = f"OEBPS/chapter{i}.xhtml" if i != 2 else "OEBPS/titlepage.xhtml"
+        _write_extracted_chapter(
+            release_id=release_id,
+            chapter_number=i,
+            source_text=f"内容{i}。" if i != 2 else "书名页。",
+            chapter_source_hash=f"hash-ch{i}",
+        )
+        if i == 2:
+            chapter_path = (
+                derive_paths(load_config(), release_id=release_id).extracted_chapters_dir
+                / f"chapter-{i}.json"
+            )
+            payload = json.loads(chapter_path.read_text(encoding="utf-8"))
+            payload["source_document_path"] = doc
+            chapter_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+
+    llm = ScriptedSummaryLLM(
+        {
+            i: {
+                "chapter_number": i,
+                "characters_mentioned": ["甲"],
+                "key_events": [f"事件{i}"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "城镇",
+                "tone": "neutral",
+                "narrative_progression": f"进展{i}。",
+            }
+            for i in [1, 3]
+        }
+    )
+
+    cfg = load_config()
+    cfg.summaries.exclude_chapter_patterns = ["titlepage"]
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+        config=cfg,
+    )
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 2
+    skipped = [r for r in result["chapter_artifacts"] if r.get("status") == "skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["chapter_number"] == 2
+
+
+def test_llm_validation_flags_in_artifact(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m4-flags"
+    for i in [1, 2]:
+        _write_extracted_chapter(
+            release_id=release_id,
+            chapter_number=i,
+            source_text=f"第{i}章内容。",
+            chapter_source_hash=f"hash-ch{i}",
+        )
+
+    llm = ScriptedSummaryLLM(
+        {
+            1: {
+                "chapter_number": 1,
+                "characters_mentioned": ["甲"],
+                "key_events": ["甲出场"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山镇",
+                "tone": "quiet",
+                "narrative_progression": "甲在山镇出现。",
+            },
+            2: {
+                "chapter_number": 2,
+                "characters_mentioned": ["甲"],
+                "key_events": ["甲离开"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山路",
+                "tone": "urgent",
+                "narrative_progression": "甲踏上路程。",
+            },
+        },
+        validation_flags={1: ["unsupported_claim"]},
+    )
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 2
+
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    zh_artifact = paths.summaries_dir / "chapter-1-zh.json"
+    assert zh_artifact.exists()
+    data = json.loads(zh_artifact.read_text(encoding="utf-8"))
+    assert "llm_validation_flags" in data
+    assert data["llm_validation_flags"] == ["unsupported_claim"]

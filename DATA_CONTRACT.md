@@ -375,6 +375,8 @@ Supported summary types:
 - `arc_summary_zh`
 - `previous_3_bundle_zh` if materialized
 
+Each validated summary artifact may also carry `llm_validation_flags` in its JSON export for inspectability. These flags are advisory only (non-blocking).
+
 Persistence rule: every supported summary type must be materialized as a distinct row in the summary store at the end of its Phase 0 generation stage. Downstream consumers (packet assembly, translation) must never need to parse a parent JSON object to extract a child field. For example, `chapter_summary_zh_short` is derived from the `narrative_progression` field of the structured summary but is written as its own row with `summary_type = 'chapter_summary_zh_short'` and `content_zh` = the `narrative_progression` string.
 
 Validation requirements:
@@ -383,6 +385,7 @@ Validation requirements:
 - terminology validation against locked glossary where applicable
 - continuity validation
 - future-knowledge leak check
+- content fidelity validation via analyst-model LLM (advisory, non-blocking flags)
 
 Update rule:
 

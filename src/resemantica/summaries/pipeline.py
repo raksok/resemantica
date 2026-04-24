@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 import re
 from typing import Any
@@ -9,6 +10,7 @@ from resemantica.db.glossary_repo import ensure_glossary_schema, list_locked_ent
 from resemantica.db.sqlite import open_connection
 from resemantica.db.summary_repo import (
     ensure_summary_schema,
+    get_validated_summary,
     list_validated_summaries,
     save_derived_summary,
     save_validated_summary,
@@ -23,6 +25,7 @@ from resemantica.summaries.derivation import (
     hash_validated_summary,
 )
 from resemantica.summaries.generator import generate_chapter_summary
+from resemantica.summaries.validators import validate_chinese_summary_content
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 
@@ -96,6 +99,8 @@ def preprocess_summaries(
             if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
             and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
         ]
+    _exclude_patterns = config_obj.summaries.exclude_chapter_patterns
+    _exclude_compiled = [re.compile(p) for p in _exclude_patterns] if _exclude_patterns else []
     if not chapter_files:
         raise FileNotFoundError(
             f"No extracted chapters found for release {release_id}: {paths.extracted_chapters_dir}"
@@ -104,6 +109,7 @@ def preprocess_summaries(
     client = _build_llm_client(config_obj, llm_client)
     prompt_structured = load_prompt("summary_zh_structured.txt")
     prompt_en = load_prompt("summary_en_derive.txt")
+    prompt_validate = load_prompt("summary_zh_validate.txt")
 
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
@@ -116,6 +122,19 @@ def preprocess_summaries(
             chapter_payload = _read_json(chapter_file)
             chapter_number = int(chapter_payload["chapter_number"])
             chapter_source_hash = str(chapter_payload["chapter_source_hash"])
+
+            source_doc = str(chapter_payload.get("source_document_path", ""))
+            if _exclude_compiled and any(p.search(source_doc) for p in _exclude_compiled):
+                print(f"  SKIP: chapter {chapter_number} ({source_doc}) matches exclude pattern")
+                chapter_results.append(
+                    {
+                        "chapter_number": chapter_number,
+                        "chapter_source_hash": chapter_source_hash,
+                        "status": "skipped",
+                    }
+                )
+                continue
+
             source_text_zh = _collect_source_text(chapter_payload)
             locked_glossary = list_locked_entries(conn, release_id=release_id)
 
@@ -143,20 +162,44 @@ def preprocess_summaries(
                 )
                 continue
 
+            llm_validation_flags = validate_chinese_summary_content(
+                llm_client=client,
+                model_name=config_obj.models.analyst_name,
+                prompt_template=prompt_validate.template,
+                source_text_zh=source_text_zh,
+                structured_summary=generated.structured_summary,
+                locked_glossary=locked_glossary,
+            )
+
             short_summaries = list_validated_summaries(
                 conn,
                 release_id=release_id,
                 summary_type="chapter_summary_zh_short",
                 max_chapter_number=chapter_number,
             )
-            story_text = build_story_so_far(short_summaries=short_summaries)
+            all_hashes = sorted(
+                {r.derived_from_chapter_hash for r in short_summaries} | {chapter_source_hash}
+            )
+            composite_hash = sha256("|".join(all_hashes).encode()).hexdigest() if all_hashes else chapter_source_hash
+
+            previous_story = get_validated_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number - 1,
+                summary_type="story_so_far_zh",
+            )
+            if previous_story is not None and short_summaries:
+                last_short = short_summaries[-1]
+                story_text = previous_story.content_zh.rstrip("\n") + "\n" + f"第{chapter_number}章：{last_short.content_zh.strip()}"
+            else:
+                story_text = build_story_so_far(short_summaries=short_summaries)
             story_record = save_validated_summary(
                 conn,
                 release_id=release_id,
                 chapter_number=chapter_number,
                 summary_type="story_so_far_zh",
                 content_zh=story_text,
-                derived_from_chapter_hash=chapter_source_hash,
+                derived_from_chapter_hash=composite_hash,
                 run_id=run_id,
                 validation_status="approved",
             )
@@ -218,6 +261,7 @@ def preprocess_summaries(
                         "chapter_summary_zh_short": generated.short_record.to_json_dict(),
                         "story_so_far_zh": story_record.to_json_dict(),
                     },
+                    "llm_validation_flags": llm_validation_flags,
                 },
             )
             _write_json(
