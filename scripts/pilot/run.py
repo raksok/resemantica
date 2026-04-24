@@ -258,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Step 2: Stage: {stage_name}")
             print(f"{'='*60}")
             t0 = time.time()
-            result = run_stage(args.release, args.run, stage_name)
+            result = run_stage(args.release, args.run, stage_name, chapter_start=args.start, chapter_end=args.end)
             duration = round(time.time() - t0, 2)
             report["stages"][stage_name] = {
                 "status": "success" if result.success else "failed",

@@ -75,13 +75,24 @@ def discover_glossary_candidates(
     run_id: str,
     config: AppConfig | None = None,
     project_root: Path | None = None,
+    llm_client: LLMClient | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    prompt = load_prompt("glossary_discover.txt")
+    client = _build_llm_client(config_obj, llm_client)
     discovered = discover_candidates_from_extracted(
         release_id=release_id,
         extracted_chapters_dir=paths.extracted_chapters_dir,
         discovery_run_id=run_id,
+        llm_client=client,
+        model_name=config_obj.models.analyst_name,
+        prompt_template=prompt.template,
+        prompt_version=prompt.version,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
     )
 
     conn = open_connection(paths.db_path)

@@ -46,6 +46,8 @@ def run_stage(
     stage_name: str,
     *,
     checkpoint: Optional[dict[str, Any]] = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> StageResult:
     state = _get_run_state(release_id, run_id)
 
@@ -68,7 +70,7 @@ def run_stage(
     )
 
     try:
-        result = _execute_stage(release_id, run_id, stage_name)
+        result = _execute_stage(release_id, run_id, stage_name, chapter_start=chapter_start, chapter_end=chapter_end)
 
         status = "completed" if result.success else "failed"
         _update_run_state(
@@ -98,7 +100,7 @@ def run_stage(
         )
 
 
-def _execute_stage(release_id: str, run_id: str, stage_name: str) -> StageResult:
+def _execute_stage(release_id: str, run_id: str, stage_name: str, *, chapter_start: int | None = None, chapter_end: int | None = None) -> StageResult:
     """Execute a stage by calling the appropriate pipeline function."""
     config = None
     try:
@@ -120,7 +122,7 @@ def _execute_stage(release_id: str, run_id: str, stage_name: str) -> StageResult
                 translate_glossary_candidates,
                 promote_glossary_candidates,
             )
-            discover_glossary_candidates(release_id=release_id, run_id=run_id, config=config)
+            discover_glossary_candidates(release_id=release_id, run_id=run_id, config=config, chapter_start=chapter_start, chapter_end=chapter_end)
             translate_glossary_candidates(release_id=release_id, run_id=run_id, config=config)
             promote_glossary_candidates(release_id=release_id, run_id=run_id, config=config)
             return StageResult(
@@ -130,7 +132,7 @@ def _execute_stage(release_id: str, run_id: str, stage_name: str) -> StageResult
 
         elif stage_name == "preprocess-summaries":
             from resemantica.summaries.pipeline import preprocess_summaries
-            preprocess_summaries(release_id=release_id, run_id=run_id, config=config)
+            preprocess_summaries(release_id=release_id, run_id=run_id, config=config, chapter_start=chapter_start, chapter_end=chapter_end)
             return StageResult(
                 success=True, stage_name=stage_name,
                 message="Summaries preprocess completed"
@@ -138,7 +140,7 @@ def _execute_stage(release_id: str, run_id: str, stage_name: str) -> StageResult
 
         elif stage_name == "preprocess-idioms":
             from resemantica.idioms.pipeline import preprocess_idioms
-            preprocess_idioms(release_id=release_id, run_id=run_id, config=config)
+            preprocess_idioms(release_id=release_id, run_id=run_id, config=config, chapter_start=chapter_start, chapter_end=chapter_end)
             return StageResult(
                 success=True, stage_name=stage_name,
                 message="Idioms preprocess completed"
@@ -146,7 +148,7 @@ def _execute_stage(release_id: str, run_id: str, stage_name: str) -> StageResult
 
         elif stage_name == "preprocess-graph":
             from resemantica.graph.pipeline import preprocess_graph
-            preprocess_graph(release_id=release_id, run_id=run_id, config=config)
+            preprocess_graph(release_id=release_id, run_id=run_id, config=config, chapter_start=chapter_start, chapter_end=chapter_end)
             return StageResult(
                 success=True, stage_name=stage_name,
                 message="Graph preprocess completed"

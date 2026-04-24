@@ -51,7 +51,7 @@ def generate_chapter_summary(
     model_name: str,
     prompt_template: str,
     prompt_version: str,
-) -> GeneratedChapterSummary:
+) -> GeneratedChapterSummary | None:
     prompt = render_named_sections(
         prompt_template,
         sections={
@@ -80,7 +80,7 @@ def generate_chapter_summary(
             run_id=run_id,
             validation_status="failed",
         )
-        raise RuntimeError("summary_parse_failed: chapter structured summary is not valid JSON") from exc
+        return None
 
     if not isinstance(parsed, dict):
         save_summary_draft(
@@ -98,7 +98,7 @@ def generate_chapter_summary(
             run_id=run_id,
             validation_status="failed",
         )
-        raise RuntimeError("summary_parse_failed: chapter structured summary root must be an object")
+        return None
 
     draft_record = save_summary_draft(
         conn,
@@ -126,7 +126,7 @@ def generate_chapter_summary(
             summary_type="chapter_summary_zh_structured",
             validation_status="failed",
         )
-        raise RuntimeError("summary_validation_failed: " + " | ".join(validation.errors))
+        return None
 
     narrative_progression = str(parsed["narrative_progression"]).strip()
     structured_record, short_record = save_chapter_structured_and_short(

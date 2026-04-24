@@ -120,11 +120,19 @@ def extract_idioms(
     model_name: str,
     prompt_template: str,
     prompt_version: str,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> list[IdiomCandidate]:
     chapter_files = sorted(
         extracted_chapters_dir.glob("chapter-*.json"),
         key=_chapter_number_from_path,
     )
+    if chapter_start is not None or chapter_end is not None:
+        chapter_files = [
+            f for f in chapter_files
+            if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
+            and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
+        ]
     candidates: list[IdiomCandidate] = []
 
     for chapter_file in chapter_files:
@@ -142,7 +150,14 @@ def extract_idioms(
             },
         )
         raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-        detected_rows = _parse_detected_idioms(raw)
+        try:
+            detected_rows = _parse_detected_idioms(raw)
+        except json.JSONDecodeError:
+            print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
+            continue
+        except ValueError:
+            print(f"  WARN: chapter {chapter_number}: parse error, skipping")
+            continue
 
         for index, detected in enumerate(detected_rows):
             normalized_source = normalize_idiom_source(detected.source_text)

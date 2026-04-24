@@ -58,8 +58,10 @@ class GlossaryCandidate:
     candidate_status: str
     validation_status: str
     conflict_reason: str | None
-    translator_model_name: str | None
-    translator_prompt_version: str | None
+    analyst_model_name: str | None = None
+    analyst_prompt_version: str | None = None
+    translator_model_name: str | None = None
+    translator_prompt_version: str | None = None
     schema_version: int = 1
 
     def to_json_dict(self) -> dict[str, object]:

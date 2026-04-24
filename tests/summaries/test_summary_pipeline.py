@@ -237,12 +237,13 @@ def test_glossary_conflict_blocks_chinese_summary_validation(
         }
     )
 
-    with pytest.raises(RuntimeError, match="glossary_conflict"):
-        preprocess_summaries(
-            release_id=release_id,
-            run_id="summaries-001",
-            llm_client=llm,
-        )
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 0
 
 
 def test_future_knowledge_leak_fails_validation(tmp_path: Path, monkeypatch) -> None:
@@ -270,12 +271,13 @@ def test_future_knowledge_leak_fails_validation(tmp_path: Path, monkeypatch) -> 
         }
     )
 
-    with pytest.raises(RuntimeError, match="future_knowledge"):
-        preprocess_summaries(
-            release_id=release_id,
-            run_id="summaries-001",
-            llm_client=llm,
-        )
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 0
 
 
 def test_continuity_conflict_on_chapter_number_mismatch(
@@ -306,12 +308,13 @@ def test_continuity_conflict_on_chapter_number_mismatch(
         }
     )
 
-    with pytest.raises(RuntimeError, match="continuity_conflict"):
-        preprocess_summaries(
-            release_id=release_id,
-            run_id="summaries-001",
-            llm_client=llm,
-        )
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 0
 
 
 def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> None:

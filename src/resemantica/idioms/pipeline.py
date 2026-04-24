@@ -86,6 +86,8 @@ def preprocess_idioms(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -103,6 +105,8 @@ def preprocess_idioms(
             model_name=config_obj.models.analyst_name,
             prompt_template=prompt.template,
             prompt_version=prompt.version,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
         )
         insert_detected_candidates(conn, candidates=detected_candidates)
 

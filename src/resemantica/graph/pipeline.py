@@ -77,6 +77,8 @@ def preprocess_graph(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     graph_client: GraphClient | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -94,6 +96,8 @@ def preprocess_graph(
             release_id=release_id,
             extracted_chapters_dir=paths.extracted_chapters_dir,
             locked_glossary=locked_glossary,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
         )
         warnings.extend(extraction.warnings)
 

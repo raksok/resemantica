@@ -81,6 +81,8 @@ def preprocess_summaries(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -88,6 +90,12 @@ def preprocess_summaries(
         paths.extracted_chapters_dir.glob("chapter-*.json"),
         key=_chapter_number_from_path,
     )
+    if chapter_start is not None or chapter_end is not None:
+        chapter_files = [
+            f for f in chapter_files
+            if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
+            and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
+        ]
     if not chapter_files:
         raise FileNotFoundError(
             f"No extracted chapters found for release {release_id}: {paths.extracted_chapters_dir}"
@@ -124,6 +132,16 @@ def preprocess_summaries(
                 prompt_template=prompt_structured.template,
                 prompt_version=prompt_structured.version,
             )
+            if generated is None:
+                print(f"  WARN: chapter {chapter_number}: summary generation failed, skipping")
+                chapter_results.append(
+                    {
+                        "chapter_number": chapter_number,
+                        "chapter_source_hash": chapter_source_hash,
+                        "status": "skipped",
+                    }
+                )
+                continue
 
             short_summaries = list_validated_summaries(
                 conn,
@@ -227,10 +245,13 @@ def preprocess_summaries(
     finally:
         conn.close()
 
+    processed_count = sum(
+        1 for r in chapter_results if r.get("status") != "skipped"
+    )
     return {
         "status": "success",
         "release_id": release_id,
         "run_id": run_id,
-        "chapters_processed": len(chapter_results),
+        "chapters_processed": processed_count,
         "chapter_artifacts": chapter_results,
     }

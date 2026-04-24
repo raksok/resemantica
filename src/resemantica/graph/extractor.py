@@ -285,6 +285,8 @@ def extract_entities(
     release_id: str,
     extracted_chapters_dir: Path,
     locked_glossary: list[LockedGlossaryEntry],
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> GraphExtractionResult:
     tracked_entries = [
         entry
@@ -315,6 +317,12 @@ def extract_entities(
         extracted_chapters_dir.glob("chapter-*.json"),
         key=_chapter_number_from_path,
     )
+    if chapter_start is not None or chapter_end is not None:
+        chapter_files = [
+            f for f in chapter_files
+            if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
+            and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
+        ]
     for chapter_file in chapter_files:
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))

@@ -612,3 +612,54 @@ These decisions have been applied to the existing project documents:
 7. **docs/30-operations/repo-map.md** — notes that `src/resemantica/` does not yet exist.
 8. **Task briefs** — task numbering now follows milestone order; retired packet integration is no longer a claimable task.
 9. **docs/20-lld/** — LLD numbering now follows milestone order; retired packet integration is no longer a claimable LLD.
+
+---
+
+## F. Preprocessing Robustness Decisions
+
+### F24. Per-Chapter Error Handling in LLM-Driven Preprocessing
+
+**Decision:** Each per-chapter LLM call + JSON parse in the three preprocessing pipelines (glossary discovery, idiom detection, summary generation) is wrapped in a `try/except` block. On `json.JSONDecodeError` or unexpected parse failure, the function logs a warning and skips that chapter rather than crashing the entire stage.
+
+Specific changes:
+- `glossary/discovery.py:discover_candidates_from_extracted()` — wrap `_parse_detected_terms(raw_output)` in try/except, skip to next chapter on failure.
+- `idioms/extractor.py:extract_idioms()` — same per-chapter try/except around the LLM call + JSON parse.
+- `summaries/generator.py:generate_chapter_summary()` — changed return type to `Optional[GeneratedChapterSummary]`; returns `None` instead of raising `RuntimeError` on JSON parse failure, non-dict response, or validation failure. Caller (`preprocess_summaries`) skips chapters that return `None`.
+
+**Alternatives considered:**
+- Retry with smaller prompt: adds complexity for rare cases; if the model outputs bad JSON once, a retry often repeats the same failure pattern.
+- Global try/except at the stage level: loses per-chapter granularity — one bad chapter would still cause the entire stage to appear as "failed" in tracking.
+- Fallback to regex extraction on failure: would reintroduce the fragile regex approach we deliberately removed for glossary discovery.
+- Stricter prompting to prevent bad JSON: prompts were already tightened; front-matter chapters with near-empty Chinese text will always produce unreliable output regardless of prompt quality.
+
+**Rationale:** Front-matter chapters (cover, TOC, translator's note) contain little Chinese novel text, causing the analyst model to output empty or non-JSON responses. Per-chapter try/except lets the pipeline gracefully skip these chapters and continue processing real content. This is the simplest approach that achieves robustness without introducing fallback heuristics.
+
+---
+
+### F25. Chapter Range Filtering in Preprocessing Stages
+
+**Decision:** Add `chapter_start: int | None = None` and `chapter_end: int | None = None` optional parameters to all preprocessing pipeline functions. When both are provided, only chapter files within the range `[chapter_start, chapter_end]` (inclusive) are processed. When either is `None` (the default), all chapter files are processed — preserving full backward compatibility.
+
+Parameters threaded through:
+- `glossary/pipeline.py:discover_glossary_candidates()` → `discovery.py:discover_candidates_from_extracted()`
+- `idioms/pipeline.py:preprocess_idioms()` → `extractor.py:extract_idioms()`
+- `summaries/pipeline.py:preprocess_summaries()` (filtering applied directly to `chapter_files`)
+- `graph/pipeline.py:preprocess_graph()` → `extractor.py:extract_entities()` (rule-based, cheap; included for consistency)
+- `orchestration/runner.py:run_stage()` and `_execute_stage()` accept and forward the params
+
+**Alternatives considered:**
+- Filter at the orchestration layer only: leaves a footgun for direct API callers who bypass `run_stage`.
+- Accept `chapter_numbers: list[int]` instead of range: over-flexible; the pilot always uses a contiguous range.
+- Post-filter results after processing all chapters: wastes LLM time processing unwanted chapters.
+- No change, rely on the pilot to use `run_stage` only for requested stages: `run_stage` would still process all 96 chapters.
+
+**Rationale:** The pilot script's `--start`/`--end` flags already control which chapters get translated. Without range filtering in preprocessing, the pipeline wastes ~20+ minutes of LLM analyst calls processing front-matter and out-of-range chapters before translation even begins. Adding optional params with `None` defaults ensures zero impact on existing callers while giving the pilot fine-grained control.
+
+---
+
+### Decision Log Summary Update
+
+| ID | Decision | Chosen Option | Key Rationale |
+|----|----------|---------------|---------------|
+| F24 | Preprocessing error handling | Per-chapter try/except, skip on bad JSON | Skips front-matter chapters gracefully without stage failure |
+| F25 | Chapter range filtering | Optional `chapter_start`/`chapter_end` with `None` defaults | Prevents ~20min wasted LLM calls on out-of-range chapters; fully backward compatible |

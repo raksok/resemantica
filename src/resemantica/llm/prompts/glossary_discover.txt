@@ -1,5 +1,35 @@
 # version: 1.0
 
-## GLOSSARY_DISCOVER
-This prompt is reserved for future model-assisted glossary discovery.
+## TASK
+GLOSSARY_DISCOVER
 
+## CHAPTER NUMBER
+{CHAPTER_NUMBER}
+
+## SOURCE TEXT (ZH)
+{SOURCE_TEXT_ZH}
+
+## INSTRUCTIONS
+Identify all significant glossary-worthy terms from the source text above. These include:
+
+- Character names and aliases
+- Faction, sect, school, or clan names
+- Location names (mountains, cities, regions, buildings)
+- Martial techniques, skills, spells, or cultivation methods
+- Items, artifacts, weapons, or treasures
+- Realm or cultivation level concepts
+- Creature or race names
+
+For each term, provide:
+- source_term: the exact Chinese text as it appears
+- category: one of [character, alias, title_honorific, faction, location, technique, item_artifact, realm_concept, creature_race, generic_role, event]
+- evidence_snippet: the surrounding context (roughly 40 characters around the term)
+
+Exclude common vocabulary, generic verbs, common adjectives, and ordinary nouns. Focus on proper nouns and setting-specific terminology.
+
+## OUTPUT FORMAT
+Return JSON only. Either a list or an object with key "glossary_terms".
+Each row must include:
+- source_term
+- category
+- evidence_snippet
