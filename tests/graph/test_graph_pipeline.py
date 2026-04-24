@@ -10,8 +10,18 @@ from resemantica.db.sqlite import open_connection
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
 from resemantica.graph.client import GraphClient, InMemoryGraphBackend
-from resemantica.graph.filters import filter_for_chapter
-from resemantica.graph.models import GraphAlias, GraphAppearance, GraphEntity, GraphRelationship
+from resemantica.graph.filters import (
+    filter_for_chapter,
+    get_hierarchy_context,
+    get_revealed_lore,
+    select_local_world_model_edges,
+)
+from resemantica.graph.models import (
+    GraphAlias,
+    GraphAppearance,
+    GraphEntity,
+    GraphRelationship,
+)
 from resemantica.graph.pipeline import preprocess_graph
 from resemantica.graph.validators import validate_graph_state
 from resemantica.settings import derive_paths, load_config
@@ -385,3 +395,248 @@ def test_snapshot_metadata_written_for_packet_reproducibility(
         assert snapshots[0].snapshot_hash == result["snapshot_hash"]
     finally:
         conn.close()
+
+
+def test_role_state_transition_across_chapters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m7-role-state"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三成为外门弟子。",
+    )
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=2,
+        source_text="张三晋升长老。",
+    )
+
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="张三",
+        target_term="Zhang San",
+        category="character",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="外门弟子",
+        target_term="Outer Disciple",
+        category="generic_role",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="长老",
+        target_term="Elder",
+        category="title_honorific",
+    )
+
+    client = GraphClient(backend=InMemoryGraphBackend())
+    result = preprocess_graph(
+        release_id=release_id,
+        run_id="graph-001",
+        graph_client=client,
+    )
+    assert result["status"] == "success"
+
+    ranked = [
+        row
+        for row in client.list_relationships(status="confirmed")
+        if row.type == "RANKED_AS"
+    ]
+    assert len(ranked) == 2
+    ranked_sorted = sorted(ranked, key=lambda row: row.start_chapter)
+    assert ranked_sorted[0].start_chapter == 1
+    assert ranked_sorted[0].end_chapter == 1
+    assert ranked_sorted[1].start_chapter == 2
+    assert ranked_sorted[1].end_chapter is None
+
+
+def test_containment_visibility_by_chapter(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m7-containment"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三在青云山修炼。",
+    )
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=2,
+        source_text="张三来到天云城。",
+    )
+
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="张三",
+        target_term="Zhang San",
+        category="character",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="青云山",
+        target_term="Azure Mountain",
+        category="location",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="天云城",
+        target_term="Skycloud City",
+        category="location",
+    )
+
+    client = GraphClient(backend=InMemoryGraphBackend())
+    result = preprocess_graph(
+        release_id=release_id,
+        run_id="graph-001",
+        graph_client=client,
+    )
+    assert result["status"] == "success"
+
+    relationships = client.list_relationships(status="confirmed")
+    loc_edges = [row for row in relationships if row.type == "LOCATED_IN"]
+    assert len(loc_edges) == 2
+    source_entity_id = loc_edges[0].source_entity_id
+
+    chapter_1 = get_hierarchy_context(
+        relationships=relationships,
+        chapter_number=1,
+        entity_id=source_entity_id,
+    )
+    chapter_2 = get_hierarchy_context(
+        relationships=relationships,
+        chapter_number=2,
+        entity_id=source_entity_id,
+    )
+
+    assert len(chapter_1) == 1
+    assert len(chapter_2) == 1
+    assert chapter_1[0].target_entity_id != chapter_2[0].target_entity_id
+
+
+def test_reveal_safe_lore_gating() -> None:
+    relationship = GraphRelationship(
+        relationship_id="rel_lore",
+        release_id="rel",
+        type="MEMBER_OF",
+        source_entity_id="ent_a",
+        target_entity_id="ent_b",
+        source_chapter=1,
+        start_chapter=1,
+        end_chapter=None,
+        revealed_chapter=3,
+        confidence=0.8,
+        status="confirmed",
+        lore_text="第3章揭示其真实身份。",
+        is_masked_identity=True,
+        schema_version=1,
+    )
+
+    before_reveal = get_revealed_lore(
+        relationships=[relationship],
+        chapter_number=2,
+    )
+    after_reveal = get_revealed_lore(
+        relationships=[relationship],
+        chapter_number=3,
+        masked_only=True,
+    )
+
+    assert before_reveal == []
+    assert len(after_reveal) == 1
+    assert after_reveal[0].is_masked_identity is True
+
+
+def test_unsupported_world_model_expansion_is_rejected() -> None:
+    validation = validate_graph_state(
+        entities=[
+            GraphEntity(
+                entity_id="ent_a",
+                release_id="rel",
+                entity_type="character",
+                canonical_name="A",
+                glossary_entry_id="glex_a",
+                first_seen_chapter=1,
+                last_seen_chapter=10,
+                revealed_chapter=1,
+                status="confirmed",
+                schema_version=1,
+            ),
+            GraphEntity(
+                entity_id="ent_b",
+                release_id="rel",
+                entity_type="character",
+                canonical_name="B",
+                glossary_entry_id="glex_b",
+                first_seen_chapter=1,
+                last_seen_chapter=10,
+                revealed_chapter=1,
+                status="confirmed",
+                schema_version=1,
+            ),
+        ],
+        aliases=[],
+        appearances=[],
+        relationships=[
+            GraphRelationship(
+                relationship_id="rel_bad",
+                release_id="rel",
+                type="BROTHER_OF",
+                source_entity_id="ent_a",
+                target_entity_id="ent_b",
+                source_chapter=1,
+                start_chapter=1,
+                end_chapter=None,
+                revealed_chapter=1,
+                confidence=0.8,
+                status="confirmed",
+                schema_version=1,
+            )
+        ],
+    )
+    assert not validation.is_valid
+    assert any("unsupported_relationship_type" in err for err in validation.errors)
+
+
+def test_local_world_model_selector_filters_non_local_edges() -> None:
+    relationships = [
+        GraphRelationship(
+            relationship_id="rel_local",
+            release_id="rel",
+            type="MEMBER_OF",
+            source_entity_id="ent_a",
+            target_entity_id="ent_b",
+            source_chapter=1,
+            start_chapter=1,
+            end_chapter=None,
+            revealed_chapter=1,
+            confidence=0.8,
+            status="confirmed",
+            schema_version=1,
+        ),
+        GraphRelationship(
+            relationship_id="rel_global",
+            release_id="rel",
+            type="MEMBER_OF",
+            source_entity_id="ent_a",
+            target_entity_id="ent_c",
+            source_chapter=1,
+            start_chapter=1,
+            end_chapter=None,
+            revealed_chapter=1,
+            confidence=0.8,
+            status="confirmed",
+            schema_version=1,
+        ),
+    ]
+    selected = select_local_world_model_edges(
+        relationships=relationships,
+        chapter_number=2,
+        local_entity_ids={"ent_a", "ent_b"},
+    )
+    assert [row.edge_id for row in selected] == ["rel_local"]

@@ -284,19 +284,19 @@ Extend the graph carefully with only the world-model features that materially im
 
 ### Action Items
 
-[ ] Add graph schema support for hierarchy, containment, and role-state relationship types that are explicitly in scope.
-[ ] Implement extraction or promotion workflows for rank/title hierarchy, faction membership, teacher-disciple lineage, and location containment where explicitly supported.
-[ ] Add time-scoped role-state handling for title or status changes across chapters.
-[ ] Implement reveal-safe lore facts and masked-identity chain handling with chapter-gated visibility rules.
-[ ] Extend graph validators to enforce scope limits and reject unsupported world-model expansion.
-[ ] Extend packet assembly selectors to include these richer relationship types only when locally relevant.
-[ ] Add tests for role-state transitions, containment visibility, and reveal-safe lore context.
+[x] Add graph schema support for hierarchy, containment, and role-state relationship types that are explicitly in scope.
+[x] Implement extraction or promotion workflows for rank/title hierarchy, faction membership, teacher-disciple lineage, and location containment where explicitly supported.
+[x] Add time-scoped role-state handling for title or status changes across chapters.
+[x] Implement reveal-safe lore facts and masked-identity chain handling with chapter-gated visibility rules.
+[x] Extend graph validators to enforce scope limits and reject unsupported world-model expansion.
+[x] Extend packet assembly selectors to include these richer relationship types only when locally relevant.
+[x] Add tests for role-state transitions, containment visibility, and reveal-safe lore context.
 
 ### Validation
 
-[ ] Verify new world-model features remain within the translation-support scope from the spec.
-[ ] Verify reveal-safe lore context only appears at or after the allowed chapter.
-[ ] Verify packet enrichment remains compact after the richer graph model lands.
+[x] Verify new world-model features remain within the translation-support scope from the spec.
+[x] Verify reveal-safe lore context only appears at or after the allowed chapter.
+[x] Verify packet enrichment remains compact after the richer graph model lands.
 
 ## Milestone 8: Chapter Packets with Graph Integration
 

@@ -1,4 +1,4 @@
-# Handover Prompt: Resemantica (Post-M6)
+# Handover Prompt: Resemantica (Post-M7)
 
 Use this prompt in the next session:
 
@@ -16,7 +16,7 @@ You are continuing implementation of **Resemantica** in `D:\Project\resemantica`
 
 ## Current Status
 
-M1, M2, M3, M4, M5, and M6 are implemented and validated.
+M1, M2, M3, M4, M5, M6, and M7 are implemented and validated.
 
 Completed and verified:
 
@@ -34,53 +34,32 @@ Completed and verified:
   - `idioms`
   - `graph`
 - M2 translation flow includes Pass 1 + Pass 2, validation artifacts, checkpoint resume, and reactive resegmentation.
-- M3 glossary flow includes:
-  - glossary candidate discovery from extracted chapter artifacts
-  - candidate translation with prompt version/model provenance
-  - deterministic validation (normalization, naming policy, duplicate/conflict checks)
-  - transactional promotion to locked glossary
-  - conflict recording and exact-match precedence helper
-- M4 summary flow includes:
-  - `summary_drafts`, `validated_summaries_zh`, `derived_summaries_en` repositories in SQLite
-  - structured Chinese summary generation with deterministic validation gates
-  - atomic materialization of `chapter_summary_zh_structured` + `chapter_summary_zh_short`
-  - deterministic `story_so_far_zh` derivation from validated Chinese short summaries only
-  - derived English summaries with persisted provenance hashes (`source_summary_hash`, `glossary_version_hash`)
-- M5 idiom flow includes:
-  - idiom extraction from extracted chapter artifacts via analyst prompt
-  - separated detection, validation, and promotion stages
-  - SQLite candidate/policy/conflict storage with deterministic duplicate/conflict handling
-  - exact-match idiom retrieval hook and matching helper
-- M6 graph flow includes:
-  - graph models, extraction, validation, and chapter-safe filter utilities
-  - Ladybug graph client wrapper and snapshot hash export metadata
-  - deterministic glossary-anchored entity extraction
-  - deferred entity fallback lifecycle in SQLite (`pending_glossary` → `promoted` → `graph_created`)
-  - `preprocess graph` CLI entrypoint and graph artifact snapshots
+- M3 glossary flow includes deterministic validation and transactional promotion.
+- M4 summary flow includes authority/derived separation and deterministic continuity derivation.
+- M5 idiom flow includes separated detection/validation/promotion with exact-match retrieval hook.
+- M6 graph flow includes glossary-anchored entity extraction, deferred entity lifecycle, chapter-safe filtering, and snapshot metadata.
+- M7 world-model flow includes:
+  - world-model edge types (`MEMBER_OF`, `LOCATED_IN`, `HELD_BY`, `RANKED_AS`)
+  - chapter-scoped role-state transition handling
+  - reveal-safe lore gating helpers
+  - unsupported relationship-type rejection in validators
+  - local world-model edge selector for packet-facing integration
 - Tests in `tests/epub/`, `tests/translation/`, `tests/glossary/`, `tests/summaries/`, `tests/idioms/`, and `tests/graph/` passing.
 - `docs/30-operations/repo-map.md` updated for real package layout.
-- `IMPLEMENTATION_PLAN.md` M6 checklist updated to complete.
+- `IMPLEMENTATION_PLAN.md` M7 checklist updated to complete.
 
 Verified commands from the previous session:
 
 - `uv run --extra dev ruff check src\resemantica tests\graph docs\30-operations\repo-map.md`
 - `uv run --extra dev mypy src\resemantica`
-- `uv run --extra dev pytest tests\graph tests\idioms tests\summaries tests\glossary tests\translation tests\epub` (30 passed)
+- `uv run --extra dev pytest tests\graph tests\idioms tests\summaries tests\glossary tests\translation tests\epub` (35 passed)
 - `uv run python -m resemantica.cli preprocess --help` (shows glossary + summaries + idioms + graph preprocess subcommands)
 - `uv run python -m resemantica.cli preprocess graph --help`
 
-## Working Tree State (Not Committed Yet)
+## Working Tree State
 
-Current local changes:
-
-- `IMPLEMENTATION_PLAN.md`
-- `docs/30-operations/repo-map.md`
-- `src/resemantica/cli.py`
-- `src/resemantica/settings.py`
-- `src/resemantica/db/graph_repo.py`
-- `src/resemantica/db/migrations/006_graph.sql`
-- `src/resemantica/graph/` (new package)
-- `tests/graph/`
+- After committing this session’s changes, working tree should be clean.
+- No push has been performed.
 
 ## Runtime Test Note
 
@@ -92,21 +71,22 @@ Current local changes:
 
 ## Next Objective
 
-Start **M7** only:
+Start **M8** only:
 
-- Task brief: `docs/40-tasks/task-07-world-model.md`
-- LLD: `docs/20-lld/lld-07-world-model.md`
+- Task brief: `docs/40-tasks/task-08-packets.md`
+- LLD: `docs/20-lld/lld-08-packets.md`
 
-Focus for M7:
+Focus for M8:
 
-1. Extend graph schema with world-model edge types (`MEMBER_OF`, `LOCATED_IN`, `HELD_BY`, `RANKED_AS`).
-2. Implement chapter-scoped role-state transitions and containment/hierarchy handling.
-3. Add reveal-safe lore gating behavior that blocks future-knowledge leaks.
-4. Keep provisional vs confirmed promotion behavior consistent with M6 graph MVP.
-5. Ensure world-model updates remain snapshot-ready for M8 packet assembly.
-6. Add tests for role-state transitions, containment visibility, reveal-safe lore gating, and unsupported world-model rejection.
+1. Implement immutable chapter packet schemas and packet metadata persistence.
+2. Build packet assembly using locked glossary, validated summaries, idiom policies, and confirmed graph context.
+3. Add chapter-safe graph context compaction (no unrestricted subgraph dumps).
+4. Implement packet size budgeting and degrade-order trimming with token counting safety rules.
+5. Build narrow paragraph bundles and enforce retrieval precedence (glossary/idiom over graph).
+6. Add stale packet detection based on upstream hashes (including graph snapshot hash).
+7. Add tests for schema validity, provenance hashes, graph-to-packet filtering, size control, and stale rebuild triggers.
 
-## Existing M6 Files (orientation)
+## Existing M7 Files (orientation)
 
 - `src/resemantica/graph/` (`models.py`, `client.py`, `extractor.py`, `validators.py`, `filters.py`, `pipeline.py`)
 - `src/resemantica/db/graph_repo.py`
@@ -114,3 +94,4 @@ Focus for M7:
 - `tests/graph/test_graph_pipeline.py`
 
 ---
+

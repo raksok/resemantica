@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 from resemantica.graph.models import (
     GLOSSARY_COVERED_CATEGORIES,
@@ -8,7 +9,12 @@ from resemantica.graph.models import (
     GraphAppearance,
     GraphEntity,
     GraphRelationship,
+    SUPPORTED_RELATIONSHIP_TYPES,
+    WORLD_MODEL_EDGE_TYPES,
 )
+
+_FUTURE_CHAPTER_ZH_RE = re.compile(r"第\s*(\d+)\s*章")
+_FUTURE_CHAPTER_EN_RE = re.compile(r"\bchapter\s+(\d+)\b", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -79,6 +85,11 @@ def validate_graph_state(
             )
 
     for relationship in relationships:
+        if relationship.type not in SUPPORTED_RELATIONSHIP_TYPES:
+            errors.append(
+                f"unsupported_relationship_type: relationship {relationship.relationship_id} "
+                f"type {relationship.type!r} is not in supported graph scope"
+            )
         if relationship.source_entity_id not in entity_ids:
             errors.append(
                 f"dangling_reference: relationship {relationship.relationship_id} missing source_entity_id "
@@ -116,10 +127,32 @@ def validate_graph_state(
             errors.append(
                 f"chapter_range_invalid: relationship {relationship.relationship_id} source_chapter > end_chapter"
             )
+        if relationship.type in WORLD_MODEL_EDGE_TYPES and relationship.lore_text is not None:
+            lore_text = relationship.lore_text.strip()
+            if not lore_text:
+                errors.append(
+                    f"schema_invalid: relationship {relationship.relationship_id} lore_text must be non-empty when provided"
+                )
+            else:
+                for match in _FUTURE_CHAPTER_ZH_RE.finditer(lore_text):
+                    if int(match.group(1)) > relationship.revealed_chapter:
+                        errors.append(
+                            f"future_knowledge: relationship {relationship.relationship_id} lore references "
+                            f"chapter {match.group(1)} beyond revealed_chapter {relationship.revealed_chapter}"
+                        )
+                for match in _FUTURE_CHAPTER_EN_RE.finditer(lore_text):
+                    if int(match.group(1)) > relationship.revealed_chapter:
+                        errors.append(
+                            f"future_knowledge: relationship {relationship.relationship_id} lore references "
+                            f"chapter {match.group(1)} beyond revealed_chapter {relationship.revealed_chapter}"
+                        )
+        if relationship.is_masked_identity and relationship.type not in WORLD_MODEL_EDGE_TYPES:
+            errors.append(
+                f"schema_invalid: relationship {relationship.relationship_id} masked identity is only supported for world-model edges"
+            )
 
     return GraphValidationResult(
         status="failed" if errors else "success",
         errors=errors,
         warnings=[],
     )
-

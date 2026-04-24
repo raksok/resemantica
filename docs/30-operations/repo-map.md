@@ -58,6 +58,14 @@ Implemented package layout (M6 slice):
 - `src/resemantica/db/migrations/006_graph.sql`: deferred entity and graph snapshot tables
 - `tests/graph/`: alias reveal gating, relationship chapter eligibility, validation, deferred lifecycle, and snapshot metadata tests
 
+Implemented package layout (M7 slice):
+
+- `src/resemantica/graph/models.py`: world-model edge types (`MEMBER_OF`, `LOCATED_IN`, `HELD_BY`, `RANKED_AS`) and `WorldModelEdge` contract
+- `src/resemantica/graph/extractor.py`: deterministic hierarchy/containment/role-state extraction with chapter-scoped interval transitions
+- `src/resemantica/graph/filters.py`: `get_hierarchy_context()`, `get_revealed_lore()`, and local world-model edge selectors
+- `src/resemantica/graph/validators.py`: unsupported edge-type rejection and reveal-safe lore validation checks
+- `tests/graph/`: M7 tests for role-state transitions, containment visibility, reveal-safe lore gating, and unsupported expansion rejection
+
 ## Target State
 
 Primary code roots:

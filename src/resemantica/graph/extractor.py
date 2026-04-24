@@ -11,11 +11,13 @@ from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
 from resemantica.graph.models import (
     DeferredEntityRecord,
+    GRAPH_ENTITY_CATEGORIES,
     GLOSSARY_COVERED_CATEGORIES,
     GraphAlias,
     GraphAppearance,
     GraphEntity,
     GraphRelationship,
+    WORLD_MODEL_EDGE_TYPES,
 )
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
@@ -23,6 +25,13 @@ _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
 _CJK_TERM_RE = re.compile(r"[\u4e00-\u9fff]{2,12}")
 _FACTION_SUFFIXES = ("门", "派", "宗", "帮", "盟")
 _LOCATION_SUFFIXES = ("山", "城", "宫", "谷", "峰", "州", "国", "镇", "村")
+_SENTENCE_SPLIT_RE = re.compile(r"[。！？\n]+")
+_MEMBER_OF_HINTS = ("弟子", "门人", "加入", "隶属", "归属", "效力")
+_LOCATED_IN_HINTS = ("在", "位于", "驻扎", "身处", "来到", "留在", "坐镇")
+_HELD_BY_HINTS = ("持有", "获得", "佩戴", "执掌", "拥有", "掌握")
+_RANKED_AS_HINTS = ("成为", "晋升", "被封", "任命", "升为", "担任")
+_LORE_HINTS = ("其实", "原来", "真实身份", "真身", "秘密")
+_MASKED_HINTS = ("真实身份", "真身", "伪装", "假扮")
 
 
 @dataclass(slots=True)
@@ -43,6 +52,16 @@ class _DeferredAggregate:
     source_chapter: int
     last_seen_chapter: int
     appearance_count: int
+
+
+@dataclass(slots=True)
+class _WorldModelObservation:
+    edge_type: str
+    source_entity_id: str
+    target_entity_id: str
+    chapter_number: int
+    lore_text: str | None
+    is_masked_identity: bool
 
 
 def _chapter_number_from_path(path: Path) -> int:
@@ -89,6 +108,20 @@ def _deferred_id(*, release_id: str, category: str, normalized_source: str) -> s
     return f"def_{digest}"
 
 
+def _relationship_id(
+    *,
+    release_id: str,
+    edge_type: str,
+    source_entity_id: str,
+    target_entity_id: str,
+    start_chapter: int,
+) -> str:
+    digest = sha256(
+        f"{release_id}:{edge_type}:{source_entity_id}:{target_entity_id}:{start_chapter}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"rel_{digest}"
+
+
 def _snippet(text: str, term: str) -> str:
     position = text.find(term)
     if position < 0:
@@ -108,24 +141,173 @@ def _infer_category(term: str) -> str | None:
     return None
 
 
+def _split_sentences(text: str) -> list[str]:
+    return [segment.strip() for segment in _SENTENCE_SPLIT_RE.split(text) if segment.strip()]
+
+
+def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
+    return any(hint in text for hint in hints)
+
+
+def _find_present_entity_ids(
+    *,
+    sentence: str,
+    entries: list[LockedGlossaryEntry],
+    entity_id_by_key: dict[tuple[str, str], str],
+) -> list[str]:
+    present: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        key = (entry.category, entry.normalized_source_term)
+        entity_id = entity_id_by_key.get(key)
+        if entity_id is None:
+            continue
+        if entry.source_term not in sentence:
+            continue
+        if entity_id in seen:
+            continue
+        present.append(entity_id)
+        seen.add(entity_id)
+    return present
+
+
+def _append_observation(
+    observations: list[_WorldModelObservation],
+    *,
+    edge_type: str,
+    source_entity_ids: list[str],
+    target_entity_ids: list[str],
+    chapter_number: int,
+    lore_text: str | None,
+    is_masked_identity: bool,
+) -> None:
+    if not source_entity_ids or not target_entity_ids:
+        return
+
+    seen_pairs: set[tuple[str, str]] = set()
+    for source_entity_id in source_entity_ids:
+        for target_entity_id in target_entity_ids:
+            if source_entity_id == target_entity_id:
+                continue
+            pair = (source_entity_id, target_entity_id)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            observations.append(
+                _WorldModelObservation(
+                    edge_type=edge_type,
+                    source_entity_id=source_entity_id,
+                    target_entity_id=target_entity_id,
+                    chapter_number=chapter_number,
+                    lore_text=lore_text,
+                    is_masked_identity=is_masked_identity,
+                )
+            )
+
+
+def _build_world_model_relationships(
+    *,
+    release_id: str,
+    observations: list[_WorldModelObservation],
+) -> list[GraphRelationship]:
+    by_scope: dict[tuple[str, str], list[_WorldModelObservation]] = {}
+    for observation in observations:
+        if observation.edge_type not in WORLD_MODEL_EDGE_TYPES:
+            continue
+        by_scope.setdefault((observation.edge_type, observation.source_entity_id), []).append(observation)
+
+    relationships: list[GraphRelationship] = []
+    for (edge_type, source_entity_id), group in sorted(by_scope.items()):
+        ordered = sorted(
+            group,
+            key=lambda row: (row.chapter_number, row.target_entity_id),
+        )
+        if not ordered:
+            continue
+
+        current_target = ordered[0].target_entity_id
+        current_start = ordered[0].chapter_number
+        current_lore = ordered[0].lore_text
+        current_masked = ordered[0].is_masked_identity
+
+        def _flush(end_chapter: int | None) -> None:
+            relationships.append(
+                GraphRelationship(
+                    relationship_id=_relationship_id(
+                        release_id=release_id,
+                        edge_type=edge_type,
+                        source_entity_id=source_entity_id,
+                        target_entity_id=current_target,
+                        start_chapter=current_start,
+                    ),
+                    release_id=release_id,
+                    type=edge_type,
+                    source_entity_id=source_entity_id,
+                    target_entity_id=current_target,
+                    source_chapter=current_start,
+                    start_chapter=current_start,
+                    end_chapter=end_chapter,
+                    revealed_chapter=current_start,
+                    confidence=0.7,
+                    status="provisional",
+                    lore_text=current_lore,
+                    is_masked_identity=current_masked,
+                    schema_version=1,
+                )
+            )
+
+        for item in ordered[1:]:
+            if item.target_entity_id == current_target:
+                if current_lore is None and item.lore_text is not None:
+                    current_lore = item.lore_text
+                current_masked = current_masked or item.is_masked_identity
+                continue
+            if item.chapter_number == current_start:
+                # Deterministic single-state policy per chapter: keep the first target in sort order.
+                if current_lore is None and item.lore_text is not None:
+                    current_lore = item.lore_text
+                current_masked = current_masked or item.is_masked_identity
+                continue
+
+            _flush(item.chapter_number - 1)
+            current_target = item.target_entity_id
+            current_start = item.chapter_number
+            current_lore = item.lore_text
+            current_masked = item.is_masked_identity
+
+        _flush(None)
+
+    return sorted(relationships, key=lambda row: row.relationship_id)
+
+
 def extract_entities(
     *,
     release_id: str,
     extracted_chapters_dir: Path,
     locked_glossary: list[LockedGlossaryEntry],
 ) -> GraphExtractionResult:
+    tracked_entries = [
+        entry
+        for entry in locked_glossary
+        if entry.category in GRAPH_ENTITY_CATEGORIES
+    ]
     glossary_index = {
         (entry.category, entry.normalized_source_term): entry
-        for entry in locked_glossary
+        for entry in tracked_entries
         if entry.category in GLOSSARY_COVERED_CATEGORIES
     }
     tracked_entries = sorted(
-        glossary_index.values(),
+        tracked_entries,
         key=lambda row: (row.category, row.normalized_source_term),
     )
+    entries_by_category: dict[str, list[LockedGlossaryEntry]] = {}
+    for entry in tracked_entries:
+        entries_by_category.setdefault(entry.category, []).append(entry)
 
     entities_by_id: dict[str, GraphEntity] = {}
+    entity_id_by_key: dict[tuple[str, str], str] = {}
     appearances_by_id: dict[str, GraphAppearance] = {}
+    world_model_observations: list[_WorldModelObservation] = []
     deferred_by_key: dict[tuple[str, str], _DeferredAggregate] = {}
     warnings: list[str] = []
 
@@ -144,11 +326,13 @@ def extract_entities(
             count = source_text.count(entry.source_term)
             if count <= 0:
                 continue
+            normalized_source = entry.normalized_source_term
             entity_id = _entity_id(
                 release_id=release_id,
                 category=entry.category,
-                normalized_source=entry.normalized_source_term,
+                normalized_source=normalized_source,
             )
+            entity_id_by_key[(entry.category, normalized_source)] = entity_id
             current = entities_by_id.get(entity_id)
             if current is None:
                 entities_by_id[entity_id] = GraphEntity(
@@ -179,8 +363,81 @@ def extract_entities(
                 chapter_number=chapter_number,
                 evidence_snippet=_snippet(source_text, entry.source_term),
                 status="provisional",
-                schema_version=1,
+                    schema_version=1,
+                )
+
+        for sentence in _split_sentences(source_text):
+            characters = _find_present_entity_ids(
+                sentence=sentence,
+                entries=entries_by_category.get("character", []),
+                entity_id_by_key=entity_id_by_key,
             )
+            factions = _find_present_entity_ids(
+                sentence=sentence,
+                entries=entries_by_category.get("faction", []),
+                entity_id_by_key=entity_id_by_key,
+            )
+            locations = _find_present_entity_ids(
+                sentence=sentence,
+                entries=entries_by_category.get("location", []),
+                entity_id_by_key=entity_id_by_key,
+            )
+            items = _find_present_entity_ids(
+                sentence=sentence,
+                entries=entries_by_category.get("item_artifact", [])
+                + entries_by_category.get("technique", []),
+                entity_id_by_key=entity_id_by_key,
+            )
+            ranks = _find_present_entity_ids(
+                sentence=sentence,
+                entries=entries_by_category.get("title_honorific", [])
+                + entries_by_category.get("generic_role", []),
+                entity_id_by_key=entity_id_by_key,
+            )
+            locatables = sorted(set(characters + factions + items))
+            lore_text = sentence if _contains_any(sentence, _LORE_HINTS) else None
+            is_masked_identity = _contains_any(sentence, _MASKED_HINTS)
+
+            if _contains_any(sentence, _MEMBER_OF_HINTS):
+                _append_observation(
+                    world_model_observations,
+                    edge_type="MEMBER_OF",
+                    source_entity_ids=characters,
+                    target_entity_ids=factions,
+                    chapter_number=chapter_number,
+                    lore_text=lore_text,
+                    is_masked_identity=is_masked_identity,
+                )
+            if _contains_any(sentence, _LOCATED_IN_HINTS):
+                _append_observation(
+                    world_model_observations,
+                    edge_type="LOCATED_IN",
+                    source_entity_ids=locatables,
+                    target_entity_ids=locations,
+                    chapter_number=chapter_number,
+                    lore_text=lore_text,
+                    is_masked_identity=is_masked_identity,
+                )
+            if _contains_any(sentence, _HELD_BY_HINTS):
+                _append_observation(
+                    world_model_observations,
+                    edge_type="HELD_BY",
+                    source_entity_ids=items,
+                    target_entity_ids=characters,
+                    chapter_number=chapter_number,
+                    lore_text=lore_text,
+                    is_masked_identity=is_masked_identity,
+                )
+            if _contains_any(sentence, _RANKED_AS_HINTS):
+                _append_observation(
+                    world_model_observations,
+                    edge_type="RANKED_AS",
+                    source_entity_ids=characters,
+                    target_entity_ids=ranks,
+                    chapter_number=chapter_number,
+                    lore_text=lore_text,
+                    is_masked_identity=is_masked_identity,
+                )
 
         term_counts: dict[str, int] = {}
         for term in _CJK_TERM_RE.findall(source_text):
@@ -242,8 +499,10 @@ def extract_entities(
             appearances_by_id.values(),
             key=lambda row: (row.chapter_number, row.appearance_id),
         ),
-        provisional_relationships=[],
+        provisional_relationships=_build_world_model_relationships(
+            release_id=release_id,
+            observations=world_model_observations,
+        ),
         deferred_entities=deferred_entities,
         warnings=warnings,
     )
-
