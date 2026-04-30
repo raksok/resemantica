@@ -41,4 +41,10 @@ Always follow the milestone sequence below.
 | M16 | task-16 | M15 | EPUB Reconstruction Phase 2 |
 | M17 | task-17 | M15, M16 | Data Storage + Contract Compliance |
 | M18 | task-18 | M15, M17 | TUI + Live Operator Events |
-| M19 | task-19 | M18, M16 | TUI Completion + Reconstruction Smoke Validation |
+| M19 | task-19 | M18, M16 | Logging + CLI Progress + Pipeline Events |
+| M20A | task-20a | M19 | LLM Client Reuse |
+| M20B | task-20b | M20A | Prompt Budget Guardrails + Long-Chapter Chunking |
+| M20C | task-20c | M20B | Chapter Manifest + Directory Scan Cache |
+| M20D | task-20d | M20A-M20C | Model-Batched + Cached LLM Passes |
+| M20E | task-20e | M19, M20C | Event Persistence Throttling For Huge Runs |
+| M21 | task-21 | M18, M16, M19, M20A-M20E | TUI Completion + Reconstruction Smoke Validation |

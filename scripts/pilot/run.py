@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -46,7 +45,6 @@ def _get_ns(tag: str) -> str:
 
 def _discover_xhtml_map(unpacked_dir: Path) -> dict[int, str]:
     """Map chapter_number -> href (relative to unpacked_dir)."""
-    import zipfile
     container = unpacked_dir / "META-INF" / "container.xml"
     tree = ET.parse(str(container))
     root = tree.getroot()
@@ -353,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
                     dur = round(time.time() - t0, 2)
                     print(f"FAILED ({dur}s): {exc}")
         else:
-            print(f"\n  Pass 3: disabled (config.translation.pass3_default = false)")
+            print("\n  Pass 3: disabled (config.translation.pass3_default = false)")
 
         total = args.end - args.start + 1
         succeeded = total - len(failed_chapters)

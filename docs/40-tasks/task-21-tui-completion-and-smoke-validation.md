@@ -1,10 +1,10 @@
-# Task 20: TUI Completion & Reconstruction Smoke Validation
+# Task 21: TUI Completion & Reconstruction Smoke Validation
 
 ## Milestone And Depends On
 
-Milestone: M20
+Milestone: M21
 
-Depends on: M18, M16, M19
+Depends on: M18, M16, M19, M20A-M20E
 
 ## Goal
 
@@ -65,4 +65,4 @@ Out:
 - The translation screen shows real run-derived block or paragraph progress instead of placeholder text.
 - Tests cover the new TUI controls and progress renderers.
 - Reconstruction smoke validation is documented with command, result, and any skipped external tooling.
-- `docs/20-lld/lld-20-tui-completion-and-smoke-validation.md` is implemented and kept in sync.
+- `docs/20-lld/lld-21-tui-completion-and-smoke-validation.md` is implemented and kept in sync.
