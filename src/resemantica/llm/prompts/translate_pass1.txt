@@ -14,7 +14,6 @@ PASS1
 {CONTINUITY_NOTES}
 
 ## INSTRUCTIONS
-Translate Chinese source text into English.
-Preserve all placeholders exactly as provided.
+Use the context provided. Preserve all placeholders exactly as provided. Translate Chinese source text into English with no explanation.
 
 {SOURCE_TEXT}

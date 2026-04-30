@@ -1,9 +1,9 @@
 # version: 1.0
 
-## IDIOM_TRANSLATE
-Translate this Chinese idiom into concise, natural English.
-Return only the translated term with no extra commentary.
-
-SOURCE TEXT: {SOURCE_TEXT}
 MEANING (ZH): {MEANING_ZH}
 EVIDENCE: {EVIDENCE_SNIPPET}
+
+## IDIOM_TRANSLATE
+Translate this Chinese idiom into concise, natural English with no extra commentary.
+
+{SOURCE_TEXT}

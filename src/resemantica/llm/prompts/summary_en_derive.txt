@@ -4,10 +4,7 @@ SUMMARY_EN_DERIVE
 ## LOCKED GLOSSARY
 {LOCKED_GLOSSARY}
 
-## SOURCE TEXT (ZH)
-{SOURCE_TEXT_ZH}
-
 ## INSTRUCTIONS
-Translate the Chinese summary into concise English.
-Return only English summary text.
+Translate the Chinese summary into concise English, Return only English summary text.
 
+{SOURCE_TEXT_ZH}
