@@ -24,11 +24,21 @@ class ScriptedIdiomLLM:
         self.rows_by_chapter = rows_by_chapter
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
-        chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
-        if chapter_match is None:
-            raise RuntimeError("chapter number missing from idiom prompt")
-        chapter_number = int(chapter_match.group(1))
-        return json.dumps({"idioms": self.rows_by_chapter.get(chapter_number, [])}, ensure_ascii=False)
+        if "IDIOM_DETECT" in prompt:
+            chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+            if chapter_match is None:
+                raise RuntimeError("chapter number missing from idiom prompt")
+            chapter_number = int(chapter_match.group(1))
+            return json.dumps({"idioms": self.rows_by_chapter.get(chapter_number, [])}, ensure_ascii=False)
+        raise RuntimeError("Unexpected prompt type")
+
+
+class ScriptedTranslatorLLM:
+    def __init__(self, response: str) -> None:
+        self.response = response
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        return self.response
 
 
 def _write_extracted_chapter(
@@ -131,7 +141,6 @@ def test_preprocess_idioms_merges_normalized_duplicates(
                 {
                     "source_text": "一箭双雕",
                     "meaning_zh": "一举两得",
-                    "preferred_rendering_en": "kill two birds with one stone",
                     "usage_notes": "use for one action with two outcomes",
                 }
             ],
@@ -139,15 +148,16 @@ def test_preprocess_idioms_merges_normalized_duplicates(
                 {
                     "source_text": "一箭双雕  ",
                     "meaning_zh": "一举两得",
-                    "preferred_rendering_en": "kill two birds with one stone",
                 }
             ],
         }
     )
+    translator = ScriptedTranslatorLLM("kill two birds with one stone")
     result = preprocess_idioms(
         release_id=release_id,
         run_id="idioms-001",
         llm_client=llm,
+        translator_llm_client=translator,
     )
 
     assert result["status"] == "success"
@@ -187,20 +197,20 @@ def test_duplicate_conflict_rejects_policy_promotion(
                 {
                     "source_text": "一箭双雕",
                     "meaning_zh": "一举两得",
-                    "preferred_rendering_en": "kill two birds with one stone",
                 },
                 {
                     "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                    "preferred_rendering_en": "one move, two wins",
+                    "meaning_zh": "双重好处",
                 },
             ]
         }
     )
+    translator = ScriptedTranslatorLLM("kill two birds with one stone")
     result = preprocess_idioms(
         release_id=release_id,
         run_id="idioms-001",
         llm_client=llm,
+        translator_llm_client=translator,
     )
 
     assert result["status"] == "success"
@@ -244,15 +254,16 @@ def test_existing_policy_conflict_is_recorded(
                 {
                     "source_text": "一箭双雕",
                     "meaning_zh": "一举两得",
-                    "preferred_rendering_en": "one move, two wins",
                 }
             ]
         }
     )
+    translator = ScriptedTranslatorLLM("one move, two wins")
     result = preprocess_idioms(
         release_id=release_id,
         run_id="idioms-001",
         llm_client=llm,
+        translator_llm_client=translator,
     )
 
     assert result["status"] == "success"

@@ -159,6 +159,7 @@ def test_preprocess_summaries_materializes_authority_and_derived_rows(
                 "setting": "青云山",
                 "tone": "calm",
                 "narrative_progression": "张三初入山门。",
+                "is_story_chapter": True,
             },
             2: {
                 "chapter_number": 2,
@@ -169,6 +170,7 @@ def test_preprocess_summaries_materializes_authority_and_derived_rows(
                 "setting": "青云山",
                 "tone": "tense",
                 "narrative_progression": "张三完成第一次试炼。",
+                "is_story_chapter": True,
             },
         }
     )
@@ -245,6 +247,7 @@ def test_glossary_conflict_blocks_chinese_summary_validation(
                 "setting": "青云山",
                 "tone": "formal",
                 "narrative_progression": "张三加入Azure Sect。",
+                "is_story_chapter": True,
             }
         }
     )
@@ -279,6 +282,7 @@ def test_future_knowledge_leak_fails_validation(tmp_path: Path, monkeypatch) -> 
                 "setting": "青云山",
                 "tone": "ominous",
                 "narrative_progression": "他在第3章达到巅峰。",
+                "is_story_chapter": True,
             }
         }
     )
@@ -316,6 +320,7 @@ def test_continuity_conflict_on_chapter_number_mismatch(
                 "setting": "青云山",
                 "tone": "steady",
                 "narrative_progression": "张三开始旅程。",
+                "is_story_chapter": True,
             }
         }
     )
@@ -356,6 +361,7 @@ def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> N
                 "setting": "城镇",
                 "tone": "neutral",
                 "narrative_progression": "甲在城镇露面。",
+                "is_story_chapter": True,
             },
             2: {
                 "chapter_number": 2,
@@ -366,6 +372,7 @@ def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> N
                 "setting": "山道",
                 "tone": "urgent",
                 "narrative_progression": "甲离开城镇踏上山道。",
+                "is_story_chapter": True,
             },
         }
     )
@@ -439,6 +446,7 @@ def test_chapter_exclusion_patterns(tmp_path: Path, monkeypatch) -> None:
                 "setting": "城镇",
                 "tone": "neutral",
                 "narrative_progression": f"进展{i}。",
+                "is_story_chapter": True,
             }
             for i in [1, 3]
         }
@@ -481,6 +489,7 @@ def test_llm_validation_flags_in_artifact(tmp_path: Path, monkeypatch) -> None:
                 "setting": "山镇",
                 "tone": "quiet",
                 "narrative_progression": "甲在山镇出现。",
+                "is_story_chapter": True,
             },
             2: {
                 "chapter_number": 2,
@@ -491,6 +500,7 @@ def test_llm_validation_flags_in_artifact(tmp_path: Path, monkeypatch) -> None:
                 "setting": "山路",
                 "tone": "urgent",
                 "narrative_progression": "甲踏上路程。",
+                "is_story_chapter": True,
             },
         },
         validation_flags={1: ["unsupported_claim"]},
@@ -511,3 +521,107 @@ def test_llm_validation_flags_in_artifact(tmp_path: Path, monkeypatch) -> None:
     data = json.loads(zh_artifact.read_text(encoding="utf-8"))
     assert "llm_validation_flags" in data
     assert data["llm_validation_flags"] == ["unsupported_claim"]
+
+
+def test_non_story_chapter_validator_flagged() -> None:
+    from resemantica.summaries.validators import validate_chinese_summary
+
+    non_story_summary = {
+        "chapter_number": 0,
+        "characters_mentioned": [],
+        "key_events": [],
+        "new_terms": [],
+        "relationships_changed": [],
+        "setting": "",
+        "tone": "",
+        "narrative_progression": "Non-story chapter: Copyright page",
+        "is_story_chapter": False,
+    }
+    result = validate_chinese_summary(
+        structured_summary=non_story_summary,
+        expected_chapter_number=0,
+        locked_glossary=[],
+    )
+    assert result.is_valid is False
+    assert "non_story_chapter_flagged" in result.errors
+
+
+def test_non_story_chapter_pipeline_skipped(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m4-non-story"
+
+    for i in [1, 2, 3]:
+        source = f"第{i}章内容。" if i != 2 else "版权所有 © 2024 作者名。未经许可，不得转载。"
+        _write_extracted_chapter(
+            release_id=release_id,
+            chapter_number=i,
+            source_text=source,
+            chapter_source_hash=f"hash-ch{i}",
+        )
+
+    llm_responses = {
+        1: {
+            "chapter_number": 1,
+            "characters_mentioned": ["甲"],
+            "key_events": ["事件1"],
+            "new_terms": [],
+            "relationships_changed": [],
+            "setting": "城镇",
+            "tone": "neutral",
+            "narrative_progression": "进展1。",
+            "is_story_chapter": True,
+        },
+        2: {
+            "chapter_number": 2,
+            "characters_mentioned": [],
+            "key_events": [],
+            "new_terms": [],
+            "relationships_changed": [],
+            "setting": "",
+            "tone": "",
+            "narrative_progression": "Non-story chapter: Copyright page",
+            "is_story_chapter": False,
+        },
+        3: {
+            "chapter_number": 3,
+            "characters_mentioned": ["乙"],
+            "key_events": ["事件3"],
+            "new_terms": [],
+            "relationships_changed": [],
+            "setting": "山林",
+            "tone": "mysterious",
+            "narrative_progression": "进展3。",
+            "is_story_chapter": True,
+        },
+    }
+
+    class NonStoryScriptedLLM:
+        def generate_text(self, *, model_name: str, prompt: str) -> str:
+            if "SUMMARY_ZH_STRUCTURED" in prompt:
+                chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+                if chapter_match is None:
+                    raise RuntimeError("chapter number missing from prompt")
+                chapter_number = int(chapter_match.group(1))
+                return json.dumps(llm_responses[chapter_number], ensure_ascii=False)
+            if "SUMMARY_EN_DERIVE" in prompt:
+                return "EN::content"
+            if "SUMMARY_ZH_VALIDATE" in prompt:
+                return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
+            raise RuntimeError("Unexpected prompt")
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=NonStoryScriptedLLM(),
+    )
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 2
+
+    skipped = [r for r in result["chapter_artifacts"] if r.get("status") == "skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["chapter_number"] == 2
+    assert skipped[0]["reason"] == "non_story_chapter"
+
+    processed = [r for r in result["chapter_artifacts"] if r.get("status") != "skipped"]
+    assert len(processed) == 2
+    assert {r["chapter_number"] for r in processed} == {1, 3}

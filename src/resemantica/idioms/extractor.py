@@ -20,7 +20,6 @@ _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
 class _DetectedIdiom:
     source_text: str
     meaning_zh: str
-    preferred_rendering_en: str
     usage_notes: str | None
 
 
@@ -76,7 +75,6 @@ def _parse_detected_idioms(raw: str) -> list[_DetectedIdiom]:
             continue
         source_text = str(row.get("source_text", "")).strip()
         meaning_zh = str(row.get("meaning_zh", "")).strip()
-        preferred = str(row.get("preferred_rendering_en", "")).strip()
         usage_raw = row.get("usage_notes")
         usage_notes: str | None = None
         if isinstance(usage_raw, str) and usage_raw.strip():
@@ -87,7 +85,6 @@ def _parse_detected_idioms(raw: str) -> list[_DetectedIdiom]:
             _DetectedIdiom(
                 source_text=source_text,
                 meaning_zh=meaning_zh,
-                preferred_rendering_en=preferred,
                 usage_notes=usage_notes,
             )
         )
@@ -130,6 +127,7 @@ def extract_idioms(
     prompt_version: str,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    skip_chapters: set[int] | None = None,
 ) -> list[IdiomCandidate]:
     chapter_files = sorted(
         extracted_chapters_dir.glob("chapter-*.json"),
@@ -146,6 +144,10 @@ def extract_idioms(
     for chapter_file in chapter_files:
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))
+
+        if skip_chapters and chapter_number in skip_chapters:
+            continue
+
         source_text_zh = _collect_source_text(payload)
         if not source_text_zh:
             continue
@@ -185,7 +187,7 @@ def extract_idioms(
                     source_text=detected.source_text,
                     normalized_source_text=normalized_source,
                     meaning_zh=detected.meaning_zh,
-                    preferred_rendering_en=detected.preferred_rendering_en,
+                    preferred_rendering_en="",
                     usage_notes=detected.usage_notes,
                     first_seen_chapter=chapter_number,
                     last_seen_chapter=chapter_number,

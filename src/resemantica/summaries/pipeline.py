@@ -11,6 +11,7 @@ from resemantica.db.sqlite import open_connection
 from resemantica.db.summary_repo import (
     ensure_summary_schema,
     get_validated_summary,
+    is_non_story_chapter,
     list_validated_summaries,
     save_derived_summary,
     save_validated_summary,
@@ -152,14 +153,25 @@ def preprocess_summaries(
                 prompt_version=prompt_structured.version,
             )
             if generated is None:
-                print(f"  WARN: chapter {chapter_number}: summary generation failed, skipping")
-                chapter_results.append(
-                    {
-                        "chapter_number": chapter_number,
-                        "chapter_source_hash": chapter_source_hash,
-                        "status": "skipped",
-                    }
-                )
+                if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
+                    print(f"  SKIP: chapter {chapter_number}: non-story chapter flagged")
+                    chapter_results.append(
+                        {
+                            "chapter_number": chapter_number,
+                            "chapter_source_hash": chapter_source_hash,
+                            "status": "skipped",
+                            "reason": "non_story_chapter",
+                        }
+                    )
+                else:
+                    print(f"  WARN: chapter {chapter_number}: summary generation failed, skipping")
+                    chapter_results.append(
+                        {
+                            "chapter_number": chapter_number,
+                            "chapter_source_hash": chapter_source_hash,
+                            "status": "skipped",
+                        }
+                    )
                 continue
 
             llm_validation_flags = validate_chinese_summary_content(

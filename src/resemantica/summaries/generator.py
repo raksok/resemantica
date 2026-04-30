@@ -65,6 +65,7 @@ def generate_chapter_summary(
     try:
         parsed = json.loads(raw_output)
     except json.JSONDecodeError as exc:
+        is_story = 1
         save_summary_draft(
             conn,
             release_id=release_id,
@@ -79,10 +80,12 @@ def generate_chapter_summary(
             prompt_version=prompt_version,
             run_id=run_id,
             validation_status="failed",
+            is_story_chapter=is_story,
         )
         return None
 
     if not isinstance(parsed, dict):
+        is_story = 1
         save_summary_draft(
             conn,
             release_id=release_id,
@@ -97,8 +100,12 @@ def generate_chapter_summary(
             prompt_version=prompt_version,
             run_id=run_id,
             validation_status="failed",
+            is_story_chapter=is_story,
         )
         return None
+
+    is_story_chapter = parsed.get("is_story_chapter", True)
+    is_story = 0 if is_story_chapter is False else 1
 
     draft_record = save_summary_draft(
         conn,
@@ -111,6 +118,7 @@ def generate_chapter_summary(
         prompt_version=prompt_version,
         run_id=run_id,
         validation_status="pending",
+        is_story_chapter=is_story,
     )
 
     validation = validate_chinese_summary(
@@ -125,6 +133,16 @@ def generate_chapter_summary(
             chapter_number=chapter_number,
             summary_type="chapter_summary_zh_structured",
             validation_status="failed",
+        )
+        return None
+
+    if is_story == 0:
+        set_summary_draft_status(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="chapter_summary_zh_structured",
+            validation_status="non_story_chapter",
         )
         return None
 

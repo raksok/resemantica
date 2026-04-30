@@ -16,6 +16,7 @@ from resemantica.db.sqlite import open_connection
 from resemantica.db.summary_repo import (
     ensure_summary_schema,
     get_validated_summary,
+    is_non_story_chapter,
     list_validated_summaries,
 )
 from resemantica.glossary.models import LockedGlossaryEntry
@@ -454,6 +455,7 @@ def build_chapter_packet(
             bundle_path="",
             stale_reasons=["empty_records"],
         )
+
     records = [row for row in records_raw if isinstance(row, dict)]
     source_text = _collect_source_text(records)
 
@@ -463,6 +465,20 @@ def build_chapter_packet(
     ensure_idiom_schema(conn)
     ensure_graph_schema(conn)
     ensure_packet_schema(conn)
+
+    if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
+        conn.close()
+        return PacketBuildOutput(
+            status="skipped",
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            packet_id="",
+            packet_hash="",
+            packet_path="",
+            bundle_path="",
+            stale_reasons=["non_story_chapter"],
+        )
 
     try:
         locked_glossary = list_locked_entries(conn, release_id=release_id)

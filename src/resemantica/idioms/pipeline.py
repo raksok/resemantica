@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from resemantica.db.idiom_repo import (
@@ -11,17 +12,20 @@ from resemantica.db.idiom_repo import (
     insert_detected_candidates,
     list_candidates,
     list_candidates_for_promotion,
+    list_candidates_for_translation,
     list_conflicts,
     list_policies,
     mark_candidate_approved,
     mark_candidate_conflict,
     promote_policies,
+    save_idiom_translation,
 )
 from resemantica.db.sqlite import open_connection
+from resemantica.db.summary_repo import ensure_summary_schema, is_non_story_chapter
 from resemantica.idioms.extractor import extract_idioms
 from resemantica.idioms.validators import normalize_idiom_source, validate_idiom_policy
 from resemantica.llm.client import LLMClient
-from resemantica.llm.prompts import load_prompt
+from resemantica.llm.prompts import load_prompt, render_named_sections
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 
@@ -79,6 +83,42 @@ def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -
     )
 
 
+def translate_idiom_candidates(
+    *,
+    conn: sqlite3.Connection,
+    release_id: str,
+    run_id: str,
+    translator_client: LLMClient,
+    translator_model_name: str,
+    prompt_template: str,
+    prompt_version: str,
+) -> int:
+    """Phase 2: Translate discovered idiom candidates using the Translator model."""
+    pending = list_candidates_for_translation(conn, release_id=release_id)
+    for candidate in pending:
+        prompt = render_named_sections(
+            prompt_template,
+            sections={
+                "SOURCE_TEXT": candidate.source_text,
+                "MEANING_ZH": candidate.meaning_zh,
+                "EVIDENCE_SNIPPET": candidate.evidence_snippet,
+            },
+        )
+        rendered = translator_client.generate_text(
+            model_name=translator_model_name,
+            prompt=prompt,
+        ).strip()
+        save_idiom_translation(
+            conn,
+            candidate_id=candidate.candidate_id,
+            translation_run_id=run_id,
+            target_term=rendered,
+            translator_model_name=translator_model_name,
+            translator_prompt_version=prompt_version,
+        )
+    return len(pending)
+
+
 def preprocess_idioms(
     *,
     release_id: str,
@@ -86,30 +126,57 @@ def preprocess_idioms(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
+    translator_llm_client: LLMClient | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
-    prompt = load_prompt("idiom_detect.txt")
-    client = _build_llm_client(config_obj, llm_client)
+
+    detect_prompt = load_prompt("idiom_detect.txt")
+    translate_prompt = load_prompt("idiom_translate.txt")
+    analyst_client = _build_llm_client(config_obj, llm_client)
+    translator_client = _build_llm_client(config_obj, translator_llm_client)
 
     conn = open_connection(paths.db_path)
     ensure_idiom_schema(conn)
+    ensure_summary_schema(conn)
     try:
+        # Phase 1: Detect (Analyst)
+        skip_chapters: set[int] = set()
+        cursor = conn.execute(
+            "SELECT chapter_number FROM summary_drafts WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured' AND is_story_chapter = 0",
+            (release_id,),
+        )
+        for row in cursor.fetchall():
+            skip_chapters.add(int(row[0]))
+
         detected_candidates = extract_idioms(
             release_id=release_id,
             extracted_chapters_dir=paths.extracted_chapters_dir,
             detection_run_id=run_id,
-            llm_client=client,
+            llm_client=analyst_client,
             model_name=config_obj.models.analyst_name,
-            prompt_template=prompt.template,
-            prompt_version=prompt.version,
+            prompt_template=detect_prompt.template,
+            prompt_version=detect_prompt.version,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
+            skip_chapters=skip_chapters or None,
         )
         insert_detected_candidates(conn, candidates=detected_candidates)
 
+        # Phase 2: Translate (Translator)
+        translated_count = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id=run_id,
+            translator_client=translator_client,
+            translator_model_name=config_obj.models.translator_name,
+            prompt_template=translate_prompt.template,
+            prompt_version=translate_prompt.version,
+        )
+
+        # Phase 3: Promote (no LLM)
         pending_candidates = list_candidates_for_promotion(conn, release_id=release_id)
         existing_policies = list_policies(conn, release_id=release_id)
         validation = validate_idiom_policy(
@@ -160,6 +227,7 @@ def preprocess_idioms(
         "run_id": run_id,
         "chapters_processed": len(chapters_seen),
         "candidates_written": len(detected_candidates),
+        "translated_count": translated_count,
         "promoted_count": len(validation.promotion_entries),
         "conflict_count": len(validation.conflicts),
         "candidates_artifact": str(paths.idiom_candidates_path),

@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 1.1
 SUMMARY_ZH_STRUCTURED
 
 ## CHAPTER NUMBER
@@ -20,5 +20,19 @@ Return JSON only and follow this schema exactly:
   "relationships_changed": [{{"entity": "", "change": ""}}],
   "setting": "",
   "tone": "",
-  "narrative_progression": ""
+  "narrative_progression": "",
+  "is_story_chapter": true
 }}
+
+## NON-STORY CHAPTER DETECTION
+You must determine if this chapter contains actual story content. Set "is_story_chapter" to false if the chapter is:
+- Front-matter (dedication, acknowledgments, author's note)
+- Copyright page or publication information
+- Table of contents
+- Index or appendix
+- Any non-narrative content
+
+When "is_story_chapter" is false:
+- Set "narrative_progression" to a brief explanation like "Non-story chapter: [description]"
+- Leave other fields as empty arrays or empty strings
+- Do NOT invent fake story content

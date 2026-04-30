@@ -41,18 +41,30 @@ def apply_migrations(conn: sqlite3.Connection, migrations_dir: str | Path) -> No
         int(row["version"]) for row in conn.execute("SELECT version FROM schema_migrations")
     }
 
+    print(f"DEBUG: apply_migrations called, migrations_dir={directory}")
+    print(f"DEBUG: applied_versions={applied_versions}")
+
     for migration_file in sorted(directory.glob("[0-9][0-9][0-9]_*.sql")):
         version = int(migration_file.name.split("_", 1)[0])
+        print(f"DEBUG: checking migration {migration_file.name}, version={version}")
         if version in applied_versions:
+            print(f"DEBUG: migration {version} already applied, skipping")
             continue
 
+        print(f"DEBUG: applying migration {migration_file.name}")
         sql = migration_file.read_text(encoding="utf-8")
         with conn:
             conn.executescript(sql)
+            # Check if summary_drafts exists after migration 4
+            if version == 4:
+                cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='summary_drafts'")
+                table_exists = cursor.fetchone() is not None
+                print(f"DEBUG: After migration 4, summary_drafts exists: {table_exists}")
             conn.execute(
                 "INSERT INTO schema_migrations(version, filename) VALUES(?, ?)",
                 (version, migration_file.name),
             )
+            print(f"DEBUG: migration {version} applied successfully")
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:

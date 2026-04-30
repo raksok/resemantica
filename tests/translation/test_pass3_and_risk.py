@@ -524,10 +524,11 @@ class TestPass3SkipAndPipeline:
             run_id="run-fail-report",
             llm_client=client,
         )
-        with pytest.raises(RuntimeError, match="Pass 2"):
-            translate_chapter_pass2(
-                release_id="m9-fail-report",
-                chapter_number=1,
-                run_id="run-fail-report",
-                llm_client=client,
-            )
+        # With graceful fallback, Pass 2 JSON parse failure returns original draft
+        result = translate_chapter_pass2(
+            release_id="m9-fail-report",
+            chapter_number=1,
+            run_id="run-fail-report",
+            llm_client=client,
+        )
+        assert result["status"] == "success"

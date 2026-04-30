@@ -15,6 +15,7 @@ from resemantica.db.graph_repo import (
     upsert_deferred_entities,
 )
 from resemantica.db.sqlite import open_connection
+from resemantica.db.summary_repo import ensure_summary_schema, is_non_story_chapter
 from resemantica.graph.client import GraphClient
 from resemantica.graph.extractor import extract_entities
 from resemantica.graph.models import GraphAppearance, GraphEntity
@@ -108,6 +109,15 @@ def preprocess_graph(
 
     try:
         locked_glossary = list_locked_entries(conn, release_id=release_id)
+
+        skip_chapters: set[int] = set()
+        cursor = conn.execute(
+            "SELECT chapter_number FROM summary_drafts WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured' AND is_story_chapter = 0",
+            (release_id,),
+        )
+        for row in cursor.fetchall():
+            skip_chapters.add(int(row[0]))
+
         extraction = extract_entities(
             release_id=release_id,
             extracted_chapters_dir=paths.extracted_chapters_dir,
@@ -117,6 +127,7 @@ def preprocess_graph(
             prompt_template=prompt.template,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
+            skip_chapters=skip_chapters or None,
         )
         warnings.extend(extraction.warnings)
 

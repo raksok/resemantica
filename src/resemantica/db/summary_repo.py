@@ -37,6 +37,7 @@ class SummaryDraftRecord:
     run_id: str
     validation_status: str
     schema_version: int = 1
+    is_story_chapter: int = 1
 
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -79,6 +80,7 @@ class DerivedSummaryEnRecord:
 
 def ensure_summary_schema(conn: sqlite3.Connection) -> None:
     migrations_dir = Path(__file__).resolve().parent / "migrations"
+
     apply_migrations(conn, migrations_dir)
 
 
@@ -94,6 +96,7 @@ def save_summary_draft(
     prompt_version: str,
     run_id: str,
     validation_status: str,
+    is_story_chapter: int = 1,
 ) -> SummaryDraftRecord:
     record = SummaryDraftRecord(
         draft_id=_draft_id(
@@ -111,6 +114,7 @@ def save_summary_draft(
         run_id=run_id,
         validation_status=validation_status,
         schema_version=1,
+        is_story_chapter=is_story_chapter,
     )
     with conn:
         conn.execute(
@@ -118,9 +122,9 @@ def save_summary_draft(
             INSERT INTO summary_drafts(
                 draft_id, release_id, chapter_number, summary_type, content_json,
                 chapter_source_hash, model_name, prompt_version, run_id,
-                validation_status, schema_version, updated_at
+                validation_status, schema_version, is_story_chapter, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(release_id, chapter_number, summary_type)
             DO UPDATE SET
                 content_json = excluded.content_json,
@@ -130,6 +134,7 @@ def save_summary_draft(
                 run_id = excluded.run_id,
                 validation_status = excluded.validation_status,
                 schema_version = excluded.schema_version,
+                is_story_chapter = excluded.is_story_chapter,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
@@ -144,6 +149,7 @@ def save_summary_draft(
                 record.run_id,
                 record.validation_status,
                 record.schema_version,
+                record.is_story_chapter,
             ),
         )
     return record
@@ -455,3 +461,25 @@ def list_derived_summaries(
 
     rows = conn.execute(query, tuple(params)).fetchall()
     return [_derived_from_row(row) for row in rows]
+
+
+def is_non_story_chapter(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    chapter_number: int,
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT is_story_chapter
+        FROM summary_drafts
+        WHERE release_id = ?
+          AND chapter_number = ?
+          AND summary_type = 'chapter_summary_zh_structured'
+        LIMIT 1
+        """,
+        (release_id, chapter_number),
+    ).fetchone()
+    if row is None:
+        return False
+    return int(row["is_story_chapter"]) == 0

@@ -5,6 +5,7 @@ from pathlib import Path
 import zipfile
 
 from resemantica.epub.extractor import extract_epub
+from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pipeline import (
     translate_chapter_pass1,
     translate_chapter_pass2,
@@ -81,11 +82,19 @@ class ScriptedLLM:
                 return "You ⟦B_1⟧good⟦/B_1⟧?"
             return "Segment draft."
 
-        if "Correct the English" in prompt:
+        if "translation auditor" in prompt:
             self.pass2_calls += 1
             if "⟦B_1⟧" in prompt:
-                return "You ⟦B_1⟧really good⟦/B_1⟧?"
-            return "Segment corrected."
+                return json.dumps({
+                    "fidelity_errors_found": True,
+                    "analysis": "Missing word 'really'.",
+                    "corrected_text": "You ⟦B_1⟧really good⟦/B_1⟧?"
+                })
+            return json.dumps({
+                "fidelity_errors_found": False,
+                "analysis": "No fidelity errors detected.",
+                "corrected_text": "Segment corrected."
+            })
 
         return "Unexpected."
 
@@ -225,3 +234,92 @@ def test_resume_from_successful_pass1_skips_pass1(tmp_path: Path, monkeypatch) -
     )
     assert r2p2["status"] == "success"
     assert second_client.pass1_calls == 0
+
+
+class MockLLMClient:
+    def __init__(self, response: str) -> None:
+        self.response = response
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:
+        return self.response
+
+
+def test_pass2_no_fidelity_errors_returns_original_draft() -> None:
+    client = MockLLMClient(json.dumps({
+        "fidelity_errors_found": False,
+        "analysis": "No fidelity errors detected.",
+        "corrected_text": "This is different but should be ignored.",
+    }))
+    result = translate_pass2(
+        client=client,
+        model_name="test-model",
+        prompt_template="# version: 2.0\nSource: {SOURCE_TEXT}\nDraft: {DRAFT_TEXT}",
+        source_text="源文本",
+        draft_text="Original draft text.",
+        full_source_block="源文本",
+    )
+    assert result == "Original draft text."
+
+
+def test_pass2_fidelity_errors_with_corrected_text_returns_corrected() -> None:
+    client = MockLLMClient(json.dumps({
+        "fidelity_errors_found": True,
+        "analysis": "Missing sentence detected.",
+        "corrected_text": "Original draft text. Added missing sentence.",
+    }))
+    result = translate_pass2(
+        client=client,
+        model_name="test-model",
+        prompt_template="# version: 2.0\nSource: {SOURCE_TEXT}\nDraft: {DRAFT_TEXT}",
+        source_text="源文本",
+        draft_text="Original draft text.",
+        full_source_block="源文本",
+    )
+    assert result == "Original draft text. Added missing sentence."
+
+
+def test_pass2_json_parse_failure_falls_back_to_draft() -> None:
+    client = MockLLMClient("This is not JSON.")
+    result = translate_pass2(
+        client=client,
+        model_name="test-model",
+        prompt_template="# version: 2.0\nSource: {SOURCE_TEXT}\nDraft: {DRAFT_TEXT}",
+        source_text="源文本",
+        draft_text="Original draft text.",
+        full_source_block="源文本",
+    )
+    assert result == "Original draft text."
+
+
+def test_pass2_fidelity_errors_empty_corrected_text_falls_back() -> None:
+    client = MockLLMClient(json.dumps({
+        "fidelity_errors_found": True,
+        "analysis": "Errors found but no correction provided.",
+        "corrected_text": "",
+    }))
+    result = translate_pass2(
+        client=client,
+        model_name="test-model",
+        prompt_template="# version: 2.0\nSource: {SOURCE_TEXT}\nDraft: {DRAFT_TEXT}",
+        source_text="源文本",
+        draft_text="Original draft text.",
+        full_source_block="源文本",
+    )
+    assert result == "Original draft text."
+
+
+def test_pass2_fidelity_false_non_identical_corrected_text_ignored() -> None:
+    client = MockLLMClient(json.dumps({
+        "fidelity_errors_found": False,
+        "analysis": "No errors.",
+        "corrected_text": "Completely different text that should be ignored.",
+    }))
+    result = translate_pass2(
+        client=client,
+        model_name="test-model",
+        prompt_template="# version: 2.0\nSource: {SOURCE_TEXT}\nDraft: {DRAFT_TEXT}",
+        source_text="源文本",
+        draft_text="Original draft text.",
+        full_source_block="源文本",
+    )
+    assert result == "Original draft text."

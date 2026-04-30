@@ -18,6 +18,7 @@ _REQUIRED_FIELDS = {
     "setting",
     "tone",
     "narrative_progression",
+    "is_story_chapter",
 }
 _FUTURE_CHAPTER_ZH_RE = re.compile(r"第\s*(\d+)\s*章")
 _FUTURE_CHAPTER_EN_RE = re.compile(r"\bchapter\s+(\d+)\b", re.IGNORECASE)
@@ -112,6 +113,10 @@ def _validate_schema(
     if not isinstance(narrative_progression, str) or not narrative_progression.strip():
         errors.append("schema_invalid: narrative_progression must be a non-empty string")
 
+    is_story_chapter = summary.get("is_story_chapter")
+    if not isinstance(is_story_chapter, bool):
+        errors.append("schema_invalid: is_story_chapter must be a boolean")
+
     return errors
 
 
@@ -176,6 +181,10 @@ def validate_chinese_summary(
             locked_glossary=locked_glossary,
         )
     )
+
+    is_story_chapter = structured_summary.get("is_story_chapter")
+    if is_story_chapter is False:
+        errors.insert(0, "non_story_chapter_flagged")
 
     return SummaryValidationResult(
         status="failed" if errors else "success",

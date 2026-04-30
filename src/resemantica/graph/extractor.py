@@ -366,6 +366,7 @@ def extract_entities(
     prompt_template: str,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    skip_chapters: set[int] | None = None,
 ) -> GraphExtractionResult:
     tracked_entries = [
         entry
@@ -401,6 +402,10 @@ def extract_entities(
     for chapter_file in chapter_files:
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))
+
+        if skip_chapters and chapter_number in skip_chapters:
+            continue
+
         source_text = _collect_source_text(payload)
         if not source_text:
             continue
