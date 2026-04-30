@@ -70,3 +70,10 @@ Callers that need full chapter payloads still read the chapter JSON file after r
 - Removing extracted chapter JSON files.
 - Storing the full chapter payload in the manifest.
 - Background cache invalidation.
+
+## Implementation Notes
+
+- The shared helper lives in `resemantica.chapters.manifest`.
+- EPUB extraction writes `extracted/chapter-manifest.json` after chapter and placeholder artifacts are materialized.
+- Missing or malformed manifests fall back to scanning `extracted/chapters/chapter-*.json` and rewrite the manifest.
+- Hot path callers now use `list_extracted_chapters()` for numeric ordering and range filtering.

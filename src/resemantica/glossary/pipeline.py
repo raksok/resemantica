@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import (
     ensure_glossary_schema,
     find_exact_locked_entry,
@@ -129,15 +130,16 @@ def discover_glossary_candidates(
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     prompt = load_prompt("glossary_discover.txt")
     client = _build_llm_client(config_obj, llm_client)
+    chapter_refs = list_extracted_chapters(
+        paths,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
+    )
     _emit(
         run_id,
         release_id,
         f"{_STAGE_NAME}.started",
-        total_chapters=_filtered_chapter_count(
-            paths.extracted_chapters_dir,
-            chapter_start=chapter_start,
-            chapter_end=chapter_end,
-        ),
+        total_chapters=len(chapter_refs),
     )
     discovered = discover_candidates_from_extracted(
         release_id=release_id,
@@ -149,6 +151,9 @@ def discover_glossary_candidates(
         prompt_version=prompt.version,
         chapter_start=chapter_start,
         chapter_end=chapter_end,
+        config=config_obj,
+        chapter_refs=chapter_refs,
+        cache_root=paths.release_root / "cache" / "llm",
         event_callback=lambda event_name, chapter_number, payload: _emit(
             run_id,
             release_id,

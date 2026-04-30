@@ -50,3 +50,9 @@ No conversation state, previous responses, or prior prompts are retained in `LLM
 - Async execution.
 - Prompt budget enforcement.
 - Model-grouped orchestration.
+
+## Implementation Notes
+
+- `LLMClient` now lazily caches the OpenAI-compatible client with `_get_openai_client()`.
+- `generation_hook` still bypasses OpenAI client construction.
+- `generate_text()` still submits exactly one user message per call, so client reuse does not accumulate model context.

@@ -82,3 +82,10 @@ Existing artifact schemas remain readable. Optional metadata may include:
 - Packet budget replacement.
 - Parallel chunk processing.
 - Translation range model batching.
+
+## Implementation Notes
+
+- Shared helpers live in `resemantica.llm.budget`.
+- Whole-chapter preprocessing stages budget-check prompts before calling the model.
+- Long chapter source text is processed as ordered chunks for glossary discovery, summaries, idiom detection, and graph extraction.
+- Summary chunk outputs are merged deterministically into the existing structured summary shape before existing validation and artifact writes.

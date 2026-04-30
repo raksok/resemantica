@@ -32,6 +32,9 @@ class GraphBackend(Protocol):
     def get_chapter_safe_subgraph(self, *, chapter_number: int, include_provisional: bool = False) -> dict[str, list[Any]]: ...
 
 
+_LADYBUG_CONNECTIONS: dict[Path, Any] = {}
+
+
 class InMemoryGraphBackend:
     def __init__(self) -> None:
         self._entities: dict[str, GraphEntity] = {}
@@ -142,8 +145,13 @@ class LadybugGraphBackend(InMemoryGraphBackend):
             ) from exc
 
         try:
+            cached = _LADYBUG_CONNECTIONS.get(self._db_path)
+            if cached is not None:
+                return cached
             database = lb.Database(str(self._db_path))
-            return lb.Connection(database)
+            connection = lb.Connection(database)
+            _LADYBUG_CONNECTIONS[self._db_path] = connection
+            return connection
         except Exception as exc:
             raise RuntimeError(f"Failed to initialize LadybugDB at {self._db_path}: {exc}") from exc
 

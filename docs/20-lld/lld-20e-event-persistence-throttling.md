@@ -63,3 +63,9 @@ This preserves CLI/TUI live progress even when not every progress event is writt
 - JSON log throttling.
 - Removing existing tracking tables.
 - Changing event model fields.
+
+## Implementation Notes
+
+- Event persistence settings are available under `[events]` with defaults that preserve normal behavior.
+- In reduced mode, EventBus samples repetitive chapter and paragraph progress persistence while still delivering every event to subscribers.
+- Warning, error, failure, skipped, risk, validation, artifact, and lifecycle events remain persisted.

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import ensure_glossary_schema, list_locked_entries
 from resemantica.db.graph_repo import ensure_graph_schema, list_graph_snapshots
 from resemantica.db.idiom_repo import ensure_idiom_schema, list_policies
@@ -771,16 +772,18 @@ def build_packets(
     if chapter_number is not None:
         targets = [chapter_number]
     else:
-        chapter_files = sorted(
-            paths.extracted_chapters_dir.glob("chapter-*.json"),
-            key=_chapter_number_from_path,
+        chapter_refs = list_extracted_chapters(
+            paths,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
         )
-        targets = [_chapter_number_from_path(path) for path in chapter_files]
+        targets = [ref.chapter_number for ref in chapter_refs]
 
-    if chapter_start is not None:
-        targets = [n for n in targets if n >= chapter_start]
-    if chapter_end is not None:
-        targets = [n for n in targets if n <= chapter_end]
+    if chapter_number is not None:
+        if chapter_start is not None:
+            targets = [n for n in targets if n >= chapter_start]
+        if chapter_end is not None:
+            targets = [n for n in targets if n <= chapter_end]
 
     if not targets:
         raise FileNotFoundError(

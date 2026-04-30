@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
+from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.idiom_repo import (
     ensure_idiom_schema,
     find_exact_policy,
@@ -178,6 +179,11 @@ def preprocess_idioms(
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    chapter_refs = list_extracted_chapters(
+        paths,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
+    )
 
     detect_prompt = load_prompt("idiom_detect.txt")
     translate_prompt = load_prompt("idiom_translate.txt")
@@ -192,11 +198,7 @@ def preprocess_idioms(
             run_id,
             release_id,
             f"{_STAGE_NAME}.started",
-            total_chapters=_filtered_chapter_count(
-                paths.extracted_chapters_dir,
-                chapter_start=chapter_start,
-                chapter_end=chapter_end,
-            ),
+            total_chapters=len(chapter_refs),
         )
         # Phase 1: Detect (Analyst)
         skip_chapters: set[int] = set()
@@ -218,6 +220,9 @@ def preprocess_idioms(
             chapter_start=chapter_start,
             chapter_end=chapter_end,
             skip_chapters=skip_chapters or None,
+            config=config_obj,
+            chapter_refs=chapter_refs,
+            cache_root=paths.release_root / "cache" / "llm",
             event_callback=lambda event_name, chapter_number, payload: _emit(
                 run_id,
                 release_id,
@@ -284,11 +289,7 @@ def preprocess_idioms(
             for candidate in detected_candidates
         }
     )
-    skipped_count = _filtered_chapter_count(
-        paths.extracted_chapters_dir,
-        chapter_start=chapter_start,
-        chapter_end=chapter_end,
-    ) - len(chapters_seen)
+    skipped_count = len(chapter_refs) - len(chapters_seen)
     _emit(
         run_id,
         release_id,

@@ -64,3 +64,10 @@ Cache may be represented as JSON artifacts plus SQLite metadata. Cached payloads
 - Parallel LLM calls.
 - Prompt template rewrites.
 - Changing validation rules.
+
+## Implementation Notes
+
+- `translate-range` supports opt-in `--batched-model-order`; the default remains per-chapter pass order.
+- Batched orchestration reuses the existing `translate_chapter_pass1/2/3` functions and persists pass progress in run state.
+- Preprocessing LLM output cache entries are JSON artifacts under `releases/{release_id}/cache/llm`.
+- Cached raw outputs are parsed through the same validation path as fresh model outputs; invalid cached payloads are regenerated.

@@ -9,6 +9,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 import zipfile
 
+from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -335,7 +336,8 @@ def rebuild_translated_epub(
     chapters_out.mkdir(parents=True, exist_ok=True)
 
     chapter_results: list[ChapterRebuildResult] = []
-    for chapter_path in sorted(paths.extracted_chapters_dir.glob("chapter-*.json")):
+    for chapter_ref in list_extracted_chapters(paths):
+        chapter_path = chapter_ref.chapter_path
         chapter_payload = _read_json(chapter_path)
         chapter_number = int(chapter_payload["chapter_number"])
         source_document_path = str(chapter_payload["source_document_path"])

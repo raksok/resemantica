@@ -80,6 +80,14 @@ def _add_chapter_range_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_batched_model_order_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--batched-model-order",
+        action="store_true",
+        help="Run translate-range as all pass1, then all pass2, then all pass3.",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="resemantica")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -223,6 +231,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to resemantica.toml",
     )
+    _add_batched_model_order_arg(translate_range)
     _add_verbose_arg(translate_range)
 
     tui_cmd = subparsers.add_parser(
@@ -247,6 +256,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the deterministic production plan without executing stages.",
     )
     _add_chapter_range_args(run_production_top)
+    _add_batched_model_order_arg(run_production_top)
     tui_cmd.add_argument(
         "--run",
         required=False,
@@ -280,6 +290,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the deterministic production plan without executing stages.",
     )
     _add_chapter_range_args(run_production)
+    _add_batched_model_order_arg(run_production)
 
     run_resume = run_subparsers.add_parser(
         "resume",
@@ -474,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=True,
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    batched_model_order=bool(getattr(args, "batched_model_order", False)),
                 )
                 for stage in result.metadata.get("stages", []):
                     print(stage["stage_name"])
@@ -483,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=False,
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    batched_model_order=bool(getattr(args, "batched_model_order", False)),
                 )
             )
             print(result.message)
@@ -541,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=True,
                 chapter_start=args.start,
                 chapter_end=args.end,
+                batched_model_order=bool(getattr(args, "batched_model_order", False)),
             )
             for stage in result.metadata.get("stages", []):
                 print(stage["stage_name"])
@@ -550,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=False,
                 chapter_start=args.start,
                 chapter_end=args.end,
+                batched_model_order=bool(getattr(args, "batched_model_order", False)),
             )
         )
         print(result.message)
@@ -573,6 +588,7 @@ def main(argv: list[str] | None = None) -> int:
                 "translate-range",
                 chapter_start=args.start,
                 chapter_end=args.end,
+                batched_model_order=bool(getattr(args, "batched_model_order", False)),
             )
         )
         print(f"status={'success' if result.success else 'failed'}")

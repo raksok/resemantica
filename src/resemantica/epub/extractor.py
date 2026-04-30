@@ -11,6 +11,7 @@ from resemantica.epub.models import ChapterDocument, ChapterParseResult, RoundTr
 from resemantica.epub.parser import parse_chapters
 from resemantica.epub.rebuild import rebuild_epub
 from resemantica.epub.validators import validate_extraction
+from resemantica.chapters.manifest import write_chapter_manifest
 from resemantica.db.extraction_repo import ExtractionRepo
 from resemantica.db.sqlite import open_connection
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -175,6 +176,7 @@ def extract_epub(
         chapter_dir=paths.extracted_chapters_dir,
         placeholder_dir=paths.extracted_placeholders_dir,
     )
+    write_chapter_manifest(paths)
     conn = open_connection(paths.db_path)
     try:
         repo = ExtractionRepo(conn)

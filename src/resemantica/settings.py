@@ -46,11 +46,18 @@ class BudgetConfig:
 class TranslationConfig:
     pass3_default: bool = True
     risk_threshold_high: float = 0.7
+    batched_model_order: bool = False
 
 
 @dataclass(slots=True)
 class SummariesConfig:
     exclude_chapter_patterns: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class EventsConfig:
+    persistence_mode: str = "normal"
+    progress_sample_every: int = 25
 
 
 @dataclass(slots=True)
@@ -61,6 +68,7 @@ class AppConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
+    events: EventsConfig = field(default_factory=EventsConfig)
 
 
 @dataclass(slots=True)
@@ -70,6 +78,7 @@ class DerivedPaths:
     release_root: Path
     unpacked_dir: Path
     extracted_chapters_dir: Path
+    extracted_chapter_manifest_path: Path
     extracted_reports_dir: Path
     extracted_placeholders_dir: Path
     glossary_dir: Path
@@ -160,6 +169,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     budget = _table(raw, "budget")
     translation = _table(raw, "translation")
     summaries = _table(raw, "summaries")
+    events = _table(raw, "events")
 
     config = AppConfig(
         models=ModelsConfig(
@@ -231,6 +241,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 ),
                 "translation.risk_threshold_high",
             ),
+            batched_model_order=_as_bool(
+                translation.get(
+                    "batched_model_order",
+                    TranslationConfig().batched_model_order,
+                ),
+                "translation.batched_model_order",
+            ),
         ),
         summaries=SummariesConfig(
             exclude_chapter_patterns=_as_str_list(
@@ -239,6 +256,16 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                     SummariesConfig().exclude_chapter_patterns,
                 ),
                 "summaries.exclude_chapter_patterns",
+            ),
+        ),
+        events=EventsConfig(
+            persistence_mode=_as_str(
+                events.get("persistence_mode", EventsConfig().persistence_mode),
+                "events.persistence_mode",
+            ),
+            progress_sample_every=_as_int(
+                events.get("progress_sample_every", EventsConfig().progress_sample_every),
+                "events.progress_sample_every",
             ),
         ),
     )
@@ -266,6 +293,10 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("llm.max_retries must be >= 0.")
     if config.translation.risk_threshold_high < 0 or config.translation.risk_threshold_high > 1:
         raise ValueError("translation.risk_threshold_high must be in [0.0, 1.0].")
+    if config.events.persistence_mode not in {"normal", "reduced"}:
+        raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
+    if config.events.progress_sample_every <= 0:
+        raise ValueError("events.progress_sample_every must be > 0.")
     if not config.paths.artifact_root.strip():
         raise ValueError("paths.artifact_root must not be empty.")
     if not config.paths.db_filename.strip():
@@ -291,6 +322,7 @@ def derive_paths(
         release_root=release_root,
         unpacked_dir=release_root / "work" / "unpacked",
         extracted_chapters_dir=extracted_root / "chapters",
+        extracted_chapter_manifest_path=extracted_root / "chapter-manifest.json",
         extracted_reports_dir=extracted_root / "reports",
         extracted_placeholders_dir=extracted_root / "placeholders",
         glossary_dir=release_root / "glossary",

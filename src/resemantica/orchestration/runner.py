@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from resemantica.chapters.manifest import list_extracted_chapters
+from resemantica.llm.client import LLMClient
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.tracking.models import RunState
 from resemantica.tracking.repo import ensure_tracking_db, load_run_state, save_run_state
@@ -64,6 +66,7 @@ class OrchestrationRunner:
         dry_run: bool = False,
         chapter_start: int | None = None,
         chapter_end: int | None = None,
+        batched_model_order: bool | None = None,
     ) -> StageResult:
         plan = self.plan_production(chapter_start=chapter_start, chapter_end=chapter_end)
         if dry_run:
@@ -79,6 +82,7 @@ class OrchestrationRunner:
             stage_result = self.run_stage(
                 item["stage_name"],
                 **dict(item.get("options", {})),
+                batched_model_order=batched_model_order,
             )
             completed.append(item["stage_name"])
             if not stage_result.success:
@@ -115,6 +119,7 @@ class OrchestrationRunner:
         scope: str = "run",
         dry_run: bool = False,
         force: bool = False,
+        batched_model_order: bool | None = None,
     ) -> StageResult:
         if stage_name not in CALLABLE_STAGES:
             return StageResult(
@@ -161,6 +166,7 @@ class OrchestrationRunner:
                 scope=scope,
                 dry_run=dry_run,
                 force=force,
+                batched_model_order=batched_model_order,
             )
         except Exception as exc:
             result = StageResult(success=False, stage_name=stage_name, message=str(exc))
@@ -188,16 +194,13 @@ class OrchestrationRunner:
         chapter_end: int | None,
     ) -> tuple[int, int]:
         paths = derive_paths(self.config, release_id=self.release_id)
-        chapter_files = sorted(
-            paths.extracted_chapters_dir.glob("chapter-*.json"),
-            key=self._chapter_number_from_path,
-        )
-        if not chapter_files:
+        chapter_refs = list_extracted_chapters(paths)
+        if not chapter_refs:
             raise ValueError(
                 f"No extracted chapters found for release {self.release_id}: "
                 f"{paths.extracted_chapters_dir}"
             )
-        chapter_numbers = [self._chapter_number_from_path(path) for path in chapter_files]
+        chapter_numbers = [ref.chapter_number for ref in chapter_refs]
         resolved_start = chapter_start if chapter_start is not None else min(chapter_numbers)
         resolved_end = chapter_end if chapter_end is not None else max(chapter_numbers)
         if resolved_start < 1 or resolved_end < 1:
@@ -249,6 +252,7 @@ class OrchestrationRunner:
         scope: str,
         dry_run: bool,
         force: bool,
+        batched_model_order: bool | None,
     ) -> StageResult:
         if stage_name == "preprocess-glossary":
             from resemantica.glossary.pipeline import (
@@ -345,7 +349,17 @@ class OrchestrationRunner:
                 )
             except ValueError as exc:
                 return StageResult(False, stage_name, str(exc))
-            return self._translate_range(chapter_start=chapter_start, chapter_end=chapter_end, force=force)
+            use_batched = (
+                self.config.translation.batched_model_order
+                if batched_model_order is None
+                else batched_model_order
+            )
+            return self._translate_range(
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+                force=force,
+                batched_model_order=use_batched,
+            )
 
         if stage_name == "epub-rebuild":
             from resemantica.epub.rebuild import rebuild_translated_epub
@@ -384,6 +398,11 @@ class OrchestrationRunner:
             translate_chapter_pass2,
             translate_chapter_pass3,
         )
+        llm_client = LLMClient(
+            base_url=self.config.llm.base_url,
+            timeout_seconds=self.config.llm.timeout_seconds,
+            max_retries=self.config.llm.max_retries,
+        )
 
         emit_event(
             self.run_id,
@@ -398,6 +417,7 @@ class OrchestrationRunner:
             chapter_number=chapter_number,
             run_id=self.run_id,
             config=self.config,
+            llm_client=llm_client,
             force=force,
         )
         emit_event(
@@ -414,6 +434,7 @@ class OrchestrationRunner:
             chapter_number=chapter_number,
             run_id=self.run_id,
             config=self.config,
+            llm_client=llm_client,
             force=force,
         )
         emit_event(
@@ -430,6 +451,7 @@ class OrchestrationRunner:
             chapter_number=chapter_number,
             run_id=self.run_id,
             config=self.config,
+            llm_client=llm_client,
         )
         if pass3_result.get("pass3_artifact"):
             emit_event(
@@ -470,7 +492,14 @@ class OrchestrationRunner:
         chapter_start: int,
         chapter_end: int,
         force: bool = False,
+        batched_model_order: bool = False,
     ) -> StageResult:
+        if batched_model_order:
+            return self._translate_range_batched(
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+                force=force,
+            )
         completed: list[int] = []
         failures: dict[int, str] = {}
         for chapter_number in range(chapter_start, chapter_end + 1):
@@ -493,6 +522,174 @@ class OrchestrationRunner:
             metadata={"completed_chapters": completed, "failures": failures},
         )
 
+    def _translate_range_batched(
+        self,
+        *,
+        chapter_start: int,
+        chapter_end: int,
+        force: bool = False,
+    ) -> StageResult:
+        from resemantica.translation.pipeline import (
+            translate_chapter_pass1,
+            translate_chapter_pass2,
+            translate_chapter_pass3,
+        )
+
+        chapters = list(range(chapter_start, chapter_end + 1))
+        pass1_completed: list[int] = []
+        pass2_completed: list[int] = []
+        pass3_completed: list[int] = []
+        failures: dict[int, str] = {}
+        client = LLMClient(
+            base_url=self.config.llm.base_url,
+            timeout_seconds=self.config.llm.timeout_seconds,
+            max_retries=self.config.llm.max_retries,
+        )
+
+        for chapter_number in chapters:
+            emit_event(
+                self.run_id,
+                self.release_id,
+                "chapter_started",
+                "translate-chapter",
+                chapter_number=chapter_number,
+                message=f"Chapter {chapter_number} translation started",
+            )
+            try:
+                result = translate_chapter_pass1(
+                    release_id=self.release_id,
+                    chapter_number=chapter_number,
+                    run_id=self.run_id,
+                    config=self.config,
+                    llm_client=client,
+                    force=force,
+                )
+                pass1_completed.append(chapter_number)
+                emit_event(
+                    self.run_id,
+                    self.release_id,
+                    "artifact_written",
+                    "translate-chapter",
+                    chapter_number=chapter_number,
+                    message="Pass1 artifact written",
+                    payload={"artifact_path": result.get("pass1_artifact"), "pass_name": "pass1"},
+                )
+            except Exception as exc:
+                failures[chapter_number] = str(exc)
+                break
+            self._update_run_state(
+                "translate-range",
+                "running",
+                {
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+            )
+
+        for chapter_number in pass1_completed:
+            if failures:
+                break
+            try:
+                result = translate_chapter_pass2(
+                    release_id=self.release_id,
+                    chapter_number=chapter_number,
+                    run_id=self.run_id,
+                    config=self.config,
+                    llm_client=client,
+                    force=force,
+                )
+                pass2_completed.append(chapter_number)
+                emit_event(
+                    self.run_id,
+                    self.release_id,
+                    "artifact_written",
+                    "translate-chapter",
+                    chapter_number=chapter_number,
+                    message="Pass2 artifact written",
+                    payload={"artifact_path": result.get("pass2_artifact"), "pass_name": "pass2"},
+                )
+            except Exception as exc:
+                failures[chapter_number] = str(exc)
+                break
+            self._update_run_state(
+                "translate-range",
+                "running",
+                {
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+            )
+
+        for chapter_number in pass2_completed:
+            if failures:
+                break
+            try:
+                result = translate_chapter_pass3(
+                    release_id=self.release_id,
+                    chapter_number=chapter_number,
+                    run_id=self.run_id,
+                    config=self.config,
+                    llm_client=client,
+                )
+                pass3_completed.append(chapter_number)
+                if result.get("pass3_artifact"):
+                    emit_event(
+                        self.run_id,
+                        self.release_id,
+                        "artifact_written",
+                        "translate-chapter",
+                        chapter_number=chapter_number,
+                        message="Pass3 artifact written",
+                        payload={"artifact_path": result.get("pass3_artifact"), "pass_name": "pass3"},
+                    )
+                emit_event(
+                    self.run_id,
+                    self.release_id,
+                    "chapter_completed",
+                    "translate-chapter",
+                    chapter_number=chapter_number,
+                    message=f"Chapter {chapter_number} translation completed",
+                )
+            except Exception as exc:
+                failures[chapter_number] = str(exc)
+                break
+            self._update_run_state(
+                "translate-range",
+                "running",
+                {
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+            )
+
+        checkpoint = {
+            "batched_model_order": True,
+            "pass1_completed": pass1_completed,
+            "pass2_completed": pass2_completed,
+            "pass3_completed": pass3_completed,
+            "failures": failures,
+        }
+        return StageResult(
+            success=not failures,
+            stage_name="translate-range",
+            message=(
+                f"Batched translation pass1={len(pass1_completed)}, "
+                f"pass2={len(pass2_completed)}, pass3={len(pass3_completed)}, "
+                f"failures={len(failures)}"
+            ),
+            checkpoint=checkpoint,
+            metadata=checkpoint,
+        )
+
 
 def run_stage(
     release_id: str,
@@ -506,6 +703,7 @@ def run_stage(
     scope: str = "run",
     dry_run: bool = False,
     force: bool = False,
+    batched_model_order: bool | None = None,
 ) -> StageResult:
     runner = OrchestrationRunner(release_id=release_id, run_id=run_id)
     return runner.run_stage(
@@ -517,4 +715,5 @@ def run_stage(
         scope=scope,
         dry_run=dry_run,
         force=force,
+        batched_model_order=batched_model_order,
     )

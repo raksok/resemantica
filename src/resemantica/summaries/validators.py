@@ -6,8 +6,10 @@ import re
 from typing import Any
 
 from resemantica.glossary.models import LockedGlossaryEntry
+from resemantica.llm.budget import ensure_prompt_within_budget
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
+from resemantica.settings import AppConfig
 
 _REQUIRED_FIELDS = {
     "chapter_number",
@@ -210,6 +212,7 @@ def validate_chinese_summary_content(
     source_text_zh: str,
     structured_summary: dict[str, object],
     locked_glossary: list[LockedGlossaryEntry],
+    config: AppConfig | None = None,
 ) -> list[str]:
     prompt = render_named_sections(
         prompt_template,
@@ -220,6 +223,14 @@ def validate_chinese_summary_content(
             "LOCKED_GLOSSARY": _glossary_context(locked_glossary),
         },
     )
+    if config is not None:
+        chapter_number = structured_summary.get("chapter_number")
+        ensure_prompt_within_budget(
+            prompt,
+            config=config,
+            stage_name="preprocess-summaries.validation",
+            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
+        )
     raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
     try:
         parsed = json.loads(raw)

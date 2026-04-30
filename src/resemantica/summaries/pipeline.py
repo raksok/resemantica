@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import ensure_glossary_schema, list_locked_entries
 from resemantica.db.sqlite import open_connection
 from resemantica.db.summary_repo import (
@@ -17,6 +18,7 @@ from resemantica.db.summary_repo import (
     save_validated_summary,
 )
 from resemantica.llm.client import LLMClient
+from resemantica.llm.budget import PromptBudgetError
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -111,16 +113,12 @@ def preprocess_summaries(
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
-    chapter_files = sorted(
-        paths.extracted_chapters_dir.glob("chapter-*.json"),
-        key=_chapter_number_from_path,
+    chapter_refs = list_extracted_chapters(
+        paths,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
     )
-    if chapter_start is not None or chapter_end is not None:
-        chapter_files = [
-            f for f in chapter_files
-            if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
-            and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
-        ]
+    chapter_files = [ref.chapter_path for ref in chapter_refs]
     _exclude_patterns = config_obj.summaries.exclude_chapter_patterns
     _exclude_compiled = [re.compile(p) for p in _exclude_patterns] if _exclude_patterns else []
     if not chapter_files:
@@ -181,6 +179,8 @@ def preprocess_summaries(
                 model_name=config_obj.models.analyst_name,
                 prompt_template=prompt_structured.template,
                 prompt_version=prompt_structured.version,
+                config=config_obj,
+                cache_root=paths.release_root / "cache" / "llm",
             )
             if generated is None:
                 if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
@@ -226,14 +226,33 @@ def preprocess_summaries(
                 status=generated.validation.status,
             )
 
-            llm_validation_flags = validate_chinese_summary_content(
-                llm_client=client,
-                model_name=config_obj.models.analyst_name,
-                prompt_template=prompt_validate.template,
-                source_text_zh=source_text_zh,
-                structured_summary=generated.structured_summary,
-                locked_glossary=locked_glossary,
-            )
+            try:
+                llm_validation_flags = validate_chinese_summary_content(
+                    llm_client=client,
+                    model_name=config_obj.models.analyst_name,
+                    prompt_template=prompt_validate.template,
+                    source_text_zh=source_text_zh,
+                    structured_summary=generated.structured_summary,
+                    locked_glossary=locked_glossary,
+                    config=config_obj,
+                )
+            except PromptBudgetError:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_skipped",
+                    chapter_number=chapter_number,
+                    reason="prompt_budget_exceeded",
+                )
+                chapter_results.append(
+                    {
+                        "chapter_number": chapter_number,
+                        "chapter_source_hash": chapter_source_hash,
+                        "status": "skipped",
+                        "reason": "prompt_budget_exceeded",
+                    }
+                )
+                continue
 
             short_summaries = list_validated_summaries(
                 conn,

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.graph_repo import (
     ensure_graph_schema,
     list_deferred_entities,
@@ -142,6 +143,11 @@ def preprocess_graph(
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    chapter_refs = list_extracted_chapters(
+        paths,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
+    )
     graph = _build_graph_client(paths, graph_client)
 
     prompt = load_prompt("graph_extract.txt")
@@ -159,11 +165,7 @@ def preprocess_graph(
             run_id,
             release_id,
             f"{_STAGE_NAME}.started",
-            total_chapters=_filtered_chapter_count(
-                paths.extracted_chapters_dir,
-                chapter_start=chapter_start,
-                chapter_end=chapter_end,
-            ),
+            total_chapters=len(chapter_refs),
         )
         locked_glossary = list_locked_entries(conn, release_id=release_id)
 
@@ -182,9 +184,13 @@ def preprocess_graph(
             llm_client=llm_client_internal,
             model_name=config_obj.models.analyst_name,
             prompt_template=prompt.template,
+            prompt_version=prompt.version,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
             skip_chapters=skip_chapters or None,
+            config=config_obj,
+            chapter_refs=chapter_refs,
+            cache_root=paths.release_root / "cache" / "llm",
             event_callback=lambda event_name, chapter_number, payload: _emit(
                 run_id,
                 release_id,
@@ -329,11 +335,7 @@ def preprocess_graph(
         extracted=len(provisional_entities),
         skipped=max(
             0,
-            _filtered_chapter_count(
-                paths.extracted_chapters_dir,
-                chapter_start=chapter_start,
-                chapter_end=chapter_end,
-            ) - len({appearance.chapter_number for appearance in provisional_appearances}),
+            len(chapter_refs) - len({appearance.chapter_number for appearance in provisional_appearances}),
         ),
     )
     return {

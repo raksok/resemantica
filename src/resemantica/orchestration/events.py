@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional
 
 from loguru import logger
 
+from resemantica.settings import EventsConfig, load_config
 from resemantica.tracking.models import Event
 from resemantica.tracking.repo import ensure_tracking_db, save_event
 
@@ -12,8 +13,16 @@ _EventCallback = Callable[[Event], None]
 
 
 class EventBus:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        persistence_mode: str | None = None,
+        progress_sample_every: int | None = None,
+    ) -> None:
         self._subscribers: dict[str, list[_EventCallback]] = defaultdict(list)
+        self._persistence_mode = persistence_mode
+        self._progress_sample_every = progress_sample_every
+        self._progress_counts: dict[tuple[str, str], int] = defaultdict(int)
 
     def subscribe(self, event_type: str, callback: _EventCallback) -> None:
         callbacks = self._subscribers[event_type]
@@ -26,11 +35,12 @@ class EventBus:
             callbacks.remove(callback)
 
     def publish(self, event: Event) -> Event:
-        conn = ensure_tracking_db(event.release_id or "")
-        try:
-            save_event(conn, event)
-        finally:
-            conn.close()
+        if self._should_persist(event):
+            conn = ensure_tracking_db(event.release_id or "")
+            try:
+                save_event(conn, event)
+            finally:
+                conn.close()
 
         callbacks = [
             *self._subscribers.get(event.event_type, []),
@@ -44,6 +54,61 @@ class EventBus:
                     "Event subscriber failed for {}", event.event_type
                 )
         return event
+
+    def _events_config(self) -> EventsConfig:
+        if self._persistence_mode is not None and self._progress_sample_every is not None:
+            return EventsConfig(
+                persistence_mode=self._persistence_mode,
+                progress_sample_every=self._progress_sample_every,
+            )
+        try:
+            return load_config().events
+        except Exception:
+            return EventsConfig()
+
+    def _should_persist(self, event: Event) -> bool:
+        config = self._events_config()
+        if config.persistence_mode == "normal":
+            return True
+        if _is_critical_event(event):
+            return True
+        if not _is_sampled_progress_event(event.event_type):
+            return True
+
+        key = (event.run_id, event.event_type)
+        self._progress_counts[key] += 1
+        count = self._progress_counts[key]
+        return count == 1 or count % config.progress_sample_every == 0
+
+
+def _is_critical_event(event: Event) -> bool:
+    event_type = event.event_type
+    if event.severity in {"warning", "error"}:
+        return True
+    if event_type in {"validation_failed", "risk_detected"}:
+        return True
+    if event_type.endswith("_failed") or event_type.endswith(".failed"):
+        return True
+    if event_type.endswith("_skipped") or event_type.endswith(".chapter_skipped"):
+        return True
+    if event_type.endswith("_artifact_written") or event_type.endswith(".artifact_written"):
+        return True
+    if _is_sampled_progress_event(event_type):
+        return False
+    return (
+        event_type.endswith("_started")
+        or event_type.endswith("_completed")
+        or event_type.endswith(".started")
+        or event_type.endswith(".completed")
+    )
+
+
+def _is_sampled_progress_event(event_type: str) -> bool:
+    return (
+        ".paragraph_" in event_type
+        or ".chapter_" in event_type
+        or event_type in {"paragraph_started", "paragraph_completed", "chapter_started", "chapter_completed"}
+    )
 
 
 default_event_bus = EventBus()

@@ -7,10 +7,19 @@ from pathlib import Path
 import re
 from typing import Any, Callable
 
+from resemantica.chapters.manifest import ChapterRef
 from resemantica.idioms.models import IdiomCandidate
 from resemantica.idioms.validators import normalize_idiom_source
+from resemantica.llm.budget import (
+    PromptBudgetError,
+    chunk_text_for_prompt,
+    ensure_prompt_within_budget,
+)
+from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
+from resemantica.llm.tokens import count_tokens
+from resemantica.settings import AppConfig, load_config
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
@@ -128,23 +137,40 @@ def extract_idioms(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     skip_chapters: set[int] | None = None,
+    config: AppConfig | None = None,
+    chapter_refs: list[ChapterRef] | None = None,
+    cache_root: Path | None = None,
     event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
 ) -> list[IdiomCandidate]:
-    chapter_files = sorted(
-        extracted_chapters_dir.glob("chapter-*.json"),
-        key=_chapter_number_from_path,
-    )
-    if chapter_start is not None or chapter_end is not None:
-        chapter_files = [
-            f for f in chapter_files
-            if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
-            and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
+    config_obj = config or load_config()
+    refs = chapter_refs
+    if refs is None:
+        chapter_files = sorted(
+            extracted_chapters_dir.glob("chapter-*.json"),
+            key=_chapter_number_from_path,
+        )
+        if chapter_start is not None or chapter_end is not None:
+            chapter_files = [
+                f for f in chapter_files
+                if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
+                and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
+            ]
+        refs = [
+            ChapterRef(
+                chapter_number=_chapter_number_from_path(path),
+                chapter_path=path,
+                placeholder_path=path,
+                source_document_path=None,
+                chapter_source_hash=None,
+            )
+            for path in chapter_files
         ]
     candidates: list[IdiomCandidate] = []
 
-    for chapter_file in chapter_files:
+    for chapter_ref in refs:
+        chapter_file = chapter_ref.chapter_path
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
-        chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))
+        chapter_number = int(payload.get("chapter_number", chapter_ref.chapter_number))
         if event_callback is not None:
             event_callback("chapter_started", chapter_number, {})
 
@@ -159,25 +185,114 @@ def extract_idioms(
                 event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
             continue
 
-        prompt = render_named_sections(
+        static_prompt = render_named_sections(
             prompt_template,
             {
                 "CHAPTER_NUMBER": str(chapter_number),
-                "SOURCE_TEXT_ZH": source_text_zh,
+                "SOURCE_TEXT_ZH": "",
             },
         )
-        raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
         try:
-            detected_rows = _parse_detected_idioms(raw)
-        except json.JSONDecodeError:
-            print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
+            chunks = chunk_text_for_prompt(
+                source_text_zh,
+                config=config_obj,
+                static_prompt_tokens=count_tokens(static_prompt),
+            )
+        except PromptBudgetError:
             if event_callback is not None:
-                event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
+                event_callback("chapter_skipped", chapter_number, {"reason": "prompt_budget_exceeded"})
             continue
-        except ValueError:
-            print(f"  WARN: chapter {chapter_number}: parse error, skipping")
-            if event_callback is not None:
-                event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
+
+        detected_rows: list[_DetectedIdiom] = []
+        chapter_skipped = False
+        for chunk in chunks:
+            chunk_text = (
+                source_text_zh
+                if chunk.chunk_count == 1
+                else f"[Chunk {chunk.chunk_index}/{chunk.chunk_count}]\n{chunk.text}"
+            )
+            prompt = render_named_sections(
+                prompt_template,
+                {
+                    "CHAPTER_NUMBER": str(chapter_number),
+                    "SOURCE_TEXT_ZH": chunk_text,
+                },
+            )
+            try:
+                ensure_prompt_within_budget(
+                    prompt,
+                    config=config_obj,
+                    stage_name="preprocess-idioms.detect",
+                    chapter_number=chapter_number,
+                )
+            except PromptBudgetError:
+                if event_callback is not None:
+                    event_callback("chapter_skipped", chapter_number, {"reason": "prompt_budget_exceeded"})
+                chapter_skipped = True
+                break
+
+            identity = LLMCacheIdentity(
+                release_id=release_id,
+                chapter_number=chapter_number,
+                source_hash=str(payload.get("chapter_source_hash") or ""),
+                stage_name="preprocess-idioms.detect",
+                chunk_index=chunk.chunk_index,
+                model_name=model_name,
+                prompt_version=prompt_version,
+                prompt_hash=hash_prompt(prompt),
+            )
+            cached = load_cached_text(cache_root, identity) if cache_root is not None else None
+            raw = (
+                cached
+                if cached is not None
+                else llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
+            )
+            if cache_root is not None and cached is None:
+                save_cached_text(cache_root, identity, raw)
+            try:
+                parsed_rows = _parse_detected_idioms(raw)
+            except json.JSONDecodeError:
+                if cached is not None:
+                    assert cache_root is not None
+                    raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
+                    save_cached_text(cache_root, identity, raw)
+                    try:
+                        parsed_rows = _parse_detected_idioms(raw)
+                    except (json.JSONDecodeError, ValueError):
+                        print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
+                        if event_callback is not None:
+                            event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
+                        chapter_skipped = True
+                        break
+                    detected_rows.extend(parsed_rows)
+                    continue
+                print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
+                if event_callback is not None:
+                    event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
+                chapter_skipped = True
+                break
+            except ValueError:
+                if cached is not None:
+                    assert cache_root is not None
+                    raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
+                    save_cached_text(cache_root, identity, raw)
+                    try:
+                        parsed_rows = _parse_detected_idioms(raw)
+                    except (json.JSONDecodeError, ValueError):
+                        print(f"  WARN: chapter {chapter_number}: parse error, skipping")
+                        if event_callback is not None:
+                            event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
+                        chapter_skipped = True
+                        break
+                    detected_rows.extend(parsed_rows)
+                    continue
+                print(f"  WARN: chapter {chapter_number}: parse error, skipping")
+                if event_callback is not None:
+                    event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
+                chapter_skipped = True
+                break
+            detected_rows.extend(parsed_rows)
+        if chapter_skipped:
             continue
 
         for index, detected in enumerate(detected_rows):

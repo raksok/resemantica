@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 from typing import Any, Callable
 
@@ -16,16 +16,19 @@ class LLMClient:
     timeout_seconds: int
     max_retries: int = 2
     generation_hook: GenerationHook | None = None
+    _openai_client: Any | None = field(default=None, init=False, repr=False)
+    openai_request_count: int = field(default=0, init=False)
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:
         if self.generation_hook is not None:
             return self.generation_hook(model_name, prompt)
 
-        client = self._build_openai_client()
+        client = self._get_openai_client()
         last_error: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
             try:
+                self.openai_request_count += 1
                 response: Any = client.chat.completions.create(
                     model=model_name,
                     messages=[{"role": "user", "content": prompt}],
@@ -41,6 +44,11 @@ class LLMClient:
         if last_error is None:  # pragma: no cover - defensive fallback
             raise RuntimeError("LLM generation failed with unknown error.")
         raise RuntimeError(f"LLM generation failed: {last_error}") from last_error
+
+    def _get_openai_client(self) -> Any:
+        if self._openai_client is None:
+            self._openai_client = self._build_openai_client()
+        return self._openai_client
 
     def translate_glossary_candidate(
         self,
