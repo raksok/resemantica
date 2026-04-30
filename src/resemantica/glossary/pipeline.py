@@ -24,7 +24,14 @@ from resemantica.glossary.discovery import discover_candidates_from_extracted
 from resemantica.glossary.validators import normalize_term, validate_candidates_for_promotion
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt
+from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
+
+_STAGE_NAME = "preprocess-glossary"
+
+
+def _chapter_number_from_path(path: Path) -> int:
+    return int(path.stem.split("-", 1)[1])
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -43,6 +50,45 @@ def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMCli
         timeout_seconds=config.llm.timeout_seconds,
         max_retries=config.llm.max_retries,
     )
+
+
+def _filtered_chapter_count(
+    extracted_chapters_dir: Path,
+    *,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
+) -> int:
+    chapter_files = sorted(
+        extracted_chapters_dir.glob("chapter-*.json"),
+        key=_chapter_number_from_path,
+    )
+    return len(
+        [
+            path
+            for path in chapter_files
+            if (chapter_start is None or _chapter_number_from_path(path) >= chapter_start)
+            and (chapter_end is None or _chapter_number_from_path(path) <= chapter_end)
+        ]
+    )
+
+
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    chapter_number = kwargs.pop("chapter_number", None)
+    message = str(kwargs.pop("message", ""))
+    severity = str(kwargs.pop("severity", "info"))
+    try:
+        emit_event(
+            run_id,
+            release_id,
+            event_type,
+            _STAGE_NAME,
+            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
+            severity=severity,
+            message=message,
+            payload=dict(kwargs),
+        )
+    except Exception:
+        pass
 
 
 def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
@@ -83,6 +129,16 @@ def discover_glossary_candidates(
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     prompt = load_prompt("glossary_discover.txt")
     client = _build_llm_client(config_obj, llm_client)
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.started",
+        total_chapters=_filtered_chapter_count(
+            paths.extracted_chapters_dir,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+        ),
+    )
     discovered = discover_candidates_from_extracted(
         release_id=release_id,
         extracted_chapters_dir=paths.extracted_chapters_dir,
@@ -93,6 +149,13 @@ def discover_glossary_candidates(
         prompt_version=prompt.version,
         chapter_start=chapter_start,
         chapter_end=chapter_end,
+        event_callback=lambda event_name, chapter_number, payload: _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.{event_name}",
+            chapter_number=chapter_number,
+            **payload,
+        ),
     )
 
     conn = open_connection(paths.db_path)
@@ -133,7 +196,24 @@ def translate_glossary_candidates(
     ensure_glossary_schema(conn)
     try:
         pending = list_candidates_for_translation(conn, release_id=release_id)
+        active_chapter: int | None = None
         for candidate in pending:
+            chapter = candidate.first_seen_chapter
+            if active_chapter != chapter:
+                if active_chapter is not None:
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.translate.chapter_completed",
+                        chapter_number=active_chapter,
+                    )
+                active_chapter = chapter
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.translate.chapter_started",
+                    chapter_number=chapter,
+                )
             translated = client.translate_glossary_candidate(
                 model_name=config_obj.models.translator_name,
                 prompt_template=prompt.template,
@@ -150,6 +230,13 @@ def translate_glossary_candidates(
                 normalized_target_term=normalized_target,
                 translator_model_name=config_obj.models.translator_name,
                 translator_prompt_version=prompt.version,
+            )
+        if active_chapter is not None:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.translate.chapter_completed",
+                chapter_number=active_chapter,
             )
 
         _write_candidate_snapshot(
@@ -182,6 +269,7 @@ def promote_glossary_candidates(
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
     try:
+        _emit(run_id, release_id, f"{_STAGE_NAME}.promote.started")
         promotable_candidates = list_candidates_for_promotion(conn, release_id=release_id)
         existing_entries = list_locked_entries(conn, release_id=release_id)
         promotion_entries, conflicts = validate_candidates_for_promotion(
@@ -216,6 +304,20 @@ def promote_glossary_candidates(
             conn,
             release_id=release_id,
             output_path=paths.glossary_conflicts_path,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.promote.completed",
+            promoted_count=len(promotable_without_conflicts),
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.completed",
+            discovered=len(list_candidates(conn, release_id=release_id)),
+            translated=len(promotable_candidates),
+            promoted=len(promotable_without_conflicts),
         )
     finally:
         conn.close()

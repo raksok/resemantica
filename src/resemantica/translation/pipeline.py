@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 import re
 from typing import Any
+
+from loguru import logger
 
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.models import PlaceholderEntry
@@ -26,8 +27,6 @@ from resemantica.translation.validators import (
     validate_pass3_integrity,
     validate_structure,
 )
-
-logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_RE = re.compile(r"\u27e6/?[A-Z]+_\d+\u27e7")
 
@@ -100,7 +99,7 @@ def _emit_translation_event(
             payload=payload,
         )
     except Exception:
-        logger.debug("Failed to emit translation event %s", event_type, exc_info=True)
+        logger.opt(exception=True).debug("Failed to emit translation event {}", event_type)
 
 
 def _is_blocking_restore_warning(warning: str) -> bool:
@@ -204,7 +203,7 @@ def translate_chapter_pass1(
         ):
             pass1_payload = _read_json(Path(pass1_checkpoint.artifact_path))
             pass1_structure_checks = list(pass1_payload.get("structure_validation", []))
-            logger.info("Chapter %d pass1: using cached artifact", chapter_number)
+            logger.info("Chapter {} pass1: using cached artifact", chapter_number)
         else:
             pass1_blocks: list[dict[str, Any]] = []
 
@@ -297,7 +296,7 @@ def translate_chapter_pass1(
                             "errors": structure.errors,
                         }
                     )
-                    logger.warning("Chapter %d block %s: pass1 failed", chapter_number, block_id)
+                    logger.warning("Chapter {} block {}: pass1 failed", chapter_number, block_id)
                     continue
 
                 retry_segments = _split_for_retry(cleaned_source, max_chars=750)
@@ -315,7 +314,7 @@ def translate_chapter_pass1(
                             "errors": structure.errors,
                         }
                     )
-                    logger.warning("Chapter %d block %s: pass1 failed", chapter_number, block_id)
+                    logger.warning("Chapter {} block {}: pass1 failed", chapter_number, block_id)
                     _emit_translation_event(
                         release_id=release_id,
                         run_id=run_id,
@@ -382,7 +381,11 @@ def translate_chapter_pass1(
                     }
                 )
                 if segment_failed:
-                    logger.warning("Chapter %d block %s: resegmentation failed", chapter_number, parent_block_id)
+                    logger.warning(
+                        "Chapter {} block {}: resegmentation failed",
+                        chapter_number,
+                        parent_block_id,
+                    )
                     _emit_translation_event(
                         release_id=release_id,
                         run_id=run_id,
@@ -420,7 +423,12 @@ def translate_chapter_pass1(
             )
             if pass1_failed:
                 failed_count = sum(1 for b in pass1_blocks if b.get("status") == "failed")
-                logger.warning("Chapter %d pass1: %d/%d blocks failed, proceeding to pass2", chapter_number, failed_count, len(pass1_blocks))
+                logger.warning(
+                    "Chapter {} pass1: {}/{} blocks failed, proceeding to pass2",
+                    chapter_number,
+                    failed_count,
+                    len(pass1_blocks),
+                )
 
         return {
             "status": str(pass1_payload.get("status", "unknown")),
@@ -503,7 +511,7 @@ def translate_chapter_pass2(
             pass2_structure_checks = list(cached_payload.get("structure_validation", []))
             fidelity_checks = list(cached_payload.get("fidelity_validation", []))
             pass2_payload = cached_payload
-            logger.info("Chapter %d pass2: using cached artifact", chapter_number)
+            logger.info("Chapter {} pass2: using cached artifact", chapter_number)
         else:
             pass2_blocks = []
             pass2_structure_checks = []
@@ -788,7 +796,7 @@ def translate_chapter_pass3(
     pass3_artifact_path = translation_dir / "pass3.json"
 
     if not pass2_artifact_path.exists():
-        logger.warning("Chapter %d pass3: pass2 artifact not found, skipping", chapter_number)
+        logger.warning("Chapter {} pass3: pass2 artifact not found, skipping", chapter_number)
         return {"status": "skipped", "pass3_artifact": None}
 
     pass2_payload = _read_json(pass2_artifact_path)
@@ -821,7 +829,7 @@ def translate_chapter_pass3(
             and pass3_checkpoint.status == "success"
             and Path(pass3_checkpoint.artifact_path).exists()
         ):
-            logger.info("Chapter %d pass3: using cached artifact", chapter_number)
+            logger.info("Chapter {} pass3: using cached artifact", chapter_number)
             return {
                 "status": "success",
                 "pass3_artifact": pass3_checkpoint.artifact_path,

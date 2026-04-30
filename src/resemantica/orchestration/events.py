@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from typing import Any, Callable, Optional
-import logging
+
+from loguru import logger
 
 from resemantica.tracking.models import Event
 from resemantica.tracking.repo import ensure_tracking_db, save_event
 
 _EventCallback = Callable[[Event], None]
-logger = logging.getLogger(__name__)
 
 
 class EventBus:
@@ -40,7 +40,9 @@ class EventBus:
             try:
                 callback(event)
             except Exception:
-                logger.warning("Event subscriber failed for %s", event.event_type, exc_info=True)
+                logger.opt(exception=True).warning(
+                    "Event subscriber failed for {}", event.event_type
+                )
         return event
 
 

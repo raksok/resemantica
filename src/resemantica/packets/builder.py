@@ -29,6 +29,7 @@ from resemantica.graph.filters import (
 from resemantica.graph.models import GraphRelationship
 from resemantica.idioms.models import IdiomPolicy
 from resemantica.llm.tokens import count_tokens
+from resemantica.orchestration.events import emit_event
 from resemantica.packets.bundler import build_paragraph_bundle
 from resemantica.packets.models import ParagraphBundle
 from resemantica.packets.invalidation import detect_stale_packet
@@ -42,6 +43,7 @@ from resemantica.packets.models import (
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
+_STAGE_NAME = "packets-build"
 
 
 def _canonical_json(payload: object) -> str:
@@ -61,6 +63,25 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    chapter_number = kwargs.pop("chapter_number", None)
+    message = str(kwargs.pop("message", ""))
+    severity = str(kwargs.pop("severity", "info"))
+    try:
+        emit_event(
+            run_id,
+            release_id,
+            event_type,
+            _STAGE_NAME,
+            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
+            severity=severity,
+            message=message,
+            payload=dict(kwargs),
+        )
+    except Exception:
+        pass
 
 
 def _chapter_number_from_path(path: Path) -> int:
@@ -766,9 +787,11 @@ def build_packets(
             f"No extracted chapters found for release {release_id}: {paths.extracted_chapters_dir}"
         )
 
+    _emit(run_id, release_id, f"{_STAGE_NAME}.started", total_chapters=len(targets))
     results: list[PacketBuildOutput] = []
     failures: list[str] = []
     for number in targets:
+        _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_started", chapter_number=number)
         try:
             result = build_chapter_packet(
                 release_id=release_id,
@@ -779,6 +802,16 @@ def build_packets(
                 graph_client=graph_client,
             )
             results.append(result)
+            if result.status == "skipped":
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_skipped",
+                    chapter_number=number,
+                    reason=result.stale_reasons[0] if result.stale_reasons else "skipped",
+                )
+            else:
+                _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_completed", chapter_number=number)
         except Exception as exc:
             failures.append(f"ch{number}: {exc}")
             results.append(PacketBuildOutput(
@@ -792,14 +825,30 @@ def build_packets(
                 bundle_path="",
                 stale_reasons=[str(exc)],
             ))
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.chapter_skipped",
+                chapter_number=number,
+                reason="failed",
+            )
+    built_count = len([row for row in results if row.status == "rebuilt_stale" or row.status == "built"])
+    skipped_count = len([row for row in results if row.status == "skipped"])
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.completed",
+        built=built_count,
+        skipped=skipped_count,
+    )
     return {
         "status": "success",
         "release_id": release_id,
         "run_id": run_id,
         "chapters_requested": len(targets),
-        "chapters_built": len([row for row in results if row.status == "rebuilt_stale" or row.status == "built"]),
+        "chapters_built": built_count,
         "chapters_up_to_date": len([row for row in results if row.status == "up_to_date"]),
-        "chapters_skipped": len([row for row in results if row.status == "skipped"]),
+        "chapters_skipped": skipped_count,
         "chapters_failed": len([row for row in results if row.status == "failed"]),
         "results": [row.to_json_dict() for row in results],
     }

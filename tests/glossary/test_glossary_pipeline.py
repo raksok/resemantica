@@ -165,6 +165,55 @@ def test_discovery_writes_candidates_only(tmp_path: Path, monkeypatch) -> None:
         conn.close()
 
 
+def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m19-glossary-events"
+    _extract_one_chapter(
+        tmp_path,
+        release_id=release_id,
+        source_text="青云门弟子张三来到青云山。",
+    )
+    llm = ScriptedGlossaryLLM({
+        1: [
+            {"source_term": "青云门", "category": "faction", "evidence_snippet": "青云门弟子"},
+        ],
+    })
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "glossary-events":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        discover_glossary_candidates(
+            release_id=release_id,
+            run_id="glossary-events",
+            llm_client=llm,
+        )
+        translate_glossary_candidates(
+            release_id=release_id,
+            run_id="glossary-events",
+            llm_client=StaticGlossaryTranslator("Azure Sect"),
+        )
+        promote_glossary_candidates(
+            release_id=release_id,
+            run_id="glossary-events",
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    event_types = [event.event_type for event in received]
+    assert "preprocess-glossary.started" in event_types
+    assert "preprocess-glossary.discover.chapter_started" in event_types
+    assert "preprocess-glossary.discover.term_found" in event_types
+    assert "preprocess-glossary.translate.chapter_started" in event_types
+    assert "preprocess-glossary.promote.started" in event_types
+    assert event_types[-1] == "preprocess-glossary.completed"
+
+
 def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _extract_one_chapter(

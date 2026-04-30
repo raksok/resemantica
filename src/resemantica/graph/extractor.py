@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
@@ -367,6 +367,7 @@ def extract_entities(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     skip_chapters: set[int] | None = None,
+    event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
 ) -> GraphExtractionResult:
     tracked_entries = [
         entry
@@ -402,12 +403,18 @@ def extract_entities(
     for chapter_file in chapter_files:
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))
+        if event_callback is not None:
+            event_callback("chapter_started", chapter_number, {})
 
         if skip_chapters and chapter_number in skip_chapters:
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "non_story_chapter"})
             continue
 
         source_text = _collect_source_text(payload)
         if not source_text:
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
             continue
 
         prompt = render_named_sections(
@@ -425,6 +432,8 @@ def extract_entities(
             llm_entities, llm_relationships = _parse_llm_response(raw)
         except (json.JSONDecodeError, ValueError):
             warnings.append(f"warning_emitted: LLM parse error chapter={chapter_number}, skipping")
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
             continue
 
         for llm_ent in llm_entities:
@@ -445,6 +454,12 @@ def extract_entities(
 
                 current = entities_by_id.get(entity_id)
                 if current is None:
+                    if event_callback is not None:
+                        event_callback(
+                            "entity_extracted",
+                            chapter_number,
+                            {"entity_name": glossary_entry.target_term},
+                        )
                     entities_by_id[entity_id] = GraphEntity(
                         entity_id=entity_id,
                         release_id=release_id,
@@ -465,6 +480,12 @@ def extract_entities(
                 def_key = (llm_ent.entity_type, normalized_source)
                 current_deferred = deferred_by_key.get(def_key)
                 if current_deferred is None:
+                    if event_callback is not None:
+                        event_callback(
+                            "entity_extracted",
+                            chapter_number,
+                            {"entity_name": llm_ent.source_term},
+                        )
                     deferred_by_key[def_key] = _DeferredAggregate(
                         term_text=llm_ent.source_term,
                         category=llm_ent.entity_type,
@@ -507,6 +528,12 @@ def extract_entities(
 
                 current = entities_by_id.get(entity_id)
                 if current is None:
+                    if event_callback is not None:
+                        event_callback(
+                            "entity_extracted",
+                            chapter_number,
+                            {"entity_name": llm_ent.source_term},
+                        )
                     entities_by_id[entity_id] = GraphEntity(
                         entity_id=entity_id,
                         release_id=release_id,
@@ -581,6 +608,8 @@ def extract_entities(
                 is_masked_identity=llm_rel.is_masked_identity,
                 confidence=llm_rel.confidence,
             )
+        if event_callback is not None:
+            event_callback("chapter_completed", chapter_number, {})
 
     deferred_entities = [
         DeferredEntityRecord(

@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 from resemantica.glossary.models import GlossaryCandidate
 from resemantica.glossary.validators import normalize_term
@@ -125,6 +125,7 @@ def discover_candidates_from_extracted(
     prompt_version: str,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
 ) -> list[GlossaryCandidate]:
     chapter_files = sorted(
         extracted_chapters_dir.glob("chapter-*.json"),
@@ -141,8 +142,12 @@ def discover_candidates_from_extracted(
     for chapter_file in chapter_files:
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))
+        if event_callback is not None:
+            event_callback("chapter_started", chapter_number, {})
         source_text_zh = _collect_source_text(payload)
         if not source_text_zh:
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
             continue
 
         prompt = render_named_sections(
@@ -157,15 +162,25 @@ def discover_candidates_from_extracted(
             detected_rows = _parse_detected_terms(raw)
         except json.JSONDecodeError:
             print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
             continue
         except ValueError:
             print(f"  WARN: chapter {chapter_number}: parse error, skipping")
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
             continue
 
         for index, detected in enumerate(detected_rows):
             normalized_source = normalize_term(detected.source_term)
             if not normalized_source:
                 continue
+            if event_callback is not None:
+                event_callback(
+                    "term_found",
+                    chapter_number,
+                    {"term": detected.source_term, "category": detected.category},
+                )
             appearance_count = max(1, source_text_zh.count(detected.source_term))
             snippet = detected.evidence_snippet or _evidence_snippet(source_text_zh, detected.source_term)
             candidates.append(
@@ -201,5 +216,7 @@ def discover_candidates_from_extracted(
                     schema_version=1,
                 )
             )
+        if event_callback is not None:
+            event_callback("chapter_completed", chapter_number, {})
 
     return candidates

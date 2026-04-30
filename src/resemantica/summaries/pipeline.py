@@ -18,6 +18,7 @@ from resemantica.db.summary_repo import (
 )
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt
+from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
     build_story_so_far,
@@ -29,6 +30,7 @@ from resemantica.summaries.generator import generate_chapter_summary
 from resemantica.summaries.validators import validate_chinese_summary_content
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
+_STAGE_NAME = "preprocess-summaries"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -51,6 +53,25 @@ def _chapter_number_from_path(path: Path) -> int:
     if match is None:
         raise ValueError(f"Unexpected chapter filename: {path.name}")
     return int(match.group(1))
+
+
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    chapter_number = kwargs.pop("chapter_number", None)
+    message = str(kwargs.pop("message", ""))
+    severity = str(kwargs.pop("severity", "info"))
+    try:
+        emit_event(
+            run_id,
+            release_id,
+            event_type,
+            _STAGE_NAME,
+            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
+            severity=severity,
+            message=message,
+            payload=dict(kwargs),
+        )
+    except Exception:
+        pass
 
 
 def _collect_source_text(chapter_payload: dict[str, Any]) -> str:
@@ -106,6 +127,7 @@ def preprocess_summaries(
         raise FileNotFoundError(
             f"No extracted chapters found for release {release_id}: {paths.extracted_chapters_dir}"
         )
+    _emit(run_id, release_id, f"{_STAGE_NAME}.started", total_chapters=len(chapter_files))
 
     client = _build_llm_client(config_obj, llm_client)
     prompt_structured = load_prompt("summary_zh_structured.txt")
@@ -123,10 +145,18 @@ def preprocess_summaries(
             chapter_payload = _read_json(chapter_file)
             chapter_number = int(chapter_payload["chapter_number"])
             chapter_source_hash = str(chapter_payload["chapter_source_hash"])
+            _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_started", chapter_number=chapter_number)
 
             source_doc = str(chapter_payload.get("source_document_path", ""))
             if _exclude_compiled and any(p.search(source_doc) for p in _exclude_compiled):
                 print(f"  SKIP: chapter {chapter_number} ({source_doc}) matches exclude pattern")
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_skipped",
+                    chapter_number=chapter_number,
+                    reason="exclude_pattern",
+                )
                 chapter_results.append(
                     {
                         "chapter_number": chapter_number,
@@ -155,6 +185,13 @@ def preprocess_summaries(
             if generated is None:
                 if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
                     print(f"  SKIP: chapter {chapter_number}: non-story chapter flagged")
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_skipped",
+                        chapter_number=chapter_number,
+                        reason="non_story_chapter",
+                    )
                     chapter_results.append(
                         {
                             "chapter_number": chapter_number,
@@ -165,6 +202,13 @@ def preprocess_summaries(
                     )
                 else:
                     print(f"  WARN: chapter {chapter_number}: summary generation failed, skipping")
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_skipped",
+                        chapter_number=chapter_number,
+                        reason="generation_failed",
+                    )
                     chapter_results.append(
                         {
                             "chapter_number": chapter_number,
@@ -173,6 +217,14 @@ def preprocess_summaries(
                         }
                     )
                 continue
+            _emit(run_id, release_id, f"{_STAGE_NAME}.draft_generated", chapter_number=chapter_number)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.validation_completed",
+                chapter_number=chapter_number,
+                status=generated.validation.status,
+            )
 
             llm_validation_flags = validate_chinese_summary_content(
                 llm_client=client,
@@ -298,11 +350,21 @@ def preprocess_summaries(
                     "en_artifact": str(en_artifact),
                 }
             )
+            _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_completed", chapter_number=chapter_number)
     finally:
         conn.close()
 
     processed_count = sum(
         1 for r in chapter_results if r.get("status") != "skipped"
+    )
+    skipped_count = sum(1 for r in chapter_results if r.get("status") == "skipped")
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.completed",
+        done=processed_count,
+        skipped=skipped_count,
+        failed=0,
     )
     return {
         "status": "success",

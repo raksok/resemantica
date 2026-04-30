@@ -21,12 +21,19 @@ from resemantica.db.idiom_repo import (
     save_idiom_translation,
 )
 from resemantica.db.sqlite import open_connection
-from resemantica.db.summary_repo import ensure_summary_schema, is_non_story_chapter
+from resemantica.db.summary_repo import ensure_summary_schema
 from resemantica.idioms.extractor import extract_idioms
 from resemantica.idioms.validators import normalize_idiom_source, validate_idiom_policy
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt, render_named_sections
+from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
+
+_STAGE_NAME = "preprocess-idioms"
+
+
+def _chapter_number_from_path(path: Path) -> int:
+    return int(path.stem.split("-", 1)[1])
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -45,6 +52,45 @@ def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMCli
         timeout_seconds=config.llm.timeout_seconds,
         max_retries=config.llm.max_retries,
     )
+
+
+def _filtered_chapter_count(
+    extracted_chapters_dir: Path,
+    *,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
+) -> int:
+    chapter_files = sorted(
+        extracted_chapters_dir.glob("chapter-*.json"),
+        key=_chapter_number_from_path,
+    )
+    return len(
+        [
+            path
+            for path in chapter_files
+            if (chapter_start is None or _chapter_number_from_path(path) >= chapter_start)
+            and (chapter_end is None or _chapter_number_from_path(path) <= chapter_end)
+        ]
+    )
+
+
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    chapter_number = kwargs.pop("chapter_number", None)
+    message = str(kwargs.pop("message", ""))
+    severity = str(kwargs.pop("severity", "info"))
+    try:
+        emit_event(
+            run_id,
+            release_id,
+            event_type,
+            _STAGE_NAME,
+            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
+            severity=severity,
+            message=message,
+            payload=dict(kwargs),
+        )
+    except Exception:
+        pass
 
 
 def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
@@ -142,6 +188,16 @@ def preprocess_idioms(
     ensure_idiom_schema(conn)
     ensure_summary_schema(conn)
     try:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.started",
+            total_chapters=_filtered_chapter_count(
+                paths.extracted_chapters_dir,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+            ),
+        )
         # Phase 1: Detect (Analyst)
         skip_chapters: set[int] = set()
         cursor = conn.execute(
@@ -162,6 +218,13 @@ def preprocess_idioms(
             chapter_start=chapter_start,
             chapter_end=chapter_end,
             skip_chapters=skip_chapters or None,
+            event_callback=lambda event_name, chapter_number, payload: _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.{event_name}",
+                chapter_number=chapter_number,
+                **payload,
+            ),
         )
         insert_detected_candidates(conn, candidates=detected_candidates)
 
@@ -221,6 +284,18 @@ def preprocess_idioms(
             for candidate in detected_candidates
         }
     )
+    skipped_count = _filtered_chapter_count(
+        paths.extracted_chapters_dir,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
+    ) - len(chapters_seen)
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.completed",
+        extracted=len(detected_candidates),
+        skipped=max(0, skipped_count),
+    )
     return {
         "status": "success",
         "release_id": release_id,
@@ -259,4 +334,3 @@ def resolve_idiom_policy(
         return fallback_rendering
     finally:
         conn.close()
-

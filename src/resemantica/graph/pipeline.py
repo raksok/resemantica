@@ -15,7 +15,7 @@ from resemantica.db.graph_repo import (
     upsert_deferred_entities,
 )
 from resemantica.db.sqlite import open_connection
-from resemantica.db.summary_repo import ensure_summary_schema, is_non_story_chapter
+from resemantica.db.summary_repo import ensure_summary_schema
 from resemantica.graph.client import GraphClient
 from resemantica.graph.extractor import extract_entities
 from resemantica.graph.models import GraphAppearance, GraphEntity
@@ -23,7 +23,14 @@ from resemantica.graph.validators import validate_graph_state
 from resemantica.db.glossary_repo import ensure_glossary_schema, find_exact_locked_entry, list_locked_entries
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt
+from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
+
+_STAGE_NAME = "preprocess-graph"
+
+
+def _chapter_number_from_path(path: Path) -> int:
+    return int(path.stem.split("-", 1)[1])
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -83,6 +90,45 @@ def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMCli
     )
 
 
+def _filtered_chapter_count(
+    extracted_chapters_dir: Path,
+    *,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
+) -> int:
+    chapter_files = sorted(
+        extracted_chapters_dir.glob("chapter-*.json"),
+        key=_chapter_number_from_path,
+    )
+    return len(
+        [
+            path
+            for path in chapter_files
+            if (chapter_start is None or _chapter_number_from_path(path) >= chapter_start)
+            and (chapter_end is None or _chapter_number_from_path(path) <= chapter_end)
+        ]
+    )
+
+
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    chapter_number = kwargs.pop("chapter_number", None)
+    message = str(kwargs.pop("message", ""))
+    severity = str(kwargs.pop("severity", "info"))
+    try:
+        emit_event(
+            run_id,
+            release_id,
+            event_type,
+            _STAGE_NAME,
+            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
+            severity=severity,
+            message=message,
+            payload=dict(kwargs),
+        )
+    except Exception:
+        pass
+
+
 def preprocess_graph(
     *,
     release_id: str,
@@ -104,10 +150,21 @@ def preprocess_graph(
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
     ensure_graph_schema(conn)
+    ensure_summary_schema(conn)
 
     warnings: list[str] = []
 
     try:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.started",
+            total_chapters=_filtered_chapter_count(
+                paths.extracted_chapters_dir,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+            ),
+        )
         locked_glossary = list_locked_entries(conn, release_id=release_id)
 
         skip_chapters: set[int] = set()
@@ -128,6 +185,13 @@ def preprocess_graph(
             chapter_start=chapter_start,
             chapter_end=chapter_end,
             skip_chapters=skip_chapters or None,
+            event_callback=lambda event_name, chapter_number, payload: _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.{event_name}",
+                chapter_number=chapter_number,
+                **payload,
+            ),
         )
         warnings.extend(extraction.warnings)
 
@@ -258,6 +322,20 @@ def preprocess_graph(
     finally:
         conn.close()
 
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.completed",
+        extracted=len(provisional_entities),
+        skipped=max(
+            0,
+            _filtered_chapter_count(
+                paths.extracted_chapters_dir,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+            ) - len({appearance.chapter_number for appearance in provisional_appearances}),
+        ),
+    )
     return {
         "status": "success",
         "release_id": release_id,

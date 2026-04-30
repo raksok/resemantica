@@ -5,13 +5,25 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from resemantica.cli_progress import CliProgressSubscriber
 from resemantica.epub.extractor import extract_epub
 from resemantica.glossary.pipeline import (
     promote_glossary_candidates,
     translate_glossary_candidates,
 )
+from resemantica.logging_config import configure_logging
 from resemantica.orchestration import OrchestrationRunner
-from resemantica.settings import load_config
+from resemantica.settings import AppConfig, derive_paths, load_config
+
+
+def _add_verbose_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="-v for INFO, -vv for DEBUG.",
+    )
 
 
 def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: str) -> None:
@@ -28,6 +40,27 @@ def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: st
         default=None,
         help="Optional path to resemantica.toml",
     )
+    _add_verbose_arg(parser)
+
+
+def _configure_cli_logging(
+    *,
+    args: argparse.Namespace,
+    config: AppConfig,
+    release_id: str,
+    run_id: str | None,
+) -> None:
+    paths = derive_paths(config, release_id=release_id)
+    configure_logging(
+        verbosity=int(getattr(args, "verbose", 0) or 0),
+        artifacts_dir=paths.artifact_root,
+        run_id=run_id,
+    )
+
+
+def _with_cli_progress(fn):
+    with CliProgressSubscriber():
+        return fn()
 
 
 def _add_chapter_range_args(parser: argparse.ArgumentParser) -> None:
@@ -63,6 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to resemantica.toml",
     )
+    _add_verbose_arg(roundtrip)
 
     translate = subparsers.add_parser(
         "translate-chapter",
@@ -82,6 +116,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to resemantica.toml",
     )
+    _add_verbose_arg(translate)
 
     preprocess = subparsers.add_parser(
         "preprocess",
@@ -168,6 +203,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to resemantica.toml",
     )
+    _add_verbose_arg(rebuild)
 
     translate_range = subparsers.add_parser(
         "translate-range",
@@ -187,6 +223,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to resemantica.toml",
     )
+    _add_verbose_arg(translate_range)
 
     tui_cmd = subparsers.add_parser(
         "tui",
@@ -300,10 +337,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "epub-roundtrip":
         config = load_config(args.config)
-        roundtrip_result = extract_epub(
-            input_path=args.input,
-            release_id=args.release,
-            config=config,
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id="epub-roundtrip")
+        roundtrip_result = _with_cli_progress(
+            lambda: extract_epub(
+                input_path=args.input,
+                release_id=args.release,
+                config=config,
+            )
         )
         print(f"status={roundtrip_result.status}")
         print(f"release_root={roundtrip_result.release_root}")
@@ -313,10 +353,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "translate-chapter":
         config = load_config(args.config)
-        result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
-            "translate-chapter",
-            chapter_number=args.chapter,
-            force=bool(getattr(args, "force_pass1", False)),
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
+        result = _with_cli_progress(
+            lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                "translate-chapter",
+                chapter_number=args.chapter,
+                force=bool(getattr(args, "force_pass1", False)),
+            )
         )
         print(f"status={'success' if result.success else 'failed'}")
         print(f"message={result.message}")
@@ -324,22 +367,27 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "preprocess":
         config = load_config(args.config)
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
         if args.preprocess_command == "glossary-discover":
             from resemantica.glossary.pipeline import discover_glossary_candidates
-            result = discover_glossary_candidates(
-                release_id=args.release,
-                run_id=args.run,
-                config=config,
+            result = _with_cli_progress(
+                lambda: discover_glossary_candidates(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                )
             )
             print(f"status={result['status']}")
-            print(f"candidates_discovered={result['candidates_discovered']}")
+            print(f"candidates_written={result['candidates_written']}")
             return 0
 
         if args.preprocess_command == "glossary-translate":
-            result = translate_glossary_candidates(
-                release_id=args.release,
-                run_id=args.run,
-                config=config,
+            result = _with_cli_progress(
+                lambda: translate_glossary_candidates(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                )
             )
             print(f"status={result['status']}")
             print(f"translated_count={result['translated_count']}")
@@ -347,10 +395,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.preprocess_command == "glossary-promote":
-            result = promote_glossary_candidates(
-                release_id=args.release,
-                run_id=args.run,
-                config=config,
+            result = _with_cli_progress(
+                lambda: promote_glossary_candidates(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                )
             )
             print(f"status={result['status']}")
             print(f"candidate_count={result['candidate_count']}")
@@ -361,24 +411,30 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.preprocess_command == "summaries":
-            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                "preprocess-summaries"
+            stage_result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                    "preprocess-summaries"
+                )
             )
             print(f"status={'success' if stage_result.success else 'failed'}")
             print(f"message={stage_result.message}")
             return 0 if stage_result.success else 1
 
         if args.preprocess_command == "idioms":
-            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                "preprocess-idioms"
+            stage_result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                    "preprocess-idioms"
+                )
             )
             print(f"status={'success' if stage_result.success else 'failed'}")
             print(f"message={stage_result.message}")
             return 0 if stage_result.success else 1
 
         if args.preprocess_command == "graph":
-            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                "preprocess-graph"
+            stage_result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                    "preprocess-graph"
+                )
             )
             print(f"status={'success' if stage_result.success else 'failed'}")
             print(f"message={stage_result.message}")
@@ -389,10 +445,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "packets":
         config = load_config(args.config)
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
         if args.packets_command == "build":
-            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                "packets-build",
-                chapter_number=args.chapter,
+            stage_result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                    "packets-build",
+                    chapter_number=args.chapter,
+                )
             )
             print(f"status={'success' if stage_result.success else 'failed'}")
             print(f"message={stage_result.message}")
@@ -402,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         config = load_config(args.config)
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
         from resemantica.orchestration import (
             resume_run,
             plan_cleanup,
@@ -409,15 +469,22 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if args.run_command == "production":
-            result = OrchestrationRunner(args.release, args.run, config=config).run_production(
-                dry_run=bool(getattr(args, "dry_run", False)),
-                chapter_start=args.start,
-                chapter_end=args.end,
-            )
             if getattr(args, "dry_run", False):
+                result = OrchestrationRunner(args.release, args.run, config=config).run_production(
+                    dry_run=True,
+                    chapter_start=args.start,
+                    chapter_end=args.end,
+                )
                 for stage in result.metadata.get("stages", []):
                     print(stage["stage_name"])
                 return 0
+            result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_production(
+                    dry_run=False,
+                    chapter_start=args.start,
+                    chapter_end=args.end,
+                )
+            )
             print(result.message)
             return 0 if result.success else 1
 
@@ -468,31 +535,45 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run-production":
         config = load_config(args.config)
-        result = OrchestrationRunner(args.release, args.run, config=config).run_production(
-            dry_run=bool(getattr(args, "dry_run", False)),
-            chapter_start=args.start,
-            chapter_end=args.end,
-        )
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
         if getattr(args, "dry_run", False):
+            result = OrchestrationRunner(args.release, args.run, config=config).run_production(
+                dry_run=True,
+                chapter_start=args.start,
+                chapter_end=args.end,
+            )
             for stage in result.metadata.get("stages", []):
                 print(stage["stage_name"])
             return 0
+        result = _with_cli_progress(
+            lambda: OrchestrationRunner(args.release, args.run, config=config).run_production(
+                dry_run=False,
+                chapter_start=args.start,
+                chapter_end=args.end,
+            )
+        )
         print(result.message)
         return 0 if result.success else 1
 
     if args.command == "rebuild-epub":
         config = load_config(args.config)
-        result = OrchestrationRunner(args.release, args.run_id, config=config).run_stage("epub-rebuild")
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run_id)
+        result = _with_cli_progress(
+            lambda: OrchestrationRunner(args.release, args.run_id, config=config).run_stage("epub-rebuild")
+        )
         print(f"status={'success' if result.success else 'failed'}")
         print(f"message={result.message}")
         return 0 if result.success else 1
 
     if args.command == "translate-range":
         config = load_config(args.config)
-        result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
-            "translate-range",
-            chapter_start=args.start,
-            chapter_end=args.end,
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
+        result = _with_cli_progress(
+            lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                "translate-range",
+                chapter_start=args.start,
+                chapter_end=args.end,
+            )
         )
         print(f"status={'success' if result.success else 'failed'}")
         print(f"message={result.message}")

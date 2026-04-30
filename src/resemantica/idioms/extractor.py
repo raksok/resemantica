@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 from resemantica.idioms.models import IdiomCandidate
 from resemantica.idioms.validators import normalize_idiom_source
@@ -128,6 +128,7 @@ def extract_idioms(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     skip_chapters: set[int] | None = None,
+    event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
 ) -> list[IdiomCandidate]:
     chapter_files = sorted(
         extracted_chapters_dir.glob("chapter-*.json"),
@@ -144,12 +145,18 @@ def extract_idioms(
     for chapter_file in chapter_files:
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", _chapter_number_from_path(chapter_file)))
+        if event_callback is not None:
+            event_callback("chapter_started", chapter_number, {})
 
         if skip_chapters and chapter_number in skip_chapters:
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "non_story_chapter"})
             continue
 
         source_text_zh = _collect_source_text(payload)
         if not source_text_zh:
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
             continue
 
         prompt = render_named_sections(
@@ -164,9 +171,13 @@ def extract_idioms(
             detected_rows = _parse_detected_idioms(raw)
         except json.JSONDecodeError:
             print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
             continue
         except ValueError:
             print(f"  WARN: chapter {chapter_number}: parse error, skipping")
+            if event_callback is not None:
+                event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
             continue
 
         for index, detected in enumerate(detected_rows):
@@ -202,6 +213,7 @@ def extract_idioms(
                     schema_version=1,
                 )
             )
+        if event_callback is not None:
+            event_callback("chapter_completed", chapter_number, {})
 
     return candidates
-

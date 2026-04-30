@@ -217,6 +217,62 @@ def test_preprocess_summaries_materializes_authority_and_derived_rows(
         conn.close()
 
 
+def test_preprocess_summaries_emits_progress_events(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m19-summary-events"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三来到青云山。",
+        chapter_source_hash="hash-ch1",
+    )
+    llm = ScriptedSummaryLLM(
+        {
+            1: {
+                "chapter_number": 1,
+                "characters_mentioned": ["张三"],
+                "key_events": ["张三来到青云山"],
+                "new_terms": ["青云山"],
+                "relationships_changed": [{"entity": "张三", "change": "entered"}],
+                "setting": "青云山",
+                "tone": "calm",
+                "narrative_progression": "张三初入山门。",
+                "is_story_chapter": True,
+            }
+        }
+    )
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "summaries-events":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        preprocess_summaries(
+            release_id=release_id,
+            run_id="summaries-events",
+            llm_client=llm,
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    event_types = [event.event_type for event in received]
+    assert event_types == [
+        "preprocess-summaries.started",
+        "preprocess-summaries.chapter_started",
+        "preprocess-summaries.draft_generated",
+        "preprocess-summaries.validation_completed",
+        "preprocess-summaries.chapter_completed",
+        "preprocess-summaries.completed",
+    ]
+    assert received[0].payload["total_chapters"] == 1
+    assert received[1].chapter_number == 1
+    assert received[-1].payload["done"] == 1
+
+
 def test_glossary_conflict_blocks_chinese_summary_validation(
     tmp_path: Path,
     monkeypatch,

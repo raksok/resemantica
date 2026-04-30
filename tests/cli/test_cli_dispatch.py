@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from resemantica import cli as cli_mod
 from resemantica.cli import _build_parser
 
 
@@ -45,8 +46,9 @@ class TestCliDispatch:
 
     def test_preprocess_summaries(self):
         parser = _build_parser()
-        args = parser.parse_args(["preprocess", "summaries", "--release", "r1"])
+        args = parser.parse_args(["preprocess", "summaries", "--release", "r1", "-vv"])
         assert args.preprocess_command == "summaries"
+        assert args.verbose == 2
 
     def test_preprocess_idioms(self):
         parser = _build_parser()
@@ -131,11 +133,12 @@ class TestCliDispatch:
         parser = _build_parser()
         args = parser.parse_args([
             "translate-range", "--release", "r1", "--run", "test-run",
-            "--start", "1", "--end", "10"
+            "--start", "1", "--end", "10", "-v"
         ])
         assert args.command == "translate-range"
         assert args.start == 1
         assert args.end == 10
+        assert args.verbose == 1
 
     def test_tui(self):
         parser = _build_parser()
@@ -143,3 +146,24 @@ class TestCliDispatch:
         assert args.command == "tui"
         assert args.release == "r1"
         assert args.run == "test-run"
+
+    def test_no_verbose_defaults_to_zero(self):
+        parser = _build_parser()
+        args = parser.parse_args(["packets", "build", "--release", "r1"])
+        assert args.verbose == 0
+
+    def test_main_wires_verbose_to_logging_config(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        calls = []
+
+        def fake_configure_logging(**kwargs):
+            calls.append(kwargs)
+
+        monkeypatch.setattr(cli_mod, "configure_logging", fake_configure_logging)
+
+        result = cli_mod.main(["run", "production", "--release", "r1", "--dry-run", "-vv"])
+
+        assert result == 0
+        assert calls[0]["verbosity"] == 2
+        assert calls[0]["run_id"] == "production"
+        assert "preprocess-glossary" in capsys.readouterr().out
