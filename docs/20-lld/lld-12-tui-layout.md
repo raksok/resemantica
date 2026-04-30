@@ -251,6 +251,20 @@ Purpose: Show progress of each preprocessing stage and its sub-steps.
 | Stage rows | Checkpoint metadata per stage | On `stage_started`, `stage_completed` events |
 | Sub-metrics | Aggregate counts from SQLite repos (candidates, locked, conflicts, etc.) | On stage completion for that stage |
 | Progress bars | Stage completion percentage derived from checkpoint state | On stage transition events |
+| Launch control row | `TUIAdapter.launch_workflow("preprocessing")` | On `[p]` keypress |
+
+### Launch Control
+
+A single keybinding row at the bottom of the content area:
+
+```
+│          │  [p] Launch Preprocessing                               │
+```
+
+- `[p]` triggers `TUIAdapter.launch_workflow("preprocessing")`.
+- When `release_id` is set the label renders in `green`; when missing it renders in `comment` with suffix `(set release first)` and the keypress is a no-op.
+- After launch the row replaces itself with feedback: `[cyan]Preprocessing started...[/]` on success, `[red]Launch failed: {error}[/]` on failure.
+- Feedback reverts to the launch row after 5 seconds or on the next `_refresh_all` cycle.
 
 ### Behaviors
 
@@ -299,6 +313,19 @@ Purpose: Detailed per-block translation progress for the selected chapter.
 | Chapter header | Chapter source metadata, block count | On chapter load |
 | Block progress list | Per-block checkpoint state, risk scores | On `paragraph_retry`, `validation_failed`, checkpoint events |
 | Pass indicators | Pass completion per block | On checkpoint updates |
+| Launch control row | `TUIAdapter.launch_workflow("translation")` | On `[t]` keypress |
+
+### Launch Control
+
+A single keybinding row at the bottom of the content area, below the block legend:
+
+```
+│          │  [t] Launch Translation  (ch range from run state)     │
+```
+
+- `[t]` triggers `TUIAdapter.launch_workflow("translation")`.
+- Chapter range is derived from the run checkpoint when resuming, or the full extracted chapter range for a fresh run.
+- Same enabled/disabled/feedback pattern as the Preprocessing launch control: `green` when `release_id` and `run_id` are set, `comment` with `(set release/run first)` when missing, `[cyan]Translation started...[/]` / `[red]Launch failed: {error}[/]` feedback.
 
 ### Behaviors
 
@@ -553,6 +580,8 @@ Purpose: Display current configuration, model info, and budget values. Read-only
 | `Enter` | List items | Drill into selected item |
 | `Esc` | Detail/overlay | Close detail, return to list |
 | `r` | Dashboard, Translation | Resume run (from current checkpoint) |
+| `p` | Preprocessing | Launch preprocessing workflow |
+| `t` | Translation | Launch translation workflow |
 | `f` | Warnings | Cycle severity filter |
 | `d` | Cleanup | Run dry-run preview |
 | `a` | Cleanup | Apply cleanup (after dry run) |

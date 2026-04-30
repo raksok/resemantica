@@ -68,5 +68,5 @@ Out:
 
 The remaining operator-console completion work is split into M19:
 
-- `docs/40-tasks/task-19-tui-completion-and-smoke-validation.md`
+- `docs/40-tasks/task-21-tui-completion-and-smoke-validation.md`
 - `docs/20-lld/lld-19-tui-completion-and-smoke-validation.md`

@@ -130,4 +130,4 @@ Implemented drift closure:
 - Production execution is owned by `OrchestrationRunner.run_production()`.
 - `translate-chapter` and `translate-range` are functional runner stages.
 - CLI translation and reconstruction commands delegate through `OrchestrationRunner`.
-- Remaining operator-console polish is tracked separately in `docs/40-tasks/task-19-tui-completion-and-smoke-validation.md`.
+- Remaining operator-console polish is tracked separately in `docs/40-tasks/task-21-tui-completion-and-smoke-validation.md`.

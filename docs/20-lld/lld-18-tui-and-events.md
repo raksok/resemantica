@@ -110,7 +110,7 @@ Implemented:
 - `ResetPreviewScreen` supports cleanup preview and guarded apply.
 - Translation/orchestration emits paragraph, retry, risk, validation, artifact, and chapter events.
 
-Remaining gaps are split into `docs/40-tasks/task-19-tui-completion-and-smoke-validation.md`:
+Remaining gaps are split into `docs/40-tasks/task-21-tui-completion-and-smoke-validation.md`:
 
 - launch controls on preprocessing and translation screens
 - run-derived chapter spine and block progress rendering
