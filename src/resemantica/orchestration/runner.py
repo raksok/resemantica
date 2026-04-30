@@ -156,10 +156,18 @@ def _execute_stage(release_id: str, run_id: str, stage_name: str, *, chapter_sta
 
         elif stage_name == "packets-build":
             from resemantica.packets.builder import build_packets
-            build_packets(release_id=release_id, run_id=run_id, config=config)
+            result = build_packets(
+                release_id=release_id, run_id=run_id, config=config,
+                chapter_start=chapter_start, chapter_end=chapter_end,
+            )
+            built = result.get("chapters_built", 0)
+            up_to_date = result.get("chapters_up_to_date", 0)
+            skipped = result.get("chapters_skipped", 0)
+            failed = result.get("chapters_failed", 0)
+            msg = f"Packets: {built} built, {up_to_date} up-to-date, {skipped} skipped, {failed} failed"
             return StageResult(
-                success=True, stage_name=stage_name,
-                message="Packets build completed"
+                success=failed == 0, stage_name=stage_name,
+                message=msg,
             )
 
         elif stage_name == "translate-chapter":
@@ -177,6 +185,8 @@ def _execute_stage(release_id: str, run_id: str, stage_name: str, *, chapter_sta
         elif stage_name == "epub-rebuild":
             from resemantica.epub.rebuild import rebuild_epub
             from resemantica.settings import derive_paths
+            if config is None:
+                return StageResult(success=False, stage_name=stage_name, message="Failed to load config")
             paths = derive_paths(config, release_id=release_id)
             output_path = rebuild_epub(paths.unpacked_dir, paths.rebuilt_epub_path)
             return StageResult(

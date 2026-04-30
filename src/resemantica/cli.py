@@ -303,6 +303,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"pass3_artifact={pass3_result.get('pass3_artifact', '') or ''}")
         return 0
 
+    if args.command == "preprocess":
+        config = load_config(args.config)
+        if args.preprocess_command == "glossary-discover":
+            from resemantica.glossary.pipeline import discover_glossary_candidates
+            result = discover_glossary_candidates(
+                release_id=args.release,
+                run_id=args.run,
+                config=config,
+            )
+            print(f"status={result['status']}")
+            print(f"candidates_discovered={result['candidates_discovered']}")
+            return 0
+
         if args.preprocess_command == "glossary-translate":
             result = translate_glossary_candidates(
                 release_id=args.release,
@@ -521,9 +534,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         app.run()
         return 0
-
-        parser.print_help()
-        return 2
 
     parser.print_help()
     return 2

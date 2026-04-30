@@ -29,6 +29,8 @@ Exclude common vocabulary, generic verbs, common adjectives, and ordinary nouns.
 
 ## OUTPUT FORMAT
 Return JSON only. Either a list or an object with key "glossary_terms".
+If no terms match, return an empty list [] or {{"glossary_terms": []}}.
+Do NOT wrap JSON in markdown code fences. Return raw JSON only.
 Each row must include:
 - source_term
 - category

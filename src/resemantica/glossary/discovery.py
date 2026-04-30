@@ -54,6 +54,14 @@ def _collect_source_text(payload: dict[str, Any]) -> str:
 
 
 def _parse_detected_terms(raw: str) -> list[_DetectedTerm]:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
     parsed = json.loads(raw)
     rows: object = parsed
     if isinstance(parsed, dict):

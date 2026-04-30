@@ -29,6 +29,7 @@ from resemantica.graph.models import GraphRelationship
 from resemantica.idioms.models import IdiomPolicy
 from resemantica.llm.tokens import count_tokens
 from resemantica.packets.bundler import build_paragraph_bundle
+from resemantica.packets.models import ParagraphBundle
 from resemantica.packets.invalidation import detect_stale_packet
 from resemantica.packets.models import (
     PACKET_BUILDER_VERSION,
@@ -442,7 +443,17 @@ def build_chapter_packet(
     chapter_payload = _read_json(chapter_path)
     records_raw = chapter_payload.get("records", [])
     if not isinstance(records_raw, list) or not records_raw:
-        raise ValueError(f"Invalid records payload in {chapter_path}")
+        return PacketBuildOutput(
+            status="skipped",
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            packet_id="",
+            packet_hash="",
+            packet_path="",
+            bundle_path="",
+            stale_reasons=["empty_records"],
+        )
     records = [row for row in records_raw if isinstance(row, dict)]
     source_text = _collect_source_text(records)
 
@@ -468,8 +479,17 @@ def build_chapter_packet(
             summary_type="story_so_far_zh",
         )
         if story_so_far is None:
-            raise RuntimeError(
-                f"missing_story_so_far_summary: release={release_id}, chapter={chapter_number}"
+            conn.close()
+            return PacketBuildOutput(
+                status="skipped",
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                packet_id="",
+                packet_hash="",
+                packet_path="",
+                bundle_path="",
+                stale_reasons=["missing_story_so_far_summary"],
             )
         chapter_short = get_validated_summary(
             conn,
@@ -478,8 +498,17 @@ def build_chapter_packet(
             summary_type="chapter_summary_zh_short",
         )
         if chapter_short is None:
-            raise RuntimeError(
-                f"missing_chapter_summary_short: release={release_id}, chapter={chapter_number}"
+            conn.close()
+            return PacketBuildOutput(
+                status="skipped",
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                packet_id="",
+                packet_hash="",
+                packet_path="",
+                bundle_path="",
+                stale_reasons=["missing_chapter_summary_short"],
             )
         previous_short = list_validated_summaries(
             conn,
@@ -505,7 +534,18 @@ def build_chapter_packet(
 
         graph_snapshots = list_graph_snapshots(conn, release_id=release_id)
         if not graph_snapshots:
-            raise RuntimeError(f"missing_graph_snapshot: release={release_id}")
+            conn.close()
+            return PacketBuildOutput(
+                status="skipped",
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                packet_id="",
+                packet_hash="",
+                packet_path="",
+                bundle_path="",
+                stale_reasons=["missing_graph_snapshot"],
+            )
         latest_snapshot = graph_snapshots[-1]
 
         chapter_source_hash = str(chapter_payload.get("chapter_source_hash", "")).strip()
@@ -610,14 +650,20 @@ def build_chapter_packet(
         packet_path = paths.packets_dir / f"chapter-{chapter_number}-{packet.packet_id}.json"
         bundle_path = paths.packets_dir / f"chapter-{chapter_number}-{packet.packet_id}-bundles.json"
 
-        bundles = [
-            build_paragraph_bundle(
-                packet=packet,
-                block_record=row,
-                max_bundle_bytes=config_obj.budget.max_bundle_bytes,
-            )
-            for row in sorted(records, key=_record_sort_key)
-        ]
+        bundles: list[ParagraphBundle] = []
+        bundle_warnings: list[str] = []
+        for row in sorted(records, key=_record_sort_key):
+            try:
+                bundle = build_paragraph_bundle(
+                    packet=packet,
+                    block_record=row,
+                    max_bundle_bytes=config_obj.budget.max_bundle_bytes,
+                )
+                bundles.append(bundle)
+            except RuntimeError as exc:
+                bundle_warnings.append(f"bundle_skip: block={row.get('block_id', '?')}: {exc}")
+        if bundle_warnings:
+            packet.warnings.extend(bundle_warnings)
 
         packet_payload = packet.to_json_dict()
         bundle_payload = {
@@ -676,6 +722,8 @@ def build_packets(
     release_id: str,
     run_id: str = "packets-build",
     chapter_number: int | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
     config: AppConfig | None = None,
     project_root: Path | None = None,
     graph_client: GraphClient | None = None,
@@ -691,28 +739,51 @@ def build_packets(
             key=_chapter_number_from_path,
         )
         targets = [_chapter_number_from_path(path) for path in chapter_files]
+
+    if chapter_start is not None:
+        targets = [n for n in targets if n >= chapter_start]
+    if chapter_end is not None:
+        targets = [n for n in targets if n <= chapter_end]
+
     if not targets:
         raise FileNotFoundError(
             f"No extracted chapters found for release {release_id}: {paths.extracted_chapters_dir}"
         )
 
-    results = [
-        build_chapter_packet(
-            release_id=release_id,
-            chapter_number=number,
-            run_id=run_id,
-            config=config_obj,
-            project_root=project_root,
-            graph_client=graph_client,
-        )
-        for number in targets
-    ]
+    results: list[PacketBuildOutput] = []
+    failures: list[str] = []
+    for number in targets:
+        try:
+            result = build_chapter_packet(
+                release_id=release_id,
+                chapter_number=number,
+                run_id=run_id,
+                config=config_obj,
+                project_root=project_root,
+                graph_client=graph_client,
+            )
+            results.append(result)
+        except Exception as exc:
+            failures.append(f"ch{number}: {exc}")
+            results.append(PacketBuildOutput(
+                status="failed",
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=number,
+                packet_id="",
+                packet_hash="",
+                packet_path="",
+                bundle_path="",
+                stale_reasons=[str(exc)],
+            ))
     return {
         "status": "success",
         "release_id": release_id,
         "run_id": run_id,
         "chapters_requested": len(targets),
-        "chapters_built": len([row for row in results if row.status != "up_to_date"]),
+        "chapters_built": len([row for row in results if row.status == "rebuilt_stale" or row.status == "built"]),
         "chapters_up_to_date": len([row for row in results if row.status == "up_to_date"]),
+        "chapters_skipped": len([row for row in results if row.status == "skipped"]),
+        "chapters_failed": len([row for row in results if row.status == "failed"]),
         "results": [row.to_json_dict() for row in results],
     }

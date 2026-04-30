@@ -11,6 +11,8 @@ IDIOM_DETECT
 
 ## OUTPUT FORMAT
 Return JSON only.
+If no idioms match, return an empty list [] or {{"idioms": []}}.
+Do NOT wrap JSON in markdown code fences. Return raw JSON only.
 Either a list or an object with key "idioms".
 Each row must include:
 - source_text

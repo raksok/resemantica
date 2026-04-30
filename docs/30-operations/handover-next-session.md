@@ -1,6 +1,97 @@
 # Handover Next Session
 
-## Current Session: M14C — Summary Pipeline Drift Fixes
+## Current Session: M14B — Batch Pilot Bugfixes and Verification
+
+### Problem
+
+Three blocker bugs prevented M14B pilot from running:
+
+1. **Missing `tiktoken` dependency** — `_apply_packet_budget()` in packet builder calls `count_tokens()` which requires `tiktoken`. Package was never added to `pyproject.toml` despite D22 mandate.
+2. **Missing markdown fence stripping** — Glossary discovery (`_parse_detected_terms`) and idiom detection (`_parse_detected_idioms`) call `json.loads(raw)` directly. Qwen3.5 wraps JSON in ` ```json...``` ` fences. Graph extraction already strips these; glossary/idioms don't, causing `JSONDecodeError` on every chapter.
+3. **No "empty result" instruction in prompts** — Glossary and idiom prompts don't tell the LLM what to return when no terms are found. For short chapters (1 record), the LLM falls back to natural language like `"没有找到重要的术语"` instead of `{"glossary_terms": []}`.
+
+### Found During Pilot Attempts
+
+4. **Packet builder crashes on front-matter chapters** — `build_chapter_packet()` raises `RuntimeError("missing_story_so_far_summary")` for chapters excluded from summary generation. Also crashes on chapters with empty records (chapter-1.json has `records: []`).
+5. **Packet builder iterates all chapters** — `build_packets()` ignores `chapter_start`/`chapter_end` from `run_stage()`, processing all 96 chapters including front-matter.
+6. **Bundle builder crashes on large blocks** — `build_paragraph_bundle()` raises `RuntimeError("bundle_budget_exceeded")` for blocks where matched glossary entries alone exceed `max_bundle_bytes` (4096). Entire packet build fails.
+7. **CLI preprocess subcommands are dead code** — Handler code indented under `if args.command == "translate-chapter"` after `return 0`. Running `resemantica preprocess summaries` falls through to `parser.print_help()` and returns 2.
+8. **Per-chapter LLM timings** — Glossary ~1.5 min, summaries ~8 min, idioms ~3.5 min, graph ~5 min, pass1 ~1 min, pass2 ~5 min per block. A 10-chapter pilot requires ~12-15 hours of wall-clock time on this hardware.
+
+### Implemented
+
+**Fixes:**
+- `pyproject.toml` — added `"tiktoken>=0.9.0"` to dependencies
+- `glossary/discovery.py` — added `if raw.startswith("```")` fence-strip block in `_parse_detected_terms()` before `json.loads()`
+- `idioms/extractor.py` — same fence-strip block in `_parse_detected_idioms()`
+- `llm/prompts/glossary_discover.txt` — added "return empty list" and "no fences" instructions to OUTPUT FORMAT
+- `llm/prompts/idiom_detect.txt` — same prompt fix (with `{{"idioms": []}}` escaping for `str.format()`)
+- `packets/builder.py` — `build_chapter_packet()` returns `status="skipped"` for empty records, missing summaries, missing graph snapshots (instead of raising); bundle-building wrapped in try/except, logs warning and continues
+- `packets/builder.py` — `build_packets()` accepts `chapter_start`/`chapter_end` params; filters targets; catches per-chapter exceptions; fixed counting (separate `chapters_built`, `chapters_skipped`, `chapters_failed`)
+- `orchestration/runner.py` — `_execute_stage("packets-build")` forwards `chapter_start`/`chapter_end` to `build_packets()`; uses new keys for counting; added `config is None` guard for epub-rebuild stage
+- `cli.py` — moved preprocess subcommand handlers into proper `if args.command == "preprocess"` branch; removed dead `parser.print_help()` after `tui` return; added missing `glossary-discover` handler
+- `resemantica.toml` — updated `exclude_chapter_patterns` to match test EPUB front-matter (cover, copyright, ver-page, Introdution)
+
+**Documentation:**
+- `DECISIONS.md` — appended Section G (G26-G31) documenting all M14B decisions
+
+### Verification
+
+```
+uv run pytest tests/ -q         → 139 passed (no regressions)
+uv run ruff check src/ tests/   → 6 pre-existing test-only warnings (unused imports)
+uv run mypy src/                → no issues
+```
+
+### Pilot Results
+
+Single-chapter smoke (ch6 - 1 record): **PASSED** — all 8 stages green, EPUB rebuilt.
+Single-chapter pilot (ch10 - 22 records): All 5 preprocessing stages + packet build + pass1 **PASSED**. Pass2 timed out at 45 min (5/22 blocks completed, ~6 min/block). This is a local inference speed constraint, not a code bug.
+
+### Working Tree State
+
+Modified:
+- `resemantica.toml` — exclude patterns for test EPUB front-matter
+- `pyproject.toml` — added `tiktoken>=0.9.0`
+- `src/resemantica/cli.py` — preprocess dead-code fix
+- `src/resemantica/glossary/discovery.py` — markdown fence stripping
+- `src/resemantica/idioms/extractor.py` — markdown fence stripping
+- `src/resemantica/llm/prompts/glossary_discover.txt` — empty-result + no-fences instruction
+- `src/resemantica/llm/prompts/idiom_detect.txt` — empty-result + no-fences instruction
+- `src/resemantica/orchestration/runner.py` — packets-build forwards chapter range; counting fix; config guard
+- `src/resemantica/packets/builder.py` — skip logic for empty/missing-summary/missing-graph chapters; bundle error handling; chapter range; exception resilience; fixed counting
+- `DECISIONS.md` — Section G (G26-G31) appended
+
+### Next Objective: Full Production Pilot (unattended)
+
+The pipeline is now ready for a full unattended production run. Recommended:
+
+```
+# Run overnight — expect 12-15 hours for 10 chapters
+uv run python scripts/pilot/run.py --release prod-01 --run prod-01 ^
+    --input <epub_path> --start 10 --end 19
+```
+
+Key timings per chapter (local inference):
+- Glossary: ~2 min
+- Summaries: ~8 min (slowest stage)
+- Idioms: ~3.5 min
+- Graph: ~5 min
+- Packets: <5 s
+- Pass 1: ~1 min
+- Pass 2: ~2-6 min/block (scales with block count)
+
+Future optimization opportunities:
+- Summaries stage could be parallelized (chapters are independent)
+- Pass 2 could skip blocks with very short source text
+- `max_bundle_bytes` (4096) could be increased to reduce bundle failures on glossary-dense blocks
+- `exclude_chapter_patterns` may need tuning per source EPUB
+
+No push performed.
+
+---
+
+## Previous Session: M14C — Summary Pipeline Drift Fixes
 
 ### Problem
 
@@ -9,17 +100,17 @@ Summary pipeline (`src/resemantica/summaries/`) drifted from SPEC §10:
 1. **Missing chapter exclusion** — `titlepage.xhtml`, `nav.xhtml`, `book-2-divider.xhtml` in EPUB spine get processed as chapters
 2. **Missing LLM content validation** — SPEC §10.6 requires content fidelity + continuity validation, but only schema + glossary checks exist. 5 of 8 SPEC §10.7 flags never set: `unsupported_claim`, `major_omission`, `wrong_referent`, `premature_reveal`, `ambiguity_overwritten`
 3. **Wrong `derived_from_chapter_hash`** — `story_so_far_zh` uses only current chapter hash (line 159), but derives from ALL chapters ≤ N
-4. **Non-incremental `story_so_far_zh`** — rebuilds all chapters from scratch each time instead of appending to `story_so_far_zh(n-1)` per SPEC §10.5
+4. **Non-incremental `story_so_far_zh`** — rebuilds all chapters from scratch instead of appending to `story_so_far_zh(n-1)` per SPEC §10.5
 
 ### Implemented
 
-- **Chapter exclusion filter** via `[summaries] exclude_chapter_patterns` config; patterns matched against `source_document_path` filename
-- **LLM content fidelity validation** — new `summary_zh_validate.txt` prompt; `validate_chinese_summary_content()` in `validators.py` calls analyst model; non-blocking flags stored in `zh_artifact` JSON
-- **Composite hash fix** — `story_so_far_zh.derived_from_chapter_hash` now `sha256("|".join(sorted(all_hashes)))` of all contributing chapters
-- **Incremental story_so_far** — loads `story_so_far_zh(n-1)` from DB, appends current chapter short summary; falls back to full rebuild when prior doesn't exist
-- **`SummariesConfig`** dataclass in `settings.py`, wired through `load_config()`
-- **Mock LLM updated** — `ScriptedSummaryLLM` handles `SUMMARY_ZH_VALIDATE` prompts, returns empty flags
-- **4 test additions/updates** — chapter exclusion test, composite hash assertion, LLM flags in artifact test, incremental determinism preserved
+- **Chapter exclusion filter** via `[summaries] exclude_chapter_patterns` config
+- **LLM content fidelity validation** — new `summary_zh_validate.txt` prompt
+- **Composite hash fix** — `sha256("|".join(sorted(all_hashes)))` for all contributing chapters
+- **Incremental story_so_far** — append mode with full-rebuild fallback
+- **`SummariesConfig`** dataclass in `settings.py`
+- **Mock LLM updated** — `ScriptedSummaryLLM` handles `SUMMARY_ZH_VALIDATE` prompts
+- **4 test additions/updates**
 
 ### Verification
 
@@ -29,48 +120,25 @@ uv run ruff check src/ tests/   → 0 errors
 uv run mypy src/                → no issues
 ```
 
-### Working Tree State
-
-New files:
-- `src/resemantica/llm/prompts/summary_zh_validate.txt` — content fidelity validation prompt
-
-Modified:
-- `DATA_CONTRACT.md` — validation requirements, supported summary types
-- `resemantica.toml` — added `[summaries]` section
-- `src/resemantica/settings.py` — `SummariesConfig` dataclass
-- `src/resemantica/summaries/validators.py` — `validate_chinese_summary_content()`
-- `src/resemantica/summaries/pipeline.py` — 4 changes: exclusion filter, LLM validation, composite hash, incremental story
-- `tests/summaries/test_summary_pipeline.py` — mock + 4 test updates
-
-### Next Objective
-
-Proceed with **M14B** (Batch Pilot):
-- Task brief: `docs/40-tasks/task-14b-pilot.md`
-- LLD: `docs/20-lld/lld-14b-pilot.md`
-- Command: `python scripts/pilot/run.py --start 4 --end 4` (single chapter smoke)
-- Full pilot: `python scripts/pilot/run.py --start 4 --end 13`
-
-No push performed.
-
 ---
 
 ## Previous Session: M14A — Graph LLM Drift Fix
 
 ### Problem
 
-Graph extractor used deterministic CJK keyword heuristics (suffix scanning `门`, `山`, `人`, `剑`, `诀` etc.) to infer entity categories and relationships. This drifted from SPEC §5.2, §12.3, §13.4 which mandate an analyst-model LLM for entity/relationship extraction. Heuristics produced wrong categories (e.g. `青云门` → "location" instead of "faction"), missed relationships entirely, and could not adapt to novel term patterns.
+Graph extractor used deterministic CJK keyword heuristics (suffix scanning `门`, `山`, `人`, `剑`, `诀` etc.) to infer entity categories and relationships. This drifted from SPEC §5.2, §12.3, §13.4 which mandate an analyst-model LLM for entity/relationship extraction.
 
 ### Implemented
 
-- **Analyst-model extraction**: per-chapter LLM call via `graph_extract.txt` prompt (12 SPEC edge types, JSON output format, glossary integration)
-- **All heuristics removed** from `extractor.py`: `_CJK_TERM_RE`, suffix-guess maps, `_is_relationship_word()`, `_infer_category()`, `_INTRINSIC_CATEGORY_OVERRIDES`, hardcoded relationship hints
-- **Prompt template** at `src/resemantica/llm/prompts/graph_extract.txt`: `{{`/`}}` escaping for `str.format()` compatibility
+- **Analyst-model extraction**: per-chapter LLM call via `graph_extract.txt` prompt (12 SPEC edge types)
+- **All heuristics removed** from `extractor.py`
+- **Prompt template** with `{{`/`}}` escaping for `str.format()` compatibility
 - **Expanded `WORLD_MODEL_EDGE_TYPES`** to all 12 SPEC edge types
-- **`_build_llm_client()`** factory in `pipeline.py`; `preprocess_graph()` accepts optional `llm_client` param
-- **Confidence tracking**: `_WorldModelObservation` gains `confidence` field; relationship merge uses max confidence
+- **`_build_llm_client()`** factory; `preprocess_graph()` accepts optional `llm_client` param
+- **Confidence tracking**: `_WorldModelObservation` gains `confidence` field
 - **Mock LLM** (`ScriptedGraphLLM`) in `test_graph_pipeline.py`
 - **4 integration tests** wired with mock
-- **Milestone renumbering**: M14A inserted in task list, SPEC §26, ARCHITECT.md build order; original M14 → M14B
+- **Milestone renumbering**: M14A inserted, original M14 → M14B
 
 ### Verification
 

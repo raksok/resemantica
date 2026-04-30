@@ -24,4 +24,4 @@ pass3_default = false
 risk_threshold_high = 0.7
 
 [summaries]
-exclude_chapter_patterns = ["titlepage", "nav\\.xhtml", "toc", "book.?2", "front.?matter"]
+exclude_chapter_patterns = ["titlepage", "nav\\.xhtml", "toc", "book.?2", "front.?matter", "ver-page", "Introdution", "cover", "copyright"]

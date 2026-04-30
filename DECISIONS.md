@@ -663,3 +663,91 @@ Parameters threaded through:
 |----|----------|---------------|---------------|
 | F24 | Preprocessing error handling | Per-chapter try/except, skip on bad JSON | Skips front-matter chapters gracefully without stage failure |
 | F25 | Chapter range filtering | Optional `chapter_start`/`chapter_end` with `None` defaults | Prevents ~20min wasted LLM calls on out-of-range chapters; fully backward compatible |
+
+---
+
+## G. M14B Pilot Bugfix Decisions
+
+### G26. Markdown Fence Stripping in Glossary and Idiom Parsers
+
+**Decision:** Add the same markdown code-fence stripping logic from `graph/extractor.py` to `glossary/discovery.py:_parse_detected_terms()` and `idioms/extractor.py:_parse_detected_idioms()` before `json.loads()`.
+
+**Files changed:**
+- `glossary/discovery.py:57` — insert 8-line fence-strip block at top of `_parse_detected_terms()`
+- `idioms/extractor.py:57` — same block in `_parse_detected_idioms()`
+
+**Pattern (from `graph/extractor.py`):**
+```python
+raw = raw.strip()
+if raw.startswith("```"):
+    lines = raw.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    raw = "\n".join(lines).strip()
+```
+
+**Rationale:** Qwen3.5 wraps JSON responses in ` ```json...``` ` markdown fences. Graph extraction already strips these. Glossary and idioms are missing the same handling, causing `JSONDecodeError` on every chapter where the analyst model produces fenced output.
+
+---
+
+### G27. Explicit "Empty Result" and "No Fences" Instructions in Prompts
+
+**Decision:** Add two instructions to the OUTPUT FORMAT section of `glossary_discover.txt` and `idiom_detect.txt`:
+
+1. `"If no terms match, return an empty list / empty object."`
+2. `"Do NOT wrap JSON in markdown code fences. Return raw JSON only."`
+
+**Files changed:**
+- `llm/prompts/glossary_discover.txt` — append to OUTPUT FORMAT
+- `llm/prompts/idiom_detect.txt` — append to OUTPUT FORMAT
+
+**Rationale:** When a chapter has little meaningful content (e.g., ch6 has 1 record), the LLM falls back to natural language like `"没有找到重要的术语"` instead of returning valid empty JSON. Adding explicit empty-result and no-fences instructions eliminates this failure mode at the prompt level.
+
+---
+
+### G28. Add `tiktoken` to Project Dependencies
+
+**Decision:** Add `"tiktoken>=0.9.0"` to `pyproject.toml` → `project.dependencies`. After changing, run `uv sync` to install.
+
+**Rationale:** D22 (Tokenization Strategy) mandates `tiktoken` for all token counting. It is used by `_apply_packet_budget()` in the packet builder. Despite being listed as a decision, the actual dependency was never added to `pyproject.toml`. Without it, `packets-build` crashes with `RuntimeError: tiktoken is required`.
+
+---
+
+### G29. Skip Front-Matter Chapters with Missing Summaries in Packet Builder
+
+**Decision:** In `packets/builder.py:build_chapter_packet()`, when `story_so_far` or `chapter_summary_short` are missing from the DB, return a `PacketBuildOutput(status="skipped", ...)` instead of raising `RuntimeError`. Same treatment for missing `graph_snapshot`. Already implemented during this session.
+
+**Rationale:** Front-matter chapters (cover, copyright, TOC, introduction) are excluded from summary generation. The packet builder should not crash on these chapters — they should be silently skipped.
+
+---
+
+### G30. Packet Builder Accepts Chapter Range for Target Filtering
+
+**Decision:** Added `chapter_start` and `chapter_end` optional parameters to `build_packets()` in `packets/builder.py`. When provided, targets are filtered to `[chapter_start, chapter_end]` inclusive. Runner (`orchestration/runner.py:_execute_stage`) forwards `chapter_start`/`chapter_end` from `run_stage()` through to `build_packets()`. Build continues past per-chapter exceptions, collecting failures instead of crashing the entire stage.
+
+**Rationale:** The pilot script passes `--start`/`--end` to control chapter range. Without range filtering, `packets-build` would process all 96 chapters including front-matter with empty records, causing unnecessary failures.
+
+---
+
+### G31. CLI Preprocess Subcommand Dead-Code Fix
+
+**Decision:** Re-indent the preprocess subcommand handlers (lines 306-374) from inside the `if args.command == "translate-chapter":` block into a proper `if args.command == "preprocess":` branch. Remove unreachable `parser.print_help()` after `return 0` inside the `tui` handler (lines 525-526).
+
+**File changed:** `cli.py`
+
+**Rationale:** The preprocess handler code was accidentally indented under `translate-chapter` and placed after a `return 0`, making it dead code. Running any `resemantica preprocess ...` command falls through to `parser.print_help()` and returns 2. The pilot script bypasses CLI, so this doesn't block M14B, but it must be fixed before production use.
+
+---
+
+### Decision Log Summary Update
+
+| ID | Decision | Chosen Option | Key Rationale |
+|----|----------|---------------|---------------|
+| G26 | Markdown fence stripping | Strip ``` fences before `json.loads()` in glossary and idiom parsers | Qwen3.5 wraps JSON in fences; graph already does this, glossary/idioms don't |
+| G27 | Empty-result prompt instructions | Add "return empty list" and "no fences" to glossary and idiom prompts | LLM falls back to natural language on trivial chapters |
+| G28 | tiktoken dependency | Add `"tiktoken>=0.9.0"` to pyproject.toml | Required by `_apply_packet_budget()` but was never in deps despite D22 mandate |
+| G29 | Skip missing-summary chapters | Return `status="skipped"` instead of raising in packet builder | Front-matter chapters excluded from summaries, should not crash packet build |
+| G30 | Chapter range in packet builder | Optional `chapter_start`/`chapter_end` with `None` defaults; forward from runner | Prevents processing all 96 chapters when pilot only needs a range |
+| G31 | CLI preprocess dead code | Move handlers into `if args.command == "preprocess"` branch | `resemantica preprocess` command broken; pilot not affected |
