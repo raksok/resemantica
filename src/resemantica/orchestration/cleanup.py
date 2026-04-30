@@ -6,24 +6,24 @@ import json
 import shutil
 
 from .events import emit_event
-from resemantica.settings import load_config
+from resemantica.settings import derive_paths, load_config
 
 
 def _get_cleanup_plan_path(release_id: str) -> Path:
     cfg = load_config()
-    return Path(cfg.paths.artifact_root) / release_id / "cleanup_plan.json"
+    return derive_paths(cfg, release_id=release_id).release_root / "cleanup_plan.json"
 
 
 def _get_cleanup_report_path(release_id: str) -> Path:
     cfg = load_config()
-    return Path(cfg.paths.artifact_root) / release_id / "cleanup_report.json"
+    return derive_paths(cfg, release_id=release_id).release_root / "cleanup_report.json"
 
 
 def _collect_scope_artifacts(
     release_id: str, run_id: str, scope: str
 ) -> tuple[list[Path], list[Path]]:
     cfg = load_config()
-    release_root = Path(cfg.paths.artifact_root) / release_id
+    release_root = derive_paths(cfg, release_id=release_id).release_root
     deletable: list[Path] = []
     preserved: list[Path] = []
 
@@ -99,8 +99,15 @@ def plan_cleanup(
         "dry_run": dry_run,
         "deletable_artifacts": [str(p) for p in deletable],
         "preserved_artifacts": [str(p) for p in preserved],
-        "sqlite_rows": [],
+        "sqlite_rows": [
+            {"database": "tracking.db", "table": "events", "run_id": run_id},
+            {"database": "tracking.db", "table": "run_state", "run_id": run_id},
+            {"database": "resemantica.db", "table": "translation_checkpoints", "run_id": run_id},
+            {"database": "resemantica.db", "table": "extracted_chapters", "run_id": run_id},
+            {"database": "resemantica.db", "table": "extracted_blocks", "run_id": run_id},
+        ],
         "estimated_space_bytes": _estimate_size(deletable),
+        "schema_version": "1.0",
     }
 
     plan_path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,20 +174,45 @@ def apply_cleanup(
             except Exception as exc:
                 report["errors"].append(str(exc))
 
+    from resemantica.db.sqlite import open_connection
     from resemantica.tracking.repo import ensure_tracking_db
     try:
         conn = ensure_tracking_db(release_id)
         try:
-            cursor = conn.execute(
-                "DELETE FROM events WHERE release_id = ? AND run_id = ?",
-                (release_id, run_id)
-            )
-            report["sqlite_rows_deleted"] = cursor.rowcount
-            conn.commit()
+            for table in ("events", "run_state"):
+                cursor = conn.execute(
+                    f"DELETE FROM {table} WHERE release_id = ? AND run_id = ?",
+                    (release_id, run_id),
+                )
+                report["sqlite_rows_deleted"] += max(cursor.rowcount, 0)
+                conn.commit()
         finally:
             conn.close()
     except Exception as exc:
-        report["errors"].append(f"SQLite cleanup error: {exc}")
+        report["errors"].append(f"Tracking SQLite cleanup error: {exc}")
+
+    try:
+        cfg = load_config()
+        paths = derive_paths(cfg, release_id=release_id)
+        conn = open_connection(paths.db_path)
+        try:
+            for table in ("translation_checkpoints", "extracted_chapters", "extracted_blocks"):
+                exists = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                if not exists:
+                    continue
+                cursor = conn.execute(
+                    f"DELETE FROM {table} WHERE release_id = ? AND run_id = ?",
+                    (release_id, run_id),
+                )
+                report["sqlite_rows_deleted"] += max(cursor.rowcount, 0)
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        report["errors"].append(f"Global SQLite cleanup error: {exc}")
 
     report_path = _get_cleanup_report_path(release_id)
     report_path.parent.mkdir(parents=True, exist_ok=True)

@@ -43,9 +43,9 @@ def _init_tracking_schema(conn: sqlite3.Connection) -> None:
 
 
 def get_tracking_db_path(release_id: str) -> Path:
-    from resemantica.settings import load_config
+    from resemantica.settings import derive_paths, load_config
     cfg = load_config()
-    return Path(cfg.paths.artifact_root) / release_id / "tracking.db"
+    return derive_paths(cfg, release_id=release_id).release_root / "tracking.db"
 
 
 def ensure_tracking_db(release_id: str) -> sqlite3.Connection:

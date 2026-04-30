@@ -37,3 +37,7 @@ Always follow the milestone sequence below.
 | M13 | task-13 | M10 | Observability + Evaluation |
 | M14A | task-14a | M13 | Graph Pipeline Drift Fix — LLM Extraction |
 | M14B | task-14b | M14A, M10–M13 | Batch Pilot |
+| M15 | task-15 | M10-M14B | Orchestration Workflow Drift Closure |
+| M16 | task-16 | M15 | EPUB Reconstruction Phase 2 |
+| M17 | task-17 | M15, M16 | Data Storage + Contract Compliance |
+| M18 | task-18 | M15, M17 | TUI + Live Operator Events |

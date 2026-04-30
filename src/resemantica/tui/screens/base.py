@@ -76,7 +76,7 @@ class BaseScreen(Screen):
 
     def _update_footer(self) -> None:
         footer_keys = self.query_one("#footer-keys", Static)
-        footer_keys.update("[1-7] Screen  [q] Quit")
+        footer_keys.update("[1-9] Screen  [q] Quit")
 
     def _get_run_state(self) -> dict[str, Any] | None:
         run_id = self._get_run_id()

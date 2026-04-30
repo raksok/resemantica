@@ -12,13 +12,9 @@ from resemantica.glossary.pipeline import (
 )
 from resemantica.idioms.pipeline import preprocess_idioms
 from resemantica.packets.builder import build_packets
+from resemantica.orchestration import OrchestrationRunner
 from resemantica.settings import load_config
 from resemantica.summaries.pipeline import preprocess_summaries
-from resemantica.translation.pipeline import (
-    translate_chapter_pass1,
-    translate_chapter_pass2,
-    translate_chapter_pass3,
-)
 
 
 def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: str) -> None:
@@ -145,6 +141,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rebuild.add_argument("--release", required=True, help="Release identifier.")
     rebuild.add_argument(
+        "--run-id",
+        "--run",
+        dest="run_id",
+        required=False,
+        default="rebuild-epub",
+        help="Run identifier (default: rebuild-epub).",
+    )
+    rebuild.add_argument(
         "--config",
         type=Path,
         default=None,
@@ -180,6 +184,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Release identifier to show in the TUI.",
     )
+
+    run_production_top = subparsers.add_parser(
+        "run-production",
+        help="Run or inspect the full production workflow.",
+    )
+    _add_common_release_args(run_production_top, default_run="production")
+    run_production_top.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the deterministic production plan without executing stages.",
+    )
     tui_cmd.add_argument(
         "--run",
         required=False,
@@ -207,6 +222,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run full production workflow from preprocess through EPUB rebuild.",
     )
     _add_common_release_args(run_production, default_run="production")
+    run_production.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the deterministic production plan without executing stages.",
+    )
 
     run_resume = run_subparsers.add_parser(
         "resume",
@@ -276,32 +296,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "translate-chapter":
         config = load_config(args.config)
-        pass1_result = translate_chapter_pass1(
-            release_id=args.release,
+        result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
+            "translate-chapter",
             chapter_number=args.chapter,
-            run_id=args.run,
-            config=config,
             force=bool(getattr(args, "force_pass1", False)),
         )
-        print(f"pass1_status={pass1_result['status']}")
-        print(f"pass1_artifact={pass1_result['pass1_artifact']}")
-        pass2_result = translate_chapter_pass2(
-            release_id=args.release,
-            chapter_number=args.chapter,
-            run_id=args.run,
-            config=config,
-        )
-        print(f"pass2_status={pass2_result['status']}")
-        print(f"pass2_artifact={pass2_result['pass2_artifact']}")
-        pass3_result = translate_chapter_pass3(
-            release_id=args.release,
-            chapter_number=args.chapter,
-            run_id=args.run,
-            config=config,
-        )
-        print(f"pass3_status={pass3_result['status']}")
-        print(f"pass3_artifact={pass3_result.get('pass3_artifact', '') or ''}")
-        return 0
+        print(f"status={'success' if result.success else 'failed'}")
+        print(f"message={result.message}")
+        return 0 if result.success else 1
 
     if args.command == "preprocess":
         config = load_config(args.config)
@@ -406,21 +408,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         config = load_config(args.config)
         from resemantica.orchestration import (
-            run_stage,
             resume_run,
             plan_cleanup,
             apply_cleanup,
         )
-        from resemantica.orchestration.models import STAGE_ORDER
 
         if args.run_command == "production":
-            for stage in STAGE_ORDER:
-                stage_result = run_stage(args.release, args.run, stage)
-                if not stage_result.success:
-                    print(f"Stage {stage} failed: {stage_result.message}")
-                    return 1
-            print("Production run completed successfully")
-            return 0
+            result = OrchestrationRunner(args.release, args.run, config=config).run_production(
+                dry_run=bool(getattr(args, "dry_run", False))
+            )
+            if getattr(args, "dry_run", False):
+                for stage in result.metadata.get("stages", []):
+                    print(stage["stage_name"])
+                return 0
+            print(result.message)
+            return 0 if result.success else 1
 
         if args.run_command == "resume":
             resume_result = resume_run(
@@ -467,63 +469,35 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  - {e}")
             return 0
 
+    if args.command == "run-production":
+        config = load_config(args.config)
+        result = OrchestrationRunner(args.release, args.run, config=config).run_production(
+            dry_run=bool(getattr(args, "dry_run", False))
+        )
+        if getattr(args, "dry_run", False):
+            for stage in result.metadata.get("stages", []):
+                print(stage["stage_name"])
+            return 0
+        print(result.message)
+        return 0 if result.success else 1
+
     if args.command == "rebuild-epub":
         config = load_config(args.config)
-        from resemantica.epub.rebuild import rebuild_epub
-        from resemantica.settings import derive_paths
-        _dp = derive_paths(config, args.release)
-        rebuild_result = rebuild_epub(_dp.unpacked_dir, _dp.rebuilt_epub_path)
-        print(f"Rebuilt EPUB: {rebuild_result}")
-        return 0
+        result = OrchestrationRunner(args.release, args.run_id, config=config).run_stage("epub-rebuild")
+        print(f"status={'success' if result.success else 'failed'}")
+        print(f"message={result.message}")
+        return 0 if result.success else 1
 
     if args.command == "translate-range":
         config = load_config(args.config)
-        pass1_failures: list[int] = []
-        pass2_failures: list[int] = []
-        for ch in range(args.start, args.end + 1):
-            print(f"Pass 1 chapter {ch}...")
-            try:
-                translate_chapter_pass1(
-                    release_id=args.release,
-                    chapter_number=ch,
-                    run_id=args.run,
-                    config=config,
-                )
-            except Exception as exc:
-                print(f"  Chapter {ch} pass1 failed: {exc}")
-                pass1_failures.append(ch)
-        for ch in range(args.start, args.end + 1):
-            if ch in pass1_failures:
-                continue
-            print(f"Pass 2 chapter {ch}...")
-            try:
-                translate_chapter_pass2(
-                    release_id=args.release,
-                    chapter_number=ch,
-                    run_id=args.run,
-                    config=config,
-                )
-            except Exception as exc:
-                print(f"  Chapter {ch} pass2 failed: {exc}")
-                pass2_failures.append(ch)
-        if config.translation.pass3_default:
-            for ch in range(args.start, args.end + 1):
-                if ch in pass1_failures or ch in pass2_failures:
-                    continue
-                print(f"Pass 3 chapter {ch}...")
-                try:
-                    translate_chapter_pass3(
-                        release_id=args.release,
-                        chapter_number=ch,
-                        run_id=args.run,
-                        config=config,
-                    )
-                except Exception as exc:
-                    print(f"  Chapter {ch} pass3 failed: {exc}")
-        total = args.end - args.start + 1
-        fail_count = len(pass1_failures) + len(pass2_failures)
-        print(f"Done: {total - fail_count} succeeded, {fail_count} failed")
-        return 0 if fail_count == 0 else 1
+        result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
+            "translate-range",
+            chapter_start=args.start,
+            chapter_end=args.end,
+        )
+        print(f"status={'success' if result.success else 'failed'}")
+        print(f"message={result.message}")
+        return 0 if result.success else 1
 
     if args.command == "tui":
         from resemantica.tui import ResemanticaApp

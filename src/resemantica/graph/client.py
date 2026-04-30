@@ -29,6 +29,7 @@ class GraphBackend(Protocol):
     def list_aliases(self, *, status: str | None = None) -> list[GraphAlias]: ...
     def list_appearances(self, *, status: str | None = None) -> list[GraphAppearance]: ...
     def list_relationships(self, *, status: str | None = None) -> list[GraphRelationship]: ...
+    def get_chapter_safe_subgraph(self, *, chapter_number: int, include_provisional: bool = False) -> dict[str, list[Any]]: ...
 
 
 class InMemoryGraphBackend:
@@ -79,14 +80,57 @@ class InMemoryGraphBackend:
         rows = sorted(self._relationships.values(), key=lambda row: row.relationship_id)
         return self._filter_by_status(rows, status=status, getter=lambda row: row.status)
 
+    def get_chapter_safe_subgraph(
+        self,
+        *,
+        chapter_number: int,
+        include_provisional: bool = False,
+    ) -> dict[str, list[Any]]:
+        statuses = {"confirmed", "provisional"} if include_provisional else {"confirmed"}
+        entities = [
+            row
+            for row in self.list_entities()
+            if row.status in statuses and row.revealed_chapter <= chapter_number
+        ]
+        entity_ids = {row.entity_id for row in entities}
+        aliases = [
+            row
+            for row in self.list_aliases()
+            if row.status in statuses
+            and row.entity_id in entity_ids
+            and row.revealed_chapter <= chapter_number
+            and row.first_seen_chapter <= chapter_number
+        ]
+        appearances = [
+            row
+            for row in self.list_appearances()
+            if row.status in statuses
+            and row.entity_id in entity_ids
+            and row.chapter_number <= chapter_number
+        ]
+        relationships = [
+            row
+            for row in self.list_relationships()
+            if row.status in statuses
+            and row.source_entity_id in entity_ids
+            and row.target_entity_id in entity_ids
+            and row.revealed_chapter <= chapter_number
+            and row.start_chapter <= chapter_number
+            and (row.end_chapter is None or row.end_chapter >= chapter_number)
+        ]
+        return {
+            "entities": entities,
+            "aliases": aliases,
+            "appearances": appearances,
+            "relationships": relationships,
+        }
+
 
 class LadybugGraphBackend(InMemoryGraphBackend):
     def __init__(self, *, db_path: Path) -> None:
-        super().__init__()
         self._db_path = db_path.resolve()
-        self._state_path = self._db_path.with_suffix(".state.json")
         self._connection = self._open_ladybug_connection()
-        self._load_state_from_disk()
+        self._ensure_schema()
 
     def _open_ladybug_connection(self) -> Any:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,55 +147,169 @@ class LadybugGraphBackend(InMemoryGraphBackend):
         except Exception as exc:
             raise RuntimeError(f"Failed to initialize LadybugDB at {self._db_path}: {exc}") from exc
 
-    def _touch_connection(self) -> None:
-        try:
-            self._connection.execute("RETURN 1;")
-        except Exception:
-            # Best-effort touch: graph state persistence is handled by deterministic sidecar snapshots.
-            pass
-
-    def _load_state_from_disk(self) -> None:
-        if not self._state_path.exists():
-            return
-        payload = json.loads(self._state_path.read_text(encoding="utf-8"))
-        entities = [GraphEntity(**row) for row in payload.get("entities", [])]
-        aliases = [GraphAlias(**row) for row in payload.get("aliases", [])]
-        appearances = [GraphAppearance(**row) for row in payload.get("appearances", [])]
-        relationships = [GraphRelationship(**row) for row in payload.get("relationships", [])]
-        super().upsert_entities(entities=entities)
-        super().upsert_aliases(aliases=aliases)
-        super().upsert_appearances(appearances=appearances)
-        super().upsert_relationships(relationships=relationships)
-
-    def _persist_state_to_disk(self) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "entities": [asdict(row) for row in self.list_entities()],
-            "aliases": [asdict(row) for row in self.list_aliases()],
-            "appearances": [asdict(row) for row in self.list_appearances()],
-            "relationships": [asdict(row) for row in self.list_relationships()],
-        }
-        self._state_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
+    def _ensure_schema(self) -> None:
+        self._connection.execute(
+            """
+            CREATE NODE TABLE IF NOT EXISTS GraphEntity(
+                entity_id STRING,
+                status STRING,
+                revealed_chapter INT64,
+                first_seen_chapter INT64,
+                payload STRING,
+                PRIMARY KEY(entity_id)
+            );
+            """
         )
-        self._touch_connection()
+        self._connection.execute(
+            """
+            CREATE NODE TABLE IF NOT EXISTS GraphAlias(
+                alias_id STRING,
+                status STRING,
+                entity_id STRING,
+                revealed_chapter INT64,
+                first_seen_chapter INT64,
+                payload STRING,
+                PRIMARY KEY(alias_id)
+            );
+            """
+        )
+        self._connection.execute(
+            """
+            CREATE NODE TABLE IF NOT EXISTS GraphAppearance(
+                appearance_id STRING,
+                status STRING,
+                entity_id STRING,
+                chapter_number INT64,
+                payload STRING,
+                PRIMARY KEY(appearance_id)
+            );
+            """
+        )
+        self._connection.execute(
+            """
+            CREATE NODE TABLE IF NOT EXISTS GraphRelationship(
+                relationship_id STRING,
+                status STRING,
+                source_entity_id STRING,
+                target_entity_id STRING,
+                revealed_chapter INT64,
+                start_chapter INT64,
+                end_chapter INT64,
+                payload STRING,
+                PRIMARY KEY(relationship_id)
+            );
+            """
+        )
+
+    @staticmethod
+    def _cypher_literal(value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        return json.dumps(str(value), ensure_ascii=False)
+
+    def _upsert_node(self, *, table: str, key: str, key_value: str, fields: dict[str, Any]) -> None:
+        self._connection.execute(
+            f"MATCH (n:{table} {{{key}: $key_value}}) DELETE n;",
+            {"key_value": key_value},
+        )
+        properties = ", ".join(
+            f"{name}: {self._cypher_literal(value)}" for name, value in fields.items()
+        )
+        self._connection.execute(
+            f"CREATE (:{table} {{{properties}}});",
+        )
+
+    def _list_payloads(self, *, table: str, status: str | None) -> list[dict[str, Any]]:
+        if status is None:
+            rows = self._connection.execute(f"MATCH (n:{table}) RETURN n.payload ORDER BY n.payload;").get_all()
+        else:
+            rows = self._connection.execute(
+                f"MATCH (n:{table}) WHERE n.status = $status RETURN n.payload ORDER BY n.payload;",
+                {"status": status},
+            ).get_all()
+        return [json.loads(row[0]) for row in rows]
 
     def upsert_entities(self, *, entities: list[GraphEntity]) -> None:
-        super().upsert_entities(entities=entities)
-        self._persist_state_to_disk()
+        for entity in entities:
+            self._upsert_node(
+                table="GraphEntity",
+                key="entity_id",
+                key_value=entity.entity_id,
+                fields={
+                    "entity_id": entity.entity_id,
+                    "status": entity.status,
+                    "revealed_chapter": entity.revealed_chapter,
+                    "first_seen_chapter": entity.first_seen_chapter,
+                    "payload": _canonical_json(asdict(entity)),
+                },
+            )
 
     def upsert_aliases(self, *, aliases: list[GraphAlias]) -> None:
-        super().upsert_aliases(aliases=aliases)
-        self._persist_state_to_disk()
+        for alias in aliases:
+            self._upsert_node(
+                table="GraphAlias",
+                key="alias_id",
+                key_value=alias.alias_id,
+                fields={
+                    "alias_id": alias.alias_id,
+                    "status": alias.status,
+                    "entity_id": alias.entity_id,
+                    "revealed_chapter": alias.revealed_chapter,
+                    "first_seen_chapter": alias.first_seen_chapter,
+                    "payload": _canonical_json(asdict(alias)),
+                },
+            )
 
     def upsert_appearances(self, *, appearances: list[GraphAppearance]) -> None:
-        super().upsert_appearances(appearances=appearances)
-        self._persist_state_to_disk()
+        for appearance in appearances:
+            self._upsert_node(
+                table="GraphAppearance",
+                key="appearance_id",
+                key_value=appearance.appearance_id,
+                fields={
+                    "appearance_id": appearance.appearance_id,
+                    "status": appearance.status,
+                    "entity_id": appearance.entity_id,
+                    "chapter_number": appearance.chapter_number,
+                    "payload": _canonical_json(asdict(appearance)),
+                },
+            )
 
     def upsert_relationships(self, *, relationships: list[GraphRelationship]) -> None:
-        super().upsert_relationships(relationships=relationships)
-        self._persist_state_to_disk()
+        for relationship in relationships:
+            self._upsert_node(
+                table="GraphRelationship",
+                key="relationship_id",
+                key_value=relationship.relationship_id,
+                fields={
+                    "relationship_id": relationship.relationship_id,
+                    "status": relationship.status,
+                    "source_entity_id": relationship.source_entity_id,
+                    "target_entity_id": relationship.target_entity_id,
+                    "revealed_chapter": relationship.revealed_chapter,
+                    "start_chapter": relationship.start_chapter,
+                    "end_chapter": relationship.end_chapter,
+                    "payload": _canonical_json(asdict(relationship)),
+                },
+            )
+
+    def list_entities(self, *, status: str | None = None) -> list[GraphEntity]:
+        return [GraphEntity(**row) for row in self._list_payloads(table="GraphEntity", status=status)]
+
+    def list_aliases(self, *, status: str | None = None) -> list[GraphAlias]:
+        return [GraphAlias(**row) for row in self._list_payloads(table="GraphAlias", status=status)]
+
+    def list_appearances(self, *, status: str | None = None) -> list[GraphAppearance]:
+        rows = [GraphAppearance(**row) for row in self._list_payloads(table="GraphAppearance", status=status)]
+        return sorted(rows, key=lambda row: (row.chapter_number, row.appearance_id))
+
+    def list_relationships(self, *, status: str | None = None) -> list[GraphRelationship]:
+        rows = [GraphRelationship(**row) for row in self._list_payloads(table="GraphRelationship", status=status)]
+        return sorted(rows, key=lambda row: row.relationship_id)
 
 
 @dataclass(slots=True)
@@ -185,6 +343,19 @@ class GraphClient:
 
     def list_relationships(self, *, status: str | None = None) -> list[GraphRelationship]:
         return self.backend.list_relationships(status=status)
+
+    def get_chapter_safe_subgraph(
+        self,
+        *,
+        chapter_number: int,
+        include_provisional: bool = False,
+    ) -> dict[str, list[Any]]:
+        if chapter_number < 1:
+            raise ValueError("chapter_number must be >= 1")
+        return self.backend.get_chapter_safe_subgraph(
+            chapter_number=chapter_number,
+            include_provisional=include_provisional,
+        )
 
     def export_snapshot(
         self,

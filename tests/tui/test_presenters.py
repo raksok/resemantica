@@ -68,6 +68,69 @@ def test_event_bus_filters_by_type():
             pass
 
 
+def test_event_bus_deduplicates_subscribers():
+    from resemantica.orchestration.events import subscribe, unsubscribe, emit_event
+
+    received: list[str] = []
+
+    def cb(event):
+        received.append(event.event_type)
+
+    subscribe("dedupe.event", cb)
+    subscribe("dedupe.event", cb)
+    try:
+        import uuid
+        release_id = f"test-rel-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        emit_event(run_id, release_id, "dedupe.event", "s")
+
+        assert received == ["dedupe.event"]
+    finally:
+        unsubscribe("dedupe.event", cb)
+
+
+def test_tui_adapter_launch_workflow_delegates_to_runner():
+    from resemantica.tui.adapter import TUIAdapter
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, Any]]] = []
+
+        def run_stage(self, stage_name: str, **options):
+            self.calls.append((stage_name, options))
+            return {"stage": stage_name, "options": options}
+
+        def run_production(self, **options):
+            self.calls.append(("production", options))
+            return {"stage": "production", "options": options}
+
+    runner = Runner()
+    adapter = TUIAdapter("rel", "run", runner=runner)  # type: ignore[arg-type]
+
+    result = adapter.launch_workflow("translation", chapter_start=1, chapter_end=2)
+
+    assert result["stage"] == "translate-range"
+    assert runner.calls == [("translate-range", {"chapter_start": 1, "chapter_end": 2})]
+
+
+def test_reset_preview_screen_renders_delete_and_preserve_targets():
+    from resemantica.tui.screens.reset_preview import ResetPreviewScreen
+
+    screen = ResetPreviewScreen()
+    rendered = screen._render_plan(
+        {
+            "deletable_artifacts": ["/tmp/delete-me"],
+            "preserved_artifacts": ["/tmp/keep-me"],
+        }
+    )
+
+    assert "WILL DELETE" in rendered
+    assert "/tmp/delete-me" in rendered
+    assert "WILL PRESERVE" in rendered
+    assert "/tmp/keep-me" in rendered
+
+
 def test_dashboard_presenter_builds_phase_progress():
     from resemantica.tui.screens.dashboard import DashboardScreen
     screen = DashboardScreen()

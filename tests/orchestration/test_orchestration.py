@@ -8,7 +8,7 @@ from resemantica.orchestration.models import (
     next_stage,
     STAGE_ORDER,
 )
-from resemantica.orchestration import emit_event, run_stage, resume_run, plan_cleanup, apply_cleanup
+from resemantica.orchestration import OrchestrationRunner, emit_event, run_stage, resume_run, plan_cleanup, apply_cleanup
 from resemantica.tracking.models import Event, RunState
 from resemantica.tracking.repo import (
     get_tracking_db_path,
@@ -163,12 +163,32 @@ class TestRunStage:
         assert result.success is False
         assert "Illegal stage transition" in result.message
 
+    def test_runner_production_dry_run_returns_ordered_graph(self):
+        import uuid
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        result = OrchestrationRunner(release_id, run_id).run_production(dry_run=True)
+
+        assert result.success is True
+        assert [stage["stage_name"] for stage in result.metadata["stages"]] == STAGE_ORDER
+
+    def test_translate_range_requires_bounds(self):
+        import uuid
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        result = OrchestrationRunner(release_id, run_id).run_stage("translate-range")
+
+        assert result.success is False
+        assert "requires chapter_start and chapter_end" in result.message
+
 
 class TestM11CleanupScopes:
     def _create_test_artifacts(self, release_id: str, run_id: str):
-        from resemantica.settings import load_config
+        from resemantica.settings import derive_paths, load_config
         cfg = load_config()
-        release_root = Path(cfg.paths.artifact_root) / release_id
+        release_root = derive_paths(cfg, release_id=release_id).release_root
         run_dir = release_root / "runs" / run_id
 
         # Create run artifacts

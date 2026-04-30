@@ -21,6 +21,7 @@ class TestCliDispatch:
             "packets",
             "rebuild-epub",
             "translate-range",
+            "run-production",
             "run",
             "tui",
         }
@@ -69,6 +70,12 @@ class TestCliDispatch:
         args = parser.parse_args(["run", "production", "--release", "r1"])
         assert args.run_command == "production"
 
+    def test_top_level_run_production(self):
+        parser = _build_parser()
+        args = parser.parse_args(["run-production", "--release", "r1", "--dry-run"])
+        assert args.command == "run-production"
+        assert args.dry_run is True
+
     def test_run_resume(self):
         parser = _build_parser()
         args = parser.parse_args(["run", "resume", "--release", "r1", "--from-stage", "translate-chapter"])
@@ -112,8 +119,9 @@ class TestCliDispatch:
 
     def test_rebuild_epub(self):
         parser = _build_parser()
-        args = parser.parse_args(["rebuild-epub", "--release", "r1"])
+        args = parser.parse_args(["rebuild-epub", "--release", "r1", "--run-id", "run-1"])
         assert args.command == "rebuild-epub"
+        assert args.run_id == "run-1"
 
     def test_translate_range(self):
         parser = _build_parser()

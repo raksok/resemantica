@@ -256,6 +256,52 @@ def test_chapter_safe_relationship_filter() -> None:
     assert [row.relationship_id for row in chapter_2.relationships] == ["rel_ok"]
 
 
+def test_ladybug_graph_state_survives_restart_without_state_json(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.ladybug"
+    client = GraphClient.from_ladybug(db_path=db_path)
+    client.upsert_entities(
+        entities=[
+            GraphEntity(
+                entity_id="ent_a",
+                release_id="rel",
+                entity_type="character",
+                canonical_name="A",
+                glossary_entry_id=None,
+                first_seen_chapter=1,
+                last_seen_chapter=1,
+                revealed_chapter=1,
+                status="confirmed",
+            )
+        ]
+    )
+
+    restarted = GraphClient.from_ladybug(db_path=db_path)
+
+    assert not db_path.with_suffix(".state.json").exists()
+    assert [entity.entity_id for entity in restarted.list_entities()] == ["ent_a"]
+
+
+def test_ladybug_chapter_safe_subgraph_excludes_future_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.ladybug"
+    client = GraphClient.from_ladybug(db_path=db_path)
+    client.upsert_entities(
+        entities=[
+            GraphEntity("ent_a", "rel", "character", "A", None, 1, 5, 1, "confirmed"),
+            GraphEntity("ent_b", "rel", "character", "B", None, 4, 5, 4, "confirmed"),
+        ]
+    )
+    client.upsert_relationships(
+        relationships=[
+            GraphRelationship("rel_future", "rel", "ALLY_OF", "ent_a", "ent_b", 4, 4, None, 4, 1.0, "confirmed"),
+        ]
+    )
+
+    chapter_3 = client.get_chapter_safe_subgraph(chapter_number=3)
+
+    assert [entity.entity_id for entity in chapter_3["entities"]] == ["ent_a"]
+    assert chapter_3["relationships"] == []
+
+
 def test_graph_validator_rejects_invalid_references_and_ranges() -> None:
     validation = validate_graph_state(
         entities=[

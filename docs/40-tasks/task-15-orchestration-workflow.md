@@ -1,44 +1,70 @@
 # Task 15: Orchestration & Workflow
 
+## Milestone And Depends On
+
+Milestone: M15
+
+Depends on: M10-M14B
+
 ## Goal
 
-Ensure the centralized orchestration layer manages all production and maintenance workflows, eliminating CLI-direct bypasses and ensuring full-novel translation support.
+Close the orchestration drift by making the orchestration layer the shared execution core for production, translation, reconstruction, resume, and reset workflows.
 
 ## Scope
 
 In:
 
-- Implementing the complete `run-production` workflow in `src/resemantica/orchestration/runner.py`.
-- Fixing the `translate-chapter` stage to correctly iterate over chapters (it is currently a stub).
-- Refactoring `src/resemantica/cli.py` commands (`translate-chapter`, `translate-range`, `epub-rebuild`) to invoke the `OrchestrationRunner` instead of executing logic directly.
-- Ensuring event emission is consistent across the orchestration layer.
+- Add an `OrchestrationRunner` service in `src/resemantica/orchestration/runner.py`.
+- Implement `OrchestrationRunner.run_production()` as the baked-in full workflow.
+- Implement `OrchestrationRunner.run_stage()` for all registered stages, including `translate-chapter`, `translate-range`, `epub-rebuild`, and `reset`.
+- Replace CLI-direct execution for `translate-chapter`, `translate-range`, and `rebuild-epub` with orchestration calls.
+- Add a `run-production` CLI entrypoint with `--dry-run`, while preserving existing `run production` compatibility if desired.
+- Ensure stage, chapter, retry, validation, artifact, and finalization events are emitted by orchestration.
+- Persist run state and checkpoints through the shared tracking/storage layer.
 
 Out:
 
-- Modifying actual translation pass logic (this is strictly about orchestration and dispatch).
+- Changing translation pass prompt behavior.
+- Rewriting EPUB reconstruction internals beyond invoking the formal stage.
 - Updating the TUI dashboard (covered by Task 18).
 
 ## Owned Files Or Modules
 
 - `src/resemantica/orchestration/runner.py`
+- `src/resemantica/orchestration/models.py`
 - `src/resemantica/cli.py`
 - `src/resemantica/orchestration/events.py`
+- `src/resemantica/orchestration/resume.py`
+- `tests/orchestration/`
+- `tests/cli/`
 
 ## Interfaces To Satisfy
 
+- `OrchestrationRunner`
 - `OrchestrationRunner.run_production()`
-- `OrchestrationRunner.run_stage("translate-chapter", ...)`
+- `OrchestrationRunner.run_stage(stage_name, ...)`
+- `OrchestrationRunner.run_stage("translate-chapter", chapter_number=...)`
+- `OrchestrationRunner.run_stage("translate-range", chapter_start=..., chapter_end=...)`
+- `OrchestrationRunner.run_stage("reset", scope=..., dry_run=...)`
+- `resemantica run-production --release <id> --run <id> --dry-run`
+- `resemantica run production --release <id> --run <id>`
 - CLI commands for `translate-chapter`, `translate-range`, and `rebuild-epub`.
 
 ## Tests Or Smoke Checks
 
-- Run `resemantica run-production --dry-run` to verify the execution graph.
-- Run `resemantica translate-range --start 1 --end 5` and verify orchestration events are emitted.
+- Unit test production dry-run returns the expected execution graph without invoking stages.
+- Unit test `translate-chapter` invokes pass1, pass2, and optional pass3 for one chapter through the runner.
+- Unit test `translate-range --start 1 --end 5` invokes the runner and emits chapter events.
+- Unit test `rebuild-epub` invokes the `epub-rebuild` stage through the runner.
+- Run `uv run --with pytest pytest tests/orchestration tests/cli -q`.
+- Smoke check `uv run python -m resemantica.cli run-production --release <id> --run <id> --dry-run`.
 - Verify that chapter completion checkpoints are correctly saved during `translate-range`.
 
 ## Done Criteria
 
-- The `run-production` workflow successfully iterates through preprocessing, translation, and reconstruction.
-- CLI commands for translation and reconstruction use the orchestration runner.
-- The `translate-chapter` stage correctly handles the chapter sequence.
-- Orchestration events are emitted for all major workflow transitions.
+- Production workflow is owned by `OrchestrationRunner`, not by a CLI loop.
+- CLI translation and reconstruction commands no longer call lower-level pipelines directly.
+- `translate-chapter` and `translate-range` are functional orchestration stages, not stubs.
+- A dry-run production graph is inspectable and deterministic.
+- Events use the shared event contract for all major workflow transitions.
+- `docs/20-lld/lld-15-orchestration-workflow.md` is implemented and kept in sync.

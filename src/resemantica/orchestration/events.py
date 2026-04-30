@@ -2,20 +2,58 @@ from __future__ import annotations
 
 from collections import defaultdict
 from typing import Any, Callable, Optional
+import logging
 
 from resemantica.tracking.models import Event
 from resemantica.tracking.repo import ensure_tracking_db, save_event
 
 _EventCallback = Callable[[Event], None]
-_subscribers: dict[str, list[_EventCallback]] = defaultdict(list)
+logger = logging.getLogger(__name__)
+
+
+class EventBus:
+    def __init__(self) -> None:
+        self._subscribers: dict[str, list[_EventCallback]] = defaultdict(list)
+
+    def subscribe(self, event_type: str, callback: _EventCallback) -> None:
+        callbacks = self._subscribers[event_type]
+        if callback not in callbacks:
+            callbacks.append(callback)
+
+    def unsubscribe(self, event_type: str, callback: _EventCallback) -> None:
+        callbacks = self._subscribers.get(event_type, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+
+    def publish(self, event: Event) -> Event:
+        conn = ensure_tracking_db(event.release_id or "")
+        try:
+            save_event(conn, event)
+        finally:
+            conn.close()
+
+        callbacks = [
+            *self._subscribers.get(event.event_type, []),
+            *self._subscribers.get("*", []),
+        ]
+        for callback in callbacks:
+            try:
+                callback(event)
+            except Exception:
+                logger.warning("Event subscriber failed for %s", event.event_type, exc_info=True)
+        return event
+
+
+default_event_bus = EventBus()
+_subscribers = default_event_bus._subscribers
 
 
 def subscribe(event_type: str, callback: _EventCallback) -> None:
-    _subscribers[event_type].append(callback)
+    default_event_bus.subscribe(event_type, callback)
 
 
 def unsubscribe(event_type: str, callback: _EventCallback) -> None:
-    _subscribers[event_type].remove(callback)
+    default_event_bus.unsubscribe(event_type, callback)
 
 
 def emit_event(
@@ -41,13 +79,4 @@ def emit_event(
         block_id=block_id,
         payload=payload or {},
     )
-    conn = ensure_tracking_db(release_id)
-    try:
-        save_event(conn, event)
-    finally:
-        conn.close()
-
-    for cb in _subscribers.get(event_type, []):
-        cb(event)
-
-    return event
+    return default_event_bus.publish(event)

@@ -10,10 +10,11 @@ STAGE_ORDER = [
     "preprocess-idioms",
     "preprocess-graph",
     "packets-build",
-    "translate-chapter",
-    "translate-pass3",
+    "translate-range",
     "epub-rebuild",
 ]
+
+CALLABLE_STAGES = [*STAGE_ORDER, "translate-chapter", "reset"]
 
 
 @dataclass
@@ -31,6 +32,10 @@ def legal_transition(current: Optional[str], target: str) -> bool:
     if current == target:
         return True
     try:
+        if current not in STAGE_ORDER or target not in CALLABLE_STAGES:
+            return False
+        if target not in STAGE_ORDER:
+            return True
         return STAGE_ORDER.index(target) >= STAGE_ORDER.index(current)
     except ValueError:
         return False

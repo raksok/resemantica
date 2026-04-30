@@ -5,6 +5,7 @@ from pathlib import Path
 import zipfile
 
 from resemantica.epub.extractor import extract_epub
+from resemantica.epub.rebuild import rebuild_chapter_xhtml
 
 
 def _write_fixture_epub(epub_path: Path, chapters: list[str]) -> None:
@@ -97,6 +98,25 @@ def test_epub_roundtrip_writes_artifacts_and_rebuilds(tmp_path: Path, monkeypatc
     rebuilt_ch1 = _read_zip_file(result.rebuilt_epub_path, "OEBPS/chapter1.xhtml")
     assert original_ch1 == rebuilt_ch1
 
+    from resemantica.db.sqlite import open_connection
+    from resemantica.settings import derive_paths, load_config
+
+    paths = derive_paths(load_config(), release_id="m1-fixture")
+    conn = open_connection(paths.db_path)
+    try:
+        chapter_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM extracted_chapters WHERE release_id = ?",
+            ("m1-fixture",),
+        ).fetchone()["count"]
+        block_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM extracted_blocks WHERE release_id = ?",
+            ("m1-fixture",),
+        ).fetchone()["count"]
+    finally:
+        conn.close()
+    assert chapter_count == 2
+    assert block_count >= 3
+
 
 def test_malformed_xhtml_generates_readable_report(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
@@ -167,3 +187,94 @@ def test_long_block_is_split_with_segment_ids(tmp_path: Path, monkeypatch) -> No
     assert records[0]["block_id"].startswith("ch001_blk001_seg")
     assert records[0]["parent_block_id"] == "ch001_blk001"
     assert records[0]["segment_order"] == 1
+
+
+def test_rebuild_chapter_xhtml_preserves_tags_and_attributes() -> None:
+    source_xhtml = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+        '<p class="lead">原文。</p>'
+        "</body></html>"
+    )
+    records = [
+        {
+            "chapter_number": 1,
+            "source_document_path": "OEBPS/chapter1.xhtml",
+            "block_id": "ch001_blk001",
+            "parent_block_id": "ch001_blk001",
+            "block_order": 1,
+            "segment_order": None,
+        }
+    ]
+    result = rebuild_chapter_xhtml(
+        source_xhtml,
+        records,
+        [{"block_id": "ch001_blk001", "parent_block_id": "ch001_blk001", "restored_text_en": "Translated."}],
+        {},
+    )
+
+    assert result.status == "success"
+    assert 'class="lead"' in result.xhtml
+    assert "Translated." in result.xhtml
+
+
+def test_rebuild_chapter_xhtml_prefers_pass3_final_output() -> None:
+    source_xhtml = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>原文。</p></body></html>'
+    records = [
+        {
+            "chapter_number": 1,
+            "source_document_path": "OEBPS/chapter1.xhtml",
+            "block_id": "ch001_blk001",
+            "parent_block_id": "ch001_blk001",
+            "block_order": 1,
+            "segment_order": None,
+        }
+    ]
+    result = rebuild_chapter_xhtml(
+        source_xhtml,
+        records,
+        [
+            {
+                "block_id": "ch001_blk001",
+                "parent_block_id": "ch001_blk001",
+                "restored_text_en": "Pass 2.",
+                "final_output": "Pass 3.",
+            }
+        ],
+        {},
+    )
+
+    assert "Pass 3." in result.xhtml
+    assert "Pass 2." not in result.xhtml
+
+
+def test_rebuild_chapter_xhtml_reassembles_segments() -> None:
+    source_xhtml = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>很长。</p></body></html>'
+    records = [
+        {
+            "chapter_number": 1,
+            "source_document_path": "OEBPS/chapter1.xhtml",
+            "block_id": "ch001_blk001_seg01",
+            "parent_block_id": "ch001_blk001",
+            "block_order": 1,
+            "segment_order": 1,
+        },
+        {
+            "chapter_number": 1,
+            "source_document_path": "OEBPS/chapter1.xhtml",
+            "block_id": "ch001_blk001_seg02",
+            "parent_block_id": "ch001_blk001",
+            "block_order": 1,
+            "segment_order": 2,
+        },
+    ]
+    result = rebuild_chapter_xhtml(
+        source_xhtml,
+        records,
+        [
+            {"block_id": "ch001_blk001_seg02", "parent_block_id": "ch001_blk001", "segment_order": 2, "restored_text_en": " two."},
+            {"block_id": "ch001_blk001_seg01", "parent_block_id": "ch001_blk001", "segment_order": 1, "restored_text_en": "Part"},
+        ],
+        {},
+    )
+
+    assert "Part two." in result.xhtml

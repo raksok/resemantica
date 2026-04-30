@@ -12,6 +12,8 @@ from resemantica.tui.screens import (
     WarningsScreen,
     ArtifactsScreen,
     CleanupScreen,
+    EventLogScreen,
+    ResetPreviewScreen,
     SettingsScreen,
 )
 
@@ -28,6 +30,8 @@ class ResemanticaApp(App):
         "warnings": WarningsScreen,
         "artifacts": ArtifactsScreen,
         "cleanup": CleanupScreen,
+        "event-log": EventLogScreen,
+        "reset-preview": ResetPreviewScreen,
         "settings": SettingsScreen,
     }
 
@@ -38,7 +42,9 @@ class ResemanticaApp(App):
         Binding("4", "switch_screen('warnings')", "Warnings", priority=True),
         Binding("5", "switch_screen('artifacts')", "Artifacts", priority=True),
         Binding("6", "switch_screen('cleanup')", "Cleanup", priority=True),
-        Binding("7", "switch_screen('settings')", "Settings", priority=True),
+        Binding("7", "switch_screen('event-log')", "Events", priority=True),
+        Binding("8", "switch_screen('reset-preview')", "Reset", priority=True),
+        Binding("9", "switch_screen('settings')", "Settings", priority=True),
         Binding("q", "quit", "Quit", priority=True),
     ]
 

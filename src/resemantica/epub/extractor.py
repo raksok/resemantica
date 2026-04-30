@@ -11,6 +11,8 @@ from resemantica.epub.models import ChapterDocument, ChapterParseResult, RoundTr
 from resemantica.epub.parser import parse_chapters
 from resemantica.epub.rebuild import rebuild_epub
 from resemantica.epub.validators import validate_extraction
+from resemantica.db.extraction_repo import ExtractionRepo
+from resemantica.db.sqlite import open_connection
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 _XHTML_MEDIA_TYPES = {
@@ -139,6 +141,7 @@ def extract_epub(
     release_id: str,
     config: AppConfig | None = None,
     project_root: Path | None = None,
+    run_id: str = "epub-extract",
 ) -> RoundTripResult:
     input_epub = Path(input_path).resolve()
     if not input_epub.exists():
@@ -172,6 +175,17 @@ def extract_epub(
         chapter_dir=paths.extracted_chapters_dir,
         placeholder_dir=paths.extracted_placeholders_dir,
     )
+    conn = open_connection(paths.db_path)
+    try:
+        repo = ExtractionRepo(conn)
+        for chapter_result in chapter_results:
+            repo.record_extraction_metadata(
+                release_id=release_id,
+                run_id=run_id,
+                chapter_result=chapter_result,
+            )
+    finally:
+        conn.close()
 
     validation_report = validate_extraction(release_id, chapter_results)
     validation_report_path = paths.extracted_reports_dir / "xhtml-validation.json"
