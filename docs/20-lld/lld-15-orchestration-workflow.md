@@ -123,10 +123,11 @@ Subsystems retain domain validation, such as placeholder validation and graph co
 - Illegal transitions and missing stage options fail before subsystem invocation.
 - Existing `run production` remains compatible or is explicitly migrated with tests updated.
 
-## Migration Notes
+## Implementation Status
 
-Current drift to fix:
+Implemented drift closure:
 
-- Production is currently a CLI loop over `STAGE_ORDER`.
-- `translate-chapter` in the runner is a stub.
-- `translate-chapter`, `translate-range`, and `rebuild-epub` currently bypass orchestration.
+- Production execution is owned by `OrchestrationRunner.run_production()`.
+- `translate-chapter` and `translate-range` are functional runner stages.
+- CLI translation and reconstruction commands delegate through `OrchestrationRunner`.
+- Remaining operator-console polish is tracked separately in `docs/40-tasks/task-19-tui-completion-and-smoke-validation.md`.

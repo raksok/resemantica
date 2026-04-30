@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
-from resemantica.settings import AppConfig, load_config
+from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.tracking.models import RunState
 from resemantica.tracking.repo import ensure_tracking_db, load_run_state, save_run_state
 
@@ -177,6 +178,34 @@ class OrchestrationRunner:
         )
         return result
 
+    def _chapter_number_from_path(self, path: Path) -> int:
+        return int(path.stem.split("-", 1)[1])
+
+    def _resolve_chapter_range(
+        self,
+        *,
+        chapter_start: int | None,
+        chapter_end: int | None,
+    ) -> tuple[int, int]:
+        paths = derive_paths(self.config, release_id=self.release_id)
+        chapter_files = sorted(
+            paths.extracted_chapters_dir.glob("chapter-*.json"),
+            key=self._chapter_number_from_path,
+        )
+        if not chapter_files:
+            raise ValueError(
+                f"No extracted chapters found for release {self.release_id}: "
+                f"{paths.extracted_chapters_dir}"
+            )
+        chapter_numbers = [self._chapter_number_from_path(path) for path in chapter_files]
+        resolved_start = chapter_start if chapter_start is not None else min(chapter_numbers)
+        resolved_end = chapter_end if chapter_end is not None else max(chapter_numbers)
+        if resolved_start < 1 or resolved_end < 1:
+            raise ValueError("chapter_start and chapter_end must be >= 1")
+        if resolved_end < resolved_start:
+            raise ValueError("chapter_end must be greater than or equal to chapter_start")
+        return resolved_start, resolved_end
+
     def _get_run_state(self) -> Optional[RunState]:
         conn = ensure_tracking_db(self.release_id)
         try:
@@ -286,20 +315,22 @@ class OrchestrationRunner:
         if stage_name == "packets-build":
             from resemantica.packets.builder import build_packets
 
-            result = build_packets(
+            packet_result = build_packets(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
+                chapter_number=chapter_number,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
             )
-            failed = int(result.get("chapters_failed", 0))
+            failed_value = packet_result.get("chapters_failed", 0)
+            failed = int(failed_value) if isinstance(failed_value, (int, str)) else 0
             msg = (
-                f"Packets: {result.get('chapters_built', 0)} built, "
-                f"{result.get('chapters_up_to_date', 0)} up-to-date, "
-                f"{result.get('chapters_skipped', 0)} skipped, {failed} failed"
+                f"Packets: {packet_result.get('chapters_built', 0)} built, "
+                f"{packet_result.get('chapters_up_to_date', 0)} up-to-date, "
+                f"{packet_result.get('chapters_skipped', 0)} skipped, {failed} failed"
             )
-            return StageResult(failed == 0, stage_name, msg, metadata=dict(result))
+            return StageResult(failed == 0, stage_name, msg, metadata=dict(packet_result))
 
         if stage_name == "translate-chapter":
             if chapter_number is None:
@@ -307,25 +338,28 @@ class OrchestrationRunner:
             return self._translate_chapter(chapter_number=chapter_number, force=force)
 
         if stage_name == "translate-range":
-            if chapter_start is None or chapter_end is None:
-                return StageResult(False, stage_name, "translate-range requires chapter_start and chapter_end")
-            if chapter_end < chapter_start:
-                return StageResult(False, stage_name, "chapter_end must be greater than or equal to chapter_start")
+            try:
+                chapter_start, chapter_end = self._resolve_chapter_range(
+                    chapter_start=chapter_start,
+                    chapter_end=chapter_end,
+                )
+            except ValueError as exc:
+                return StageResult(False, stage_name, str(exc))
             return self._translate_range(chapter_start=chapter_start, chapter_end=chapter_end, force=force)
 
         if stage_name == "epub-rebuild":
             from resemantica.epub.rebuild import rebuild_translated_epub
 
-            result = rebuild_translated_epub(
+            rebuild_result = rebuild_translated_epub(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
             )
             return StageResult(
-                success=result.status == "success",
+                success=rebuild_result.status == "success",
                 stage_name=stage_name,
-                message=f"EPUB rebuilt at {result.output_path}",
-                metadata=result.to_json_dict(),
+                message=f"EPUB rebuilt at {rebuild_result.output_path}",
+                metadata=rebuild_result.to_json_dict(),
             )
 
         if stage_name == "reset":

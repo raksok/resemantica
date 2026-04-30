@@ -63,3 +63,10 @@ Out:
 - The TUI provides a functional interface for the Reset/Cleanup workflow.
 - All orchestration events are correctly captured and displayed in the TUI's event log.
 - `docs/20-lld/lld-18-tui-and-events.md` is implemented and kept in sync.
+
+## Follow-Up
+
+The remaining operator-console completion work is split into M19:
+
+- `docs/40-tasks/task-19-tui-completion-and-smoke-validation.md`
+- `docs/20-lld/lld-19-tui-completion-and-smoke-validation.md`

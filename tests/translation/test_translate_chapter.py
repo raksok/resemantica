@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 import zipfile
 
-import pytest
-
 from resemantica.epub.extractor import extract_epub
 from resemantica.translation.pipeline import (
     translate_chapter_pass1,
@@ -110,7 +108,7 @@ def test_placeholder_preservation_and_pass2_correction(tmp_path: Path, monkeypat
     )
 
     client = ScriptedLLM()
-    r1 = translate_chapter_pass1(
+    translate_chapter_pass1(
         release_id="m2-placeholder",
         chapter_number=1,
         run_id="run-001",
@@ -197,7 +195,7 @@ def test_resume_from_successful_pass1_skips_pass1(tmp_path: Path, monkeypatch) -
     )
 
     first_client = ScriptedLLM()
-    r1p1 = translate_chapter_pass1(
+    translate_chapter_pass1(
         release_id="m2-resume",
         chapter_number=1,
         run_id="run-001",
@@ -213,7 +211,7 @@ def test_resume_from_successful_pass1_skips_pass1(tmp_path: Path, monkeypatch) -
     assert first_client.pass1_calls > 0
 
     second_client = ScriptedLLM()
-    r2p1 = translate_chapter_pass1(
+    translate_chapter_pass1(
         release_id="m2-resume",
         chapter_number=1,
         run_id="run-001",
@@ -227,4 +225,3 @@ def test_resume_from_successful_pass1_skips_pass1(tmp_path: Path, monkeypatch) -
     )
     assert r2p2["status"] == "success"
     assert second_client.pass1_calls == 0
-

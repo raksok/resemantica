@@ -72,9 +72,13 @@ class TestCliDispatch:
 
     def test_top_level_run_production(self):
         parser = _build_parser()
-        args = parser.parse_args(["run-production", "--release", "r1", "--dry-run"])
+        args = parser.parse_args(
+            ["run-production", "--release", "r1", "--dry-run", "--start", "2", "--end", "4"]
+        )
         assert args.command == "run-production"
         assert args.dry_run is True
+        assert args.start == 2
+        assert args.end == 4
 
     def test_run_resume(self):
         parser = _build_parser()

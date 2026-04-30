@@ -181,7 +181,32 @@ class TestRunStage:
         result = OrchestrationRunner(release_id, run_id).run_stage("translate-range")
 
         assert result.success is False
-        assert "requires chapter_start and chapter_end" in result.message
+        assert "No extracted chapters found" in result.message
+
+    def test_translate_range_infers_bounds_from_extracted_chapters(self, monkeypatch):
+        import uuid
+        from resemantica.settings import derive_paths, load_config
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+        paths = derive_paths(load_config(), release_id=release_id)
+        paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
+        (paths.extracted_chapters_dir / "chapter-2.json").write_text("{}")
+        (paths.extracted_chapters_dir / "chapter-3.json").write_text("{}")
+
+        translated = []
+
+        def fake_translate_chapter(self, *, chapter_number: int, force: bool = False):
+            translated.append(chapter_number)
+            return StageResult(True, "translate-chapter", "ok")
+
+        monkeypatch.setattr(OrchestrationRunner, "_translate_chapter", fake_translate_chapter)
+
+        result = OrchestrationRunner(release_id, run_id).run_stage("translate-range")
+
+        assert result.success is True
+        assert translated == [2, 3]
 
 
 class TestM11CleanupScopes:

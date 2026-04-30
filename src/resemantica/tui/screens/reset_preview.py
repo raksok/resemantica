@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.widgets import Button, Static
@@ -64,8 +66,8 @@ class ResetPreviewScreen(BaseScreen):
         self.query_one("#btn-reset-apply", Button).disabled = True
 
     def _render_plan(self, plan: dict[str, object]) -> str:
-        deletable = list(plan.get("deletable_artifacts", []))
-        preserved = list(plan.get("preserved_artifacts", []))
+        deletable = list(cast(list[object], plan.get("deletable_artifacts", [])))
+        preserved = list(cast(list[object], plan.get("preserved_artifacts", [])))
         lines = [f"WILL DELETE ({len(deletable)} items)"]
         lines.extend(f"  {item}" for item in deletable[:10])
         lines.append("")

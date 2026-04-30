@@ -41,3 +41,4 @@ Always follow the milestone sequence below.
 | M16 | task-16 | M15 | EPUB Reconstruction Phase 2 |
 | M17 | task-17 | M15, M16 | Data Storage + Contract Compliance |
 | M18 | task-18 | M15, M17 | TUI + Live Operator Events |
+| M19 | task-19 | M18, M16 | TUI Completion + Reconstruction Smoke Validation |

@@ -518,7 +518,7 @@ class TestPass3SkipAndPipeline:
                     return "You ⟦B_1⟧good⟦/B_1⟧?"
                 return ""
         client = FailPass2()
-        r1 = translate_chapter_pass1(
+        translate_chapter_pass1(
             release_id="m9-fail-report",
             chapter_number=1,
             run_id="run-fail-report",

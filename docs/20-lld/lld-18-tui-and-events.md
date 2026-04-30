@@ -100,13 +100,18 @@ Screen refresh may still poll run state for resilience, but live event widgets s
 - reset preview renders delete and preserve targets
 - reset apply is disabled until preview exists
 
-## Migration Notes
+## Implementation Status
 
-Current drift to fix:
+Implemented:
 
-- TUI screens are mostly read-only.
-- screens poll SQLite rather than subscribing to live events.
-- no `TUIAdapter` exists.
-- no `EventBus` class exists.
-- no `ResetPreviewScreen` exists.
-- chapter spine and block progress are placeholders rather than run-derived state.
+- `EventBus` exists and persists events before notifying live subscribers.
+- `TUIAdapter` exists as the TUI-facing controller over `OrchestrationRunner`.
+- `EventLogScreen` subscribes to live events.
+- `ResetPreviewScreen` supports cleanup preview and guarded apply.
+- Translation/orchestration emits paragraph, retry, risk, validation, artifact, and chapter events.
+
+Remaining gaps are split into `docs/40-tasks/task-19-tui-completion-and-smoke-validation.md`:
+
+- launch controls on preprocessing and translation screens
+- run-derived chapter spine and block progress rendering
+- documented manual smoke validation for a completed translated EPUB

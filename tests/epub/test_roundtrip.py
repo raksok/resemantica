@@ -247,6 +247,51 @@ def test_rebuild_chapter_xhtml_prefers_pass3_final_output() -> None:
     assert "Pass 2." not in result.xhtml
 
 
+def test_rebuild_chapter_xhtml_restores_placeholders_before_insertion() -> None:
+    source_xhtml = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>你<b>好</b>。</p></body></html>'
+    records = [
+        {
+            "chapter_number": 1,
+            "source_document_path": "OEBPS/chapter1.xhtml",
+            "block_id": "ch001_blk001",
+            "parent_block_id": "ch001_blk001",
+            "block_order": 1,
+            "segment_order": None,
+        }
+    ]
+    placeholder_map = {
+        "blocks": {
+            "ch001_blk001": [
+                {
+                    "placeholder": "⟦B_1⟧",
+                    "element": "b",
+                    "attributes": {},
+                    "original_xhtml": "<b>",
+                    "parent_placeholder": None,
+                    "depth": 0,
+                    "closing_order": ["⟦B_1⟧"],
+                }
+            ]
+        }
+    }
+    result = rebuild_chapter_xhtml(
+        source_xhtml,
+        records,
+        [
+            {
+                "block_id": "ch001_blk001",
+                "parent_block_id": "ch001_blk001",
+                "final_output": "Hello ⟦B_1⟧world⟦/B_1⟧.",
+            }
+        ],
+        placeholder_map,
+    )
+
+    assert result.status == "success"
+    assert "⟦B_1⟧" not in result.xhtml
+    assert "<b>world</b>" in result.xhtml
+
+
 def test_rebuild_chapter_xhtml_reassembles_segments() -> None:
     source_xhtml = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>很长。</p></body></html>'
     records = [

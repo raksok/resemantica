@@ -3,18 +3,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+from typing import Any
 
 from resemantica.epub.extractor import extract_epub
-from resemantica.graph.pipeline import preprocess_graph
 from resemantica.glossary.pipeline import (
     promote_glossary_candidates,
     translate_glossary_candidates,
 )
-from resemantica.idioms.pipeline import preprocess_idioms
-from resemantica.packets.builder import build_packets
 from resemantica.orchestration import OrchestrationRunner
 from resemantica.settings import load_config
-from resemantica.summaries.pipeline import preprocess_summaries
 
 
 def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: str) -> None:
@@ -30,6 +27,23 @@ def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: st
         type=Path,
         default=None,
         help="Optional path to resemantica.toml",
+    )
+
+
+def _add_chapter_range_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--start",
+        required=False,
+        type=int,
+        default=None,
+        help="Optional starting chapter number.",
+    )
+    parser.add_argument(
+        "--end",
+        required=False,
+        type=int,
+        default=None,
+        help="Optional ending chapter number, inclusive.",
     )
 
 
@@ -195,6 +209,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the deterministic production plan without executing stages.",
     )
+    _add_chapter_range_args(run_production_top)
     tui_cmd.add_argument(
         "--run",
         required=False,
@@ -227,6 +242,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the deterministic production plan without executing stages.",
     )
+    _add_chapter_range_args(run_production)
 
     run_resume = run_subparsers.add_parser(
         "resume",
@@ -280,6 +296,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    result: Any
 
     if args.command == "epub-roundtrip":
         config = load_config(args.config)
@@ -344,46 +361,28 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.preprocess_command == "summaries":
-            result = preprocess_summaries(
-                release_id=args.release,
-                run_id=args.run,
-                config=config,
+            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                "preprocess-summaries"
             )
-            print(f"status={result['status']}")
-            print(f"chapters_processed={result['chapters_processed']}")
-            return 0
+            print(f"status={'success' if stage_result.success else 'failed'}")
+            print(f"message={stage_result.message}")
+            return 0 if stage_result.success else 1
 
         if args.preprocess_command == "idioms":
-            result = preprocess_idioms(
-                release_id=args.release,
-                run_id=args.run,
-                config=config,
+            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                "preprocess-idioms"
             )
-            print(f"status={result['status']}")
-            print(f"chapters_processed={result['chapters_processed']}")
-            print(f"candidates_written={result['candidates_written']}")
-            print(f"promoted_count={result['promoted_count']}")
-            print(f"conflict_count={result['conflict_count']}")
-            print(f"candidates_artifact={result['candidates_artifact']}")
-            print(f"policies_artifact={result['policies_artifact']}")
-            print(f"conflicts_artifact={result['conflicts_artifact']}")
-            return 0
+            print(f"status={'success' if stage_result.success else 'failed'}")
+            print(f"message={stage_result.message}")
+            return 0 if stage_result.success else 1
 
         if args.preprocess_command == "graph":
-            result = preprocess_graph(
-                release_id=args.release,
-                run_id=args.run,
-                config=config,
+            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                "preprocess-graph"
             )
-            print(f"status={result['status']}")
-            print(f"provisional_entities={result['provisional_entities']}")
-            print(f"confirmed_entities={result['confirmed_entities']}")
-            print(f"deferred_pending_count={result['deferred_pending_count']}")
-            print(f"deferred_graph_created_count={result['deferred_graph_created_count']}")
-            print(f"snapshot_hash={result['snapshot_hash']}")
-            print(f"snapshot_artifact={result['snapshot_artifact']}")
-            print(f"warnings_artifact={result['warnings_artifact']}")
-            return 0
+            print(f"status={'success' if stage_result.success else 'failed'}")
+            print(f"message={stage_result.message}")
+            return 0 if stage_result.success else 1
 
         parser.print_help()
         return 2
@@ -391,17 +390,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "packets":
         config = load_config(args.config)
         if args.packets_command == "build":
-            result = build_packets(
-                release_id=args.release,
-                run_id=args.run,
+            stage_result = OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                "packets-build",
                 chapter_number=args.chapter,
-                config=config,
             )
-            print(f"status={result['status']}")
-            print(f"chapters_requested={result['chapters_requested']}")
-            print(f"chapters_built={result['chapters_built']}")
-            print(f"chapters_up_to_date={result['chapters_up_to_date']}")
-            return 0
+            print(f"status={'success' if stage_result.success else 'failed'}")
+            print(f"message={stage_result.message}")
+            return 0 if stage_result.success else 1
         parser.print_help()
         return 2
 
@@ -415,7 +410,9 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.run_command == "production":
             result = OrchestrationRunner(args.release, args.run, config=config).run_production(
-                dry_run=bool(getattr(args, "dry_run", False))
+                dry_run=bool(getattr(args, "dry_run", False)),
+                chapter_start=args.start,
+                chapter_end=args.end,
             )
             if getattr(args, "dry_run", False):
                 for stage in result.metadata.get("stages", []):
@@ -472,7 +469,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run-production":
         config = load_config(args.config)
         result = OrchestrationRunner(args.release, args.run, config=config).run_production(
-            dry_run=bool(getattr(args, "dry_run", False))
+            dry_run=bool(getattr(args, "dry_run", False)),
+            chapter_start=args.start,
+            chapter_end=args.end,
         )
         if getattr(args, "dry_run", False):
             for stage in result.metadata.get("stages", []):

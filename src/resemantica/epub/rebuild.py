@@ -9,6 +9,8 @@ from typing import Any
 from xml.etree import ElementTree as ET
 import zipfile
 
+from resemantica.epub.models import PlaceholderEntry
+from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "div", "li", "td", "table"}
@@ -163,6 +165,51 @@ def _translated_text_by_parent(translated_blocks: list[dict[str, Any]]) -> dict[
     }
 
 
+def _placeholder_entries_for_parent(
+    placeholder_map: dict[str, Any] | None,
+    parent_block_id: str,
+) -> list[PlaceholderEntry]:
+    if not placeholder_map:
+        return []
+    blocks = placeholder_map.get("blocks", {})
+    if not isinstance(blocks, dict):
+        return []
+    entries = blocks.get(parent_block_id, [])
+    if not isinstance(entries, list):
+        return []
+    return [PlaceholderEntry(**entry) for entry in entries if isinstance(entry, dict)]
+
+
+def _restore_translation_fragment(
+    *,
+    text: str,
+    placeholder_map: dict[str, Any] | None,
+    parent_block_id: str,
+) -> tuple[str, list[str]]:
+    entries = _placeholder_entries_for_parent(placeholder_map, parent_block_id)
+    if "⟦" not in text or not entries:
+        return text, []
+    return restore_from_placeholders(text, entries)
+
+
+def _replace_element_content(element: ET.Element, xhtml_fragment: str) -> None:
+    attributes = dict(element.attrib)
+    tail = element.tail
+    element.clear()
+    element.attrib.update(attributes)
+    element.tail = tail
+
+    try:
+        wrapper = ET.fromstring(f"<wrapper>{xhtml_fragment}</wrapper>")
+    except ET.ParseError:
+        element.text = xhtml_fragment
+        return
+
+    element.text = wrapper.text
+    for child in list(wrapper):
+        element.append(child)
+
+
 def rebuild_chapter_xhtml(
     source_xhtml: str,
     chapter_records: list[dict[str, Any]],
@@ -204,10 +251,14 @@ def rebuild_chapter_xhtml(
             missing_blocks.append(parent_block_id)
             continue
         element = blocks[index]
-        attributes = dict(element.attrib)
-        element.clear()
-        element.attrib.update(attributes)
-        element.text = translated_text
+        restored_text, restore_warnings = _restore_translation_fragment(
+            text=translated_text,
+            placeholder_map=placeholder_map,
+            parent_block_id=parent_block_id,
+        )
+        if restore_warnings:
+            flags.append("placeholder_restoration_warning")
+        _replace_element_content(element, restored_text)
 
     xhtml = ET.tostring(root, encoding="unicode")
     try:

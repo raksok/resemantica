@@ -28,7 +28,7 @@ class EventLogScreen(BaseScreen):
             return
         self._events.insert(0, event)
         self._events = self._events[:100]
-        self.call_from_thread(self._render_events)
+        self.app.call_from_thread(self._render_events)
 
     def _render_events(self) -> None:
         target = self.query_one("#event-log", Static)
