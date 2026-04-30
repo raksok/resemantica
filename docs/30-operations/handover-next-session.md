@@ -48,6 +48,35 @@ uv run mypy src/                → no issues
 Single-chapter smoke (ch6 - 1 record): **PASSED** — all 8 stages green, EPUB rebuilt.
 Single-chapter pilot (ch10 - 22 records): All 5 preprocessing stages + packet build + pass1 **PASSED**. Pass2 timed out at 45 min (5/22 blocks completed, ~6 min/block). This is a local inference speed constraint, not a code bug.
 
+### Found: Glossary/Summary Cascade Noise
+
+Inspecting pilot-03 artifacts revealed that glossary translation output and English summaries contain prompt structure leakage:
+
+**Glossary translation output** (from `translate_glossary_candidates`):
+```
+## GLOSSARYTranslations
+Source term: 落魄山
+Category: location
+Evidence: 就像落魄山老厨子的油炸溪鱼干...
+```
+
+The translator model (HY-MT1.5-7B) echoes the prompt's `## GLOSSARY_TRANSLATE` header + labeled fields (`SOURCE TERM:`, `CATEGORY:`, `EVIDENCE:`) instead of outputting just the translated term `Luopo Mountain`. The prompt uses Template B (translate with context per SPEC §9.3) but the model treats the form fields as output templates.
+
+**Cascading effect on English summaries** — `{LOCKED_GLOSSARY}` in `summary_en_derive.txt` is built from raw `candidate_translation_en` strings. The polluted glossary text (`## GLOSSARYTranslations\nSource term:...`) gets injected into the summary prompt. The analyst model then echoes the full prompt structure back including `## SUMMARY_EN_DERIVE\n\n## LOCKED GLOSSARY\n- 落魄山 => ## GLOSSARYTranslations...` instead of producing clean English summary prose.
+
+**Root cause**: The `glossary_translate.txt` prompt gives the translator labeled form fields that it mirrors in output. SPEC §9.3 Template A is the correct approach — bare source text, no context, no labels.
+
+**Fix needed** (one file change, next session):
+- `llm/prompts/glossary_translate.txt` — replace with Template A:
+```
+Translate the following segment into English, without additional explanation.
+
+{SOURCE_TERM}
+```
+Removes `## GLOSSARY_TRANSLATE` header, `CATEGORY:`, and `EVIDENCE:` fields. The translator gets only the bare Chinese term and outputs only the English translation. No structure to echo.
+
+The `summary_en_derive.txt` prompt may need a follow-up fix after the glossary noise clears, since the cascade breaks once glossary entries are clean.
+
 ### Working Tree State
 
 Modified:
@@ -62,30 +91,16 @@ Modified:
 - `src/resemantica/packets/builder.py` — skip logic for empty/missing-summary/missing-graph chapters; bundle error handling; chapter range; exception resilience; fixed counting
 - `DECISIONS.md` — Section G (G26-G31) appended
 
-### Next Objective: Full Production Pilot (unattended)
+### Next Objective: Fix Glossary Translation Prompt
 
-The pipeline is now ready for a full unattended production run. Recommended:
+One-file change to `llm/prompts/glossary_translate.txt`:
 
-```
-# Run overnight — expect 12-15 hours for 10 chapters
-uv run python scripts/pilot/run.py --release prod-01 --run prod-01 ^
-    --input <epub_path> --start 10 --end 19
-```
-
-Key timings per chapter (local inference):
-- Glossary: ~2 min
-- Summaries: ~8 min (slowest stage)
-- Idioms: ~3.5 min
-- Graph: ~5 min
-- Packets: <5 s
-- Pass 1: ~1 min
-- Pass 2: ~2-6 min/block (scales with block count)
-
-Future optimization opportunities:
-- Summaries stage could be parallelized (chapters are independent)
-- Pass 2 could skip blocks with very short source text
-- `max_bundle_bytes` (4096) could be increased to reduce bundle failures on glossary-dense blocks
-- `exclude_chapter_patterns` may need tuning per source EPUB
+1. Remove the `## GLOSSARY_TRANSLATE` header, `CATEGORY:`, `EVIDENCE:` fields.
+2. Replace with SPEC §9.3 Template A: bare `{SOURCE_TERM}` with "Translate without additional explanation" instruction.
+3. This eliminates the echo behavior that cascades noise into English summaries.
+4. After change, re-run glossary stage for a test chapter and verify `candidate_translation_en` output is just the clean translated term (e.g., `Luopo Mountain` not `## GLOSSARYTranslations\nSource term: 落魄山\n...`).
+5. Then re-run summary derivation to confirm English summaries no longer contain prompt structure leakage.
+6. Mock LLM in `tests/glossary/test_glossary_pipeline.py` may need updating if the test script checks for the old noisy format.
 
 No push performed.
 
