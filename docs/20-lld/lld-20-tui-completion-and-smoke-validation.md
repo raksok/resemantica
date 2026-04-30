@@ -1,8 +1,8 @@
-# LLD 19: TUI Completion And Reconstruction Smoke Validation
+# LLD 20: TUI Completion And Reconstruction Smoke Validation
 
 ## Summary
 
-Task 19 finishes the known gaps left after the Task 18 operator-console implementation. The TUI already has an adapter, event bus, event log, and reset preview path. This slice adds launch controls for preprocessing and translation, replaces placeholder progress rendering with run-derived state, and records a completed-run reconstruction smoke result.
+Task 20 finishes the known gaps left after the Task 18 operator-console implementation. The TUI already has an adapter, event bus, event log, and reset preview path. This slice adds launch controls for preprocessing and translation, replaces placeholder progress rendering with run-derived state, and records a completed-run reconstruction smoke result.
 
 ## Public Interfaces
 
@@ -74,6 +74,6 @@ Run:
 
 ## Assumptions
 
-- Task 19 does not alter orchestration semantics; it consumes existing `OrchestrationRunner` and `EventBus` behavior.
+- Task 20 does not alter orchestration semantics; it consumes existing `OrchestrationRunner` and `EventBus` behavior.
 - The TUI remains function-first; visual redesign is out of scope.
 - EPUB smoke validation uses local artifacts only and records unavailable external tools as skipped, not failed.
