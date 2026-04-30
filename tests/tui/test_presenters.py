@@ -188,3 +188,125 @@ def test_preprocessing_presenter_builds_stages():
     assert "Idioms" in result
     assert "Graph MVP" in result
     assert "Packets" in result
+
+
+def test_preprocessing_launch_workflow_chains_stages():
+    from resemantica.tui.adapter import TUIAdapter
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        class _Result:
+            success = True
+
+        def run_stage(self, stage_name: str, **options):
+            self.calls.append(stage_name)
+            return self._Result()
+
+        def run_production(self, **options):
+            self.calls.append("production")
+            return None
+
+    runner = Runner()
+    adapter = TUIAdapter("rel", "run", runner=runner)  # type: ignore[arg-type]
+    adapter.launch_workflow("preprocessing")
+
+    assert runner.calls == [
+        "preprocess-glossary",
+        "preprocess-summaries",
+        "preprocess-idioms",
+        "preprocess-graph",
+        "packets-build",
+    ]
+
+
+def test_preprocessing_launch_short_circuits_on_failure():
+    from resemantica.tui.adapter import TUIAdapter
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def run_stage(self, stage_name: str, **options):
+            self.calls.append(stage_name)
+
+            class Result:
+                success = stage_name != "preprocess-summaries"
+
+            return Result()
+
+        def run_production(self, **options):
+            return None
+
+    runner = Runner()
+    adapter = TUIAdapter("rel", "run", runner=runner)  # type: ignore[arg-type]
+    adapter.launch_workflow("preprocessing")
+
+    assert runner.calls == ["preprocess-glossary", "preprocess-summaries"]
+
+
+def test_chapter_spine_uses_extracted_count():
+    from resemantica.tui.screens.base import BaseScreen
+
+    chapter_data = [(i, "not-started") for i in range(1, 6)]
+    items = BaseScreen._render_spine_items(chapter_data)
+    assert len(items) == 5
+    assert items[0] == ("□ Ch 1", "spine-item spine-status-not-started")
+    assert items[4] == ("□ Ch 5", "spine-item spine-status-not-started")
+
+
+def test_chapter_spine_status_chars():
+    from resemantica.tui.screens.base import BaseScreen
+
+    chapter_data = [
+        (1, "complete"),
+        (2, "in-progress"),
+        (3, "failed"),
+        (4, "high-risk"),
+        (5, "not-started"),
+    ]
+    items = BaseScreen._render_spine_items(chapter_data)
+    assert items[0][0].startswith("■")
+    assert items[0][1].endswith("spine-status-complete")
+    assert items[1][0].startswith("▸")
+    assert items[1][1].endswith("spine-status-in-progress")
+    assert items[2][0].startswith("✗")
+    assert items[2][1].endswith("spine-status-failed")
+    assert items[3][0].startswith("◈")
+    assert items[3][1].endswith("spine-status-high-risk")
+    assert items[4][0].startswith("□")
+    assert items[4][1].endswith("spine-status-not-started")
+
+
+def test_translation_render_block_progress():
+    from resemantica.tui.screens.translation import TranslationScreen
+
+    data: dict[int, list[tuple[str, str]]] = {
+        1: [("blk001", "done"), ("blk002", "in-progress"), ("blk003", "failed")],
+        2: [("blk004", "done")],
+    }
+    result = TranslationScreen._render_block_progress(data)
+    assert "Ch 1" in result
+    assert "Ch 2" in result
+    assert "1/3 blocks" in result
+    assert "1/1 blocks" in result
+    assert "blk001" in result
+    assert "blk002" in result
+    assert "blk003" in result
+    assert "blk004" in result
+
+
+def test_translation_render_block_progress_empty():
+    from resemantica.tui.screens.translation import TranslationScreen
+
+    result = TranslationScreen._render_block_progress({})
+    assert "No translation run active" in result
+
+
+def test_launch_control_make_adapter_returns_none_without_context():
+    from resemantica.tui.screens.preprocessing import PreprocessingScreen
+
+    screen = PreprocessingScreen()
+    adapter = screen._make_adapter()
+    assert adapter is None

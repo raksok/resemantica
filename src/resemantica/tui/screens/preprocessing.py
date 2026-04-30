@@ -12,6 +12,7 @@ class PreprocessingScreen(BaseScreen):
         with Container(id="preprocessing-content"):
             yield Static("Preprocessing Stages", classes="app-title")
             yield Static("", id="preprocessing-stage-list")
+            yield Static("", id="preprocessing-launch-control")
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -24,6 +25,37 @@ class PreprocessingScreen(BaseScreen):
     def _refresh_preprocessing(self) -> None:
         stage_list = self.query_one("#preprocessing-stage-list", Static)
         stage_list.update(self._build_stage_progress())
+        self._update_launch_control()
+
+    def _update_launch_control(self) -> None:
+        control = self.query_one("#preprocessing-launch-control", Static)
+        release_id = self._get_release_id()
+        run_id = self._get_run_id()
+        if release_id and run_id:
+            control.update("[green]\\[p\\] Launch Preprocessing[/]")
+        else:
+            control.update("[comment]\\[p\\] Launch Preprocessing (set release/run first)[/]")
+
+    def key_p(self) -> None:
+        adapter = self._make_adapter()
+        if adapter is None:
+            return
+        control = self.query_one("#preprocessing-launch-control", Static)
+        control.update("[cyan]Preprocessing started...[/]")
+        from threading import Thread
+
+        def _run() -> None:
+            try:
+                adapter.launch_workflow("preprocessing")
+                self.app.call_from_thread(
+                    control.update, "[green]Preprocessing completed.[/]"
+                )
+            except Exception as e:
+                self.app.call_from_thread(
+                    control.update, f"[red]Launch failed: {e}[/]"
+                )
+
+        Thread(target=_run, daemon=True).start()
 
     def _build_stage_progress(self, state: dict | None = None) -> str:
         if state is None:
