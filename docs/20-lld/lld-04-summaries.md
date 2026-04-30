@@ -28,6 +28,7 @@ Structured Chinese summary schema:
 ```json
 {
   "chapter_number": 3,
+  "is_story_chapter": true,
   "characters_mentioned": ["张三", "李四"],
   "key_events": ["张三加入青云门", "李四获得秘籍"],
   "new_terms": ["青云门", "玄天秘籍"],
@@ -39,6 +40,8 @@ Structured Chinese summary schema:
   "narrative_progression": "张三踏上修仙之路，遭遇初次考验"
 }
 ```
+
+`is_story_chapter` is mandatory (LLD 18b). When `false`, no row is written to `validated_summaries_zh`.
 
 ## Data Flow
 
