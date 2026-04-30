@@ -1,6 +1,44 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+
+
+def _iso(hour: int, minute: int, second: int = 0) -> str:
+    return datetime(2026, 4, 24, hour, minute, second, tzinfo=timezone.utc).isoformat()
+
+
+def _make_event(
+    *,
+    event_type: str,
+    event_time: str,
+    severity: str = "info",
+    message: str = "",
+    chapter_number: int | None = None,
+    block_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+):
+    from resemantica.tracking.models import Event
+
+    return Event(
+        event_type=event_type,
+        event_time=event_time,
+        run_id="run-1",
+        release_id="rel-1",
+        stage_name="translate-chapter",
+        chapter_number=chapter_number,
+        block_id=block_id,
+        severity=severity,
+        message=message,
+        payload=payload or {},
+    )
+
+
+def _strip_markup(text: str) -> str:
+    for prefix in ("[comment]", "[cyan]", "[red]"):
+        if text.startswith(prefix) and text.endswith("[/]"):
+            return text[len(prefix) : -len("[/]")]
+    return text
 
 
 def test_event_bus_subscribe_unsubscribe():
@@ -310,3 +348,253 @@ def test_launch_control_make_adapter_returns_none_without_context():
     screen = PreprocessingScreen()
     adapter = screen._make_adapter()
     assert adapter is None
+
+
+def test_base_screen_formats_chapter_progress_from_checkpoint_shapes():
+    from resemantica.tui.screens.base import BaseScreen
+
+    assert BaseScreen._format_chapter_progress(
+        total_chapters=12,
+        checkpoint={"chapter_number": 4},
+    ) == "Ch 4/12"
+    assert BaseScreen._format_chapter_progress(
+        total_chapters=12,
+        checkpoint={"completed_chapters": [1, 3], "pass2_completed": [5, 7]},
+    ) == "Ch 7/12"
+    assert BaseScreen._format_chapter_progress(
+        total_chapters=12,
+        checkpoint={"chapter_number": 2, "pass3_completed": [9]},
+    ) == "Ch 2/12"
+
+
+def test_base_screen_maps_pass_labels_for_supported_stages():
+    from resemantica.tui.screens.base import BaseScreen
+
+    preprocess_state = {"stage_name": "preprocess-glossary", "status": "running", "checkpoint": {}}
+    assert BaseScreen._derive_pass_indicator(preprocess_state, []) == ("PREPROCESS", "comment")
+
+    pass1_state = {"stage_name": "translate-range", "status": "running", "checkpoint": {}}
+    assert BaseScreen._derive_pass_indicator(pass1_state, []) == ("PASS 1", "cyan")
+
+    pass2_state = {
+        "stage_name": "translate-range",
+        "status": "running",
+        "checkpoint": {"pass2_completed": [1]},
+    }
+    assert BaseScreen._derive_pass_indicator(pass2_state, []) == ("PASS 2", "cyan")
+
+    pass3_state = {"stage_name": "translate-chapter", "status": "running", "checkpoint": {}}
+    pass3_events = [
+        _make_event(
+            event_type="paragraph_completed",
+            event_time=_iso(12, 10),
+            payload={"pass_name": "pass3"},
+        )
+    ]
+    assert BaseScreen._derive_pass_indicator(pass3_state, pass3_events) == ("PASS 3", "cyan")
+
+    rebuild_state = {"stage_name": "epub-rebuild", "status": "running", "checkpoint": {}}
+    assert BaseScreen._derive_pass_indicator(rebuild_state, pass3_events) == ("REBUILD", "green")
+
+    idle_state = {"stage_name": "translate-range", "status": "completed", "checkpoint": {}}
+    assert BaseScreen._derive_pass_indicator(idle_state, pass3_events) == ("IDLE", "comment")
+    assert BaseScreen._derive_pass_indicator(None, pass3_events) == ("IDLE", "comment")
+
+
+def test_base_screen_renders_30_char_pulse_bar_with_expected_glyphs():
+    from resemantica.tui.screens.base import BaseScreen
+
+    state = {
+        "stage_name": "translate-range",
+        "status": "running",
+        "started_at": _iso(12, 0),
+        "finished_at": None,
+        "checkpoint": {},
+    }
+    events = [
+        _make_event(event_type="paragraph_completed", event_time=_iso(12, 2), block_id="blk-1"),
+        _make_event(event_type="paragraph_completed", event_time=_iso(12, 8), block_id="blk-2"),
+        _make_event(event_type="paragraph_completed", event_time=_iso(12, 16), block_id="blk-3"),
+        _make_event(event_type="paragraph_completed", event_time=_iso(12, 24), block_id="blk-4"),
+    ]
+
+    pulse = BaseScreen._render_pulse_bar(
+        state,
+        events,
+        now=datetime(2026, 4, 24, 12, 30, tzinfo=timezone.utc),
+    )
+    rendered = _strip_markup(pulse)
+
+    assert pulse.startswith("[cyan]")
+    assert len(rendered) == 30
+    assert set(rendered) <= set(BaseScreen._PULSE_GLYPHS)
+
+
+def test_base_screen_renders_idle_active_and_retry_pulse_states():
+    from resemantica.tui.screens.base import BaseScreen
+
+    assert BaseScreen._render_pulse_bar(None, []) == f"[comment]{'▁' * 30}[/]"
+
+    state = {
+        "stage_name": "translate-range",
+        "status": "running",
+        "started_at": _iso(12, 0),
+        "finished_at": None,
+        "checkpoint": {},
+    }
+    active_events = [
+        _make_event(event_type="paragraph_completed", event_time=_iso(12, 5), block_id="blk-1"),
+    ]
+    retry_events = active_events + [
+        _make_event(event_type="paragraph_retry", event_time=_iso(12, 6), block_id="blk-1"),
+    ]
+
+    active = BaseScreen._render_pulse_bar(
+        state,
+        active_events,
+        now=datetime(2026, 4, 24, 12, 30, tzinfo=timezone.utc),
+    )
+    retry = BaseScreen._render_pulse_bar(
+        state,
+        retry_events,
+        now=datetime(2026, 4, 24, 12, 30, tzinfo=timezone.utc),
+    )
+
+    assert active.startswith("[cyan]")
+    assert retry.startswith("[red]")
+
+
+def test_base_screen_derives_footer_metrics_from_events():
+    from resemantica.tui.screens.base import BaseScreen
+
+    state = {
+        "stage_name": "translate-range",
+        "status": "running",
+        "started_at": _iso(12, 0),
+        "finished_at": _iso(14, 3, 4),
+        "checkpoint": {},
+    }
+    events = [
+        _make_event(event_type="paragraph_started", event_time=_iso(12, 1), block_id="blk-1"),
+        _make_event(event_type="paragraph_completed", event_time=_iso(12, 2), block_id="blk-1"),
+        _make_event(event_type="paragraph_started", event_time=_iso(12, 3), block_id="blk-2"),
+        _make_event(
+            event_type="validation_failed",
+            event_time=_iso(12, 4),
+            severity="warning",
+            message="warning",
+        ),
+        _make_event(
+            event_type="stage_failed",
+            event_time=_iso(12, 5),
+            severity="error",
+            message="failure",
+        ),
+    ]
+
+    metrics = BaseScreen._derive_footer_metrics(state, events)
+
+    assert metrics["block_progress"] == "1/2 blocks"
+    assert metrics["warnings"] == "Warn 1"
+    assert metrics["failures"] == "Fail 1"
+    assert metrics["elapsed"] == "2:03:04"
+
+
+def test_dashboard_quick_stats_aggregate_actual_event_names():
+    from resemantica.tui.screens.dashboard import DashboardScreen
+
+    events = [
+        _make_event(event_type="preprocess-glossary.discover.term_found", event_time=_iso(12, 1)),
+        _make_event(event_type="preprocess-glossary.discover.term_found", event_time=_iso(12, 2)),
+        _make_event(
+            event_type="preprocess-idioms.completed",
+            event_time=_iso(12, 3),
+            payload={"promoted_count": 3},
+        ),
+        _make_event(event_type="preprocess-graph.entity_extracted", event_time=_iso(12, 4)),
+        _make_event(event_type="preprocess-graph.entity_extracted", event_time=_iso(12, 5)),
+        _make_event(event_type="paragraph_retry", event_time=_iso(12, 6)),
+        _make_event(event_type="stage.retry", event_time=_iso(12, 7)),
+        _make_event(
+            event_type="risk_detected",
+            event_time=_iso(12, 8),
+            payload={"risk_score": 0.6},
+        ),
+        _make_event(
+            event_type="risk_detected",
+            event_time=_iso(12, 9),
+            payload={"risk_score": 0.8},
+        ),
+    ]
+
+    result = DashboardScreen._build_quick_stats_from_events(events)
+
+    assert "Glossary     2 terms" in result
+    assert "Idioms       3 policies" in result
+    assert "Entities     2 extracted" in result
+    assert "Retries      2 total" in result
+    assert "Avg risk     0.70" in result
+
+
+def test_dashboard_quick_stats_empty_state():
+    from resemantica.tui.screens.dashboard import DashboardScreen
+
+    result = DashboardScreen._build_quick_stats_from_events([])
+
+    assert "Quick stats unavailable for this run yet." in result
+
+
+def test_dashboard_recent_warnings_requires_active_run():
+    from resemantica.tui.screens.dashboard import DashboardScreen
+
+    screen = DashboardScreen()
+    screen._get_release_id = lambda: "rel-1"  # type: ignore[method-assign]
+    screen._get_run_id = lambda: None  # type: ignore[method-assign]
+
+    result = screen._build_recent_warnings()
+
+    assert result == "[dim]No warnings.[/]"
+
+
+def test_dashboard_recent_warnings_scopes_events_to_active_run(monkeypatch):
+    from resemantica.tui.screens.dashboard import DashboardScreen
+
+    captured: dict[str, object] = {}
+
+    class _Conn:
+        def close(self) -> None:
+            pass
+
+    def fake_ensure_tracking_db(release_id: str):
+        captured["release_id"] = release_id
+        return _Conn()
+
+    def fake_load_events(conn, run_id=None, release_id=None, limit=100):
+        captured["run_id"] = run_id
+        captured["event_release_id"] = release_id
+        captured["limit"] = limit
+        return [
+            _make_event(
+                event_type="risk_detected",
+                event_time=_iso(12, 1),
+                severity="warning",
+                message="scoped warning",
+            )
+        ]
+
+    monkeypatch.setattr("resemantica.tracking.repo.ensure_tracking_db", fake_ensure_tracking_db)
+    monkeypatch.setattr("resemantica.tracking.repo.load_events", fake_load_events)
+
+    screen = DashboardScreen()
+    screen._get_release_id = lambda: "rel-1"  # type: ignore[method-assign]
+    screen._get_run_id = lambda: "run-1"  # type: ignore[method-assign]
+
+    result = screen._build_recent_warnings()
+
+    assert captured == {
+        "release_id": "rel-1",
+        "run_id": "run-1",
+        "event_release_id": "rel-1",
+        "limit": 5,
+    }
+    assert "scoped warning" in result

@@ -296,6 +296,7 @@ def preprocess_idioms(
         f"{_STAGE_NAME}.completed",
         extracted=len(detected_candidates),
         skipped=max(0, skipped_count),
+        promoted_count=len(validation.promotion_entries),
     )
     return {
         "status": "success",

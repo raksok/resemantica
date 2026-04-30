@@ -18,16 +18,13 @@ class DashboardScreen(BaseScreen):
             yield Static("", id="dashboard-recent-warnings")
             yield Static("", id="dashboard-quick-stats")
 
-    def on_mount(self) -> None:
-        super().on_mount()
-        self._refresh_dashboard()
-
     def _refresh_all(self) -> None:
         super()._refresh_all()
         self._refresh_dashboard()
 
     def _refresh_dashboard(self) -> None:
         state = self._get_run_state()
+        events = self._load_recent_run_events()
 
         run_info = self.query_one("#dashboard-run-info", Static)
         if state:
@@ -47,7 +44,7 @@ class DashboardScreen(BaseScreen):
         warnings_text.update(self._build_recent_warnings())
 
         stats = self.query_one("#dashboard-quick-stats", Static)
-        stats.update(self._build_quick_stats())
+        stats.update(self._build_quick_stats(state=state, events=events))
 
     def _build_phase_progress(self, state: dict[str, Any] | None) -> str:
         lines = ["[bold]Phase Progress[/bold]"]
@@ -76,13 +73,14 @@ class DashboardScreen(BaseScreen):
 
     def _build_recent_warnings(self) -> str:
         release_id = self._get_release_id()
-        if not release_id:
+        run_id = self._get_run_id()
+        if not release_id or not run_id:
             return "[dim]No warnings.[/]"
         try:
             from resemantica.tracking.repo import ensure_tracking_db, load_events
             conn = ensure_tracking_db(release_id)
             try:
-                events = load_events(conn, limit=5)
+                events = load_events(conn, run_id=run_id, release_id=release_id, limit=5)
                 if not events:
                     return "[dim]No warnings.[/]"
                 lines = ["[bold]Recent Events[/bold]"]
@@ -95,5 +93,74 @@ class DashboardScreen(BaseScreen):
         except Exception:
             return "[dim]Could not load events.[/]"
 
-    def _build_quick_stats(self) -> str:
-        return "[dim]Quick stats: connect to a run to see data.[/]"
+    def _build_quick_stats(
+        self,
+        *,
+        state: dict[str, Any] | None = None,
+        events: list[Any] | None = None,
+    ) -> str:
+        state = self._get_run_state() if state is None else state
+        if state is None:
+            return "[dim]Quick stats unavailable without an active run.[/]"
+
+        events = self._load_recent_run_events() if events is None else events
+        return self._build_quick_stats_from_events(events)
+
+    @staticmethod
+    def _build_quick_stats_from_events(events: list[Any]) -> str:
+        glossary_terms = sum(
+            1
+            for event in events
+            if event.event_type == "preprocess-glossary.discover.term_found"
+        )
+
+        promoted_count = 0
+        for event in events:
+            if event.event_type != "preprocess-idioms.completed":
+                continue
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            raw_count = payload.get("promoted_count")
+            if isinstance(raw_count, int):
+                promoted_count = raw_count
+                break
+
+        extracted_entities = sum(
+            1
+            for event in events
+            if event.event_type == "preprocess-graph.entity_extracted"
+        )
+        retry_total = sum(1 for event in events if "retry" in event.event_type.lower())
+
+        risk_scores: list[float] = []
+        for event in events:
+            if "risk_detected" not in event.event_type.lower():
+                continue
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            score = payload.get("risk_score")
+            if isinstance(score, (int, float)):
+                risk_scores.append(float(score))
+
+        has_relevant_events = any(
+            [
+                glossary_terms,
+                promoted_count,
+                extracted_entities,
+                retry_total,
+                bool(risk_scores),
+            ]
+        )
+        if not has_relevant_events:
+            return "[dim]Quick stats unavailable for this run yet.[/]"
+
+        average_risk = sum(risk_scores) / len(risk_scores) if risk_scores else None
+        avg_risk_text = f"{average_risk:.2f}" if average_risk is not None else "--"
+        return "\n".join(
+            [
+                "[bold]Quick Stats[/bold]",
+                f"  Glossary     {glossary_terms} terms",
+                f"  Idioms       {promoted_count} policies",
+                f"  Entities     {extracted_entities} extracted",
+                f"  Retries      {retry_total} total",
+                f"  Avg risk     {avg_risk_text}",
+            ]
+        )

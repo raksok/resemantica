@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timedelta, timezone
+import math
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
+if TYPE_CHECKING:
+    from resemantica.tracking.models import Event
+
 
 class BaseScreen(Screen):
+    _PULSE_WIDTH = 30
+    _PULSE_GLYPHS = "▁▂▃▄▅▆▇█"
+
     def compose(self) -> ComposeResult:
         yield Horizontal(
             Static(id="pulse-bar"),
@@ -35,15 +43,16 @@ class BaseScreen(Screen):
         yield Static("")
 
     def on_mount(self) -> None:
-        self._update_header()
-        self._update_spine()
-        self._update_footer()
+        self._refresh_all()
         self.set_interval(3, self._refresh_all)
 
     def _refresh_all(self) -> None:
-        self._update_header()
+        state = self._get_run_state()
+        events = self._load_recent_run_events()
+        chapter_count = self._load_chapter_count()
+        self._update_header(state=state, events=events, chapter_count=chapter_count)
         self._update_spine()
-        self._update_footer()
+        self._update_footer(state=state, events=events)
 
     def _get_release_id(self) -> str | None:
         try:
@@ -59,14 +68,36 @@ class BaseScreen(Screen):
             return None
         return getattr(app, "run_id", None)
 
-    def _update_header(self) -> None:
+    def _update_header(
+        self,
+        *,
+        state: dict[str, Any] | None = None,
+        events: list[Event] | None = None,
+        chapter_count: int | None = None,
+    ) -> None:
+        state = self._get_run_state() if state is None else state
+        events = self._load_recent_run_events() if events is None else events
+        chapter_count = self._load_chapter_count() if chapter_count is None else chapter_count
+
         pulse = self.query_one("#pulse-bar", Static)
-        pulse.update("▁▂▃▅▇█▇▅▃▂▁")
+        pulse.update(self._render_pulse_bar(state, events))
 
         run_id = self._get_run_id() or "--"
         release_id = self._get_release_id() or "--"
         run_info = self.query_one("#header-run-info", Static)
         run_info.update(f"Run: {run_id}  Rel: {release_id}")
+
+        chapter_progress = self.query_one("#header-chapter-progress", Static)
+        chapter_progress.update(
+            self._format_chapter_progress(
+                total_chapters=chapter_count,
+                checkpoint=state["checkpoint"] if state else None,
+            )
+        )
+
+        pass_label, pass_color = self._derive_pass_indicator(state, events)
+        pass_widget = self.query_one("#header-pass", Static)
+        pass_widget.update(f"[{pass_color}]{pass_label}[/]")
 
     def _update_spine(self) -> None:
         spine = self.query_one("#spine-container", Vertical)
@@ -138,7 +169,26 @@ class BaseScreen(Screen):
             items.append((f"{char} Ch {ch_num}", f"spine-item {css}"))
         return items
 
-    def _update_footer(self) -> None:
+    def _update_footer(
+        self,
+        *,
+        state: dict[str, Any] | None = None,
+        events: list[Event] | None = None,
+    ) -> None:
+        state = self._get_run_state() if state is None else state
+        events = self._load_recent_run_events() if events is None else events
+
+        footer_block_progress = self.query_one("#footer-block-progress", Static)
+        footer_warnings = self.query_one("#footer-warnings", Static)
+        footer_failures = self.query_one("#footer-failures", Static)
+        footer_elapsed = self.query_one("#footer-elapsed", Static)
+
+        metrics = self._derive_footer_metrics(state, events)
+        footer_block_progress.update(metrics["block_progress"])
+        footer_warnings.update(metrics["warnings"])
+        footer_failures.update(metrics["failures"])
+        footer_elapsed.update(metrics["elapsed"])
+
         footer_keys = self.query_one("#footer-keys", Static)
         footer_keys.update("[1-9] Screen  [q] Quit")
 
@@ -181,3 +231,257 @@ class BaseScreen(Screen):
             run_id=run_id,
             config_path=getattr(self.app, "config_path", None),
         )
+
+    def _load_chapter_count(self) -> int:
+        release_id = self._get_release_id()
+        if not release_id:
+            return 0
+        try:
+            from resemantica.chapters.manifest import list_extracted_chapters
+            from resemantica.settings import derive_paths, load_config
+
+            config = load_config(getattr(self.app, "config_path", None))
+            paths = derive_paths(config, release_id=release_id)
+            return len(list_extracted_chapters(paths))
+        except Exception:
+            return 0
+
+    def _load_recent_run_events(self, *, limit: int = 5000) -> list[Event]:
+        run_id = self._get_run_id()
+        release_id = self._get_release_id()
+        if not run_id or not release_id:
+            return []
+        try:
+            from resemantica.tracking.repo import ensure_tracking_db, load_events
+
+            conn = ensure_tracking_db(release_id)
+            try:
+                return load_events(conn, run_id=run_id, release_id=release_id, limit=limit)
+            finally:
+                conn.close()
+        except Exception:
+            return []
+
+    @staticmethod
+    def _coerce_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.isdigit():
+                return int(stripped)
+        return None
+
+    @classmethod
+    def _chapter_index_from_checkpoint(cls, checkpoint: dict[str, Any] | None) -> int:
+        if not isinstance(checkpoint, dict):
+            return 0
+
+        chapter_number = cls._coerce_int(checkpoint.get("chapter_number"))
+        if chapter_number is not None:
+            return max(0, chapter_number)
+
+        max_completed = 0
+        for key in (
+            "completed_chapters",
+            "pass1_completed",
+            "pass2_completed",
+            "pass3_completed",
+        ):
+            values = checkpoint.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                parsed = cls._coerce_int(item)
+                if parsed is not None:
+                    max_completed = max(max_completed, parsed)
+        return max_completed
+
+    @classmethod
+    def _format_chapter_progress(
+        cls,
+        *,
+        total_chapters: int,
+        checkpoint: dict[str, Any] | None,
+    ) -> str:
+        current = cls._chapter_index_from_checkpoint(checkpoint)
+        return f"Ch {current}/{max(0, total_chapters)}"
+
+    @staticmethod
+    def _event_type_matches(event_type: str, suffix: str) -> bool:
+        lowered = event_type.lower()
+        target = suffix.lower()
+        return lowered == target or lowered.endswith(f".{target}")
+
+    @classmethod
+    def _derive_pass_indicator(
+        cls,
+        state: dict[str, Any] | None,
+        events: list[Event],
+    ) -> tuple[str, str]:
+        if not state or state.get("status") != "running":
+            return ("IDLE", "comment")
+
+        stage_name = str(state.get("stage_name") or "").lower()
+        if stage_name == "epub-rebuild":
+            return ("REBUILD", "green")
+        if stage_name.startswith("preprocess-") or stage_name == "packets-build":
+            return ("PREPROCESS", "comment")
+
+        hints = [stage_name, str(state.get("checkpoint") or "").lower()]
+        for event in events[:25]:
+            hints.extend(
+                [
+                    event.stage_name.lower(),
+                    event.event_type.lower(),
+                    event.message.lower(),
+                    str(event.payload).lower(),
+                ]
+            )
+        combined = " ".join(hints)
+
+        if stage_name in {"translate-range", "translate-chapter"}:
+            if "pass3" in combined:
+                return ("PASS 3", "cyan")
+            if "pass2" in combined:
+                return ("PASS 2", "cyan")
+            return ("PASS 1", "cyan")
+
+        return ("IDLE", "comment")
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @classmethod
+    def _bucket_index(
+        cls,
+        event_time: datetime,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        duration = max((end - start).total_seconds(), 1.0)
+        offset = min(max((event_time - start).total_seconds(), 0.0), duration)
+        position = offset / duration
+        return min(cls._PULSE_WIDTH - 1, int(position * cls._PULSE_WIDTH))
+
+    @classmethod
+    def _render_pulse_bar(
+        cls,
+        state: dict[str, Any] | None,
+        events: list[Event],
+        *,
+        now: datetime | None = None,
+    ) -> str:
+        idle = cls._PULSE_GLYPHS[0] * cls._PULSE_WIDTH
+        if not state or state.get("status") != "running":
+            return f"[comment]{idle}[/]"
+
+        current_time = now or datetime.now(timezone.utc)
+        started_at = cls._parse_timestamp(state.get("started_at")) or current_time
+        finished_at = cls._parse_timestamp(state.get("finished_at")) or current_time
+        if finished_at <= started_at:
+            finished_at = started_at + timedelta(seconds=1)
+
+        paragraph_events = [
+            event
+            for event in events
+            if cls._event_type_matches(event.event_type, "paragraph_completed")
+        ]
+        retry_events = [
+            event
+            for event in events
+            if "retry" in event.event_type.lower()
+        ]
+        if not paragraph_events and not retry_events:
+            return f"[comment]{idle}[/]"
+
+        buckets = [0] * cls._PULSE_WIDTH
+        for event in paragraph_events:
+            event_time = cls._parse_timestamp(event.event_time)
+            if event_time is None:
+                continue
+            buckets[cls._bucket_index(event_time, start=started_at, end=finished_at)] += 1
+
+        max_bucket = max(buckets, default=0)
+        if max_bucket <= 0:
+            sparkline = idle
+        else:
+            chars: list[str] = []
+            for count in buckets:
+                if count <= 0:
+                    chars.append(cls._PULSE_GLYPHS[0])
+                    continue
+                level = max(1, math.ceil((count / max_bucket) * (len(cls._PULSE_GLYPHS) - 1)))
+                chars.append(cls._PULSE_GLYPHS[level])
+            sparkline = "".join(chars)
+
+        has_retry_spike = any(
+            cls._parse_timestamp(event.event_time) is not None
+            for event in retry_events
+        )
+        color = "red" if has_retry_spike else "cyan"
+        return f"[{color}]{sparkline}[/]"
+
+    @classmethod
+    def _derive_footer_metrics(
+        cls,
+        state: dict[str, Any] | None,
+        events: list[Event],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, str]:
+        completed_blocks: set[str] = set()
+        seen_blocks: set[str] = set()
+
+        for event in events:
+            if not event.block_id:
+                continue
+            event_type = event.event_type.lower()
+            if ".paragraph_" not in event_type and "paragraph_" not in event_type and "block" not in event_type:
+                continue
+            seen_blocks.add(event.block_id)
+            if cls._event_type_matches(event.event_type, "paragraph_completed"):
+                completed_blocks.add(event.block_id)
+
+        warnings = sum(1 for event in events if event.severity == "warning")
+        failures = sum(1 for event in events if event.severity == "error")
+        elapsed = cls._format_elapsed(state, now=now)
+        return {
+            "block_progress": f"{len(completed_blocks)}/{len(seen_blocks)} blocks",
+            "warnings": f"Warn {warnings}",
+            "failures": f"Fail {failures}",
+            "elapsed": elapsed,
+        }
+
+    @classmethod
+    def _format_elapsed(
+        cls,
+        state: dict[str, Any] | None,
+        *,
+        now: datetime | None = None,
+    ) -> str:
+        if not state:
+            return "0:00:00"
+
+        started_at = cls._parse_timestamp(state.get("started_at"))
+        if started_at is None:
+            return "0:00:00"
+
+        current_time = now or datetime.now(timezone.utc)
+        finished_at = cls._parse_timestamp(state.get("finished_at")) or current_time
+        elapsed_seconds = max(0, int((finished_at - started_at).total_seconds()))
+        hours, remainder = divmod(elapsed_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
