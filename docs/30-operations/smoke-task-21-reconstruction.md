@@ -7,6 +7,12 @@
 ## Command
 
 ```
+uv run rsem rebuild-epub --release pilot-03 --run-id pilot-03
+```
+
+Compatibility fallback:
+
+```
 uv run python -m resemantica.cli rebuild-epub --release pilot-03 --run-id pilot-03
 ```
 

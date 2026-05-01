@@ -147,7 +147,7 @@ def _add_batched_model_order_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="resemantica")
+    parser = argparse.ArgumentParser(prog="rsem")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     roundtrip = subparsers.add_parser(
