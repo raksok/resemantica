@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -91,8 +92,8 @@ def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> No
             message=message,
             payload=dict(kwargs),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("Failed to emit tracking event: %s", exc)
 
 
 def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:

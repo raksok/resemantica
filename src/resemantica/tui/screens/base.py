@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from textual import work
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
@@ -22,6 +22,7 @@ from resemantica.orchestration.stop import StopToken
 
 if TYPE_CHECKING:
     from resemantica.tracking.models import Event
+    from resemantica.tui.app import ResemanticaApp
 
 _UNSET = object()
 
@@ -41,6 +42,10 @@ class BaseScreen(Screen):
     _REFRESH_INTERVAL_SECONDS = 2.0
     _SPINNER_INTERVAL_SECONDS = 0.25
     _STALE_AFTER_SECONDS = 300
+
+    @property
+    def app(self) -> "ResemanticaApp":
+        return cast("ResemanticaApp", super().app)
 
     def compose(self) -> ComposeResult:
         yield Horizontal(
@@ -105,10 +110,7 @@ class BaseScreen(Screen):
         self._update_footer(state=state, events=events)
 
     def _fast_refresh_active(self) -> bool:
-        try:
-            return getattr(self.app, "active_action", None) is not None
-        except Exception:
-            return False
+        return getattr(self.app, "active_action", None) is not None
 
     def _store_refresh_cache(
         self,
@@ -135,10 +137,7 @@ class BaseScreen(Screen):
         return events[:limit]
 
     def _recent_live_events_for_refresh(self, *, limit: int = 500) -> list[Event]:
-        try:
-            recent_live_events = getattr(self.app, "recent_live_events", None)
-        except Exception:
-            return []
+        recent_live_events = getattr(self.app, "recent_live_events", None)
         if not callable(recent_live_events):
             return []
         return recent_live_events(limit=limit)
@@ -711,9 +710,9 @@ class BaseScreen(Screen):
         if callable(clear_live_events):
             clear_live_events()
         stop_token = StopToken()
-        self.app.active_action = action_key  # type: ignore[attr-defined]
-        self.app.active_stop_token = stop_token  # type: ignore[attr-defined]
-        self.app.active_stop_requested = False  # type: ignore[attr-defined]
+        self.app.active_action = action_key
+        self.app.active_stop_token = stop_token
+        self.app.active_stop_requested = False
         self._run_worker(action_key, adapter_method, stop_token)
 
     @work(thread=True)
@@ -730,15 +729,16 @@ class BaseScreen(Screen):
             self.app.call_from_thread(self._on_worker_failure, action_key, str(exc))
 
     def _on_worker_success(self, action_key: str, result: Any) -> None:
-        self.app.active_action = None  # type: ignore[attr-defined]
-        self.app.active_stop_token = None  # type: ignore[attr-defined]
-        self.app.active_stop_requested = False  # type: ignore[attr-defined]
+        self.app.active_action = None
+        self.app.active_stop_token = None
+        self.app.active_stop_requested = False
         self._refresh_all()
 
-    def _on_worker_failure(self, action_key: str, error: str) -> None:
-        self.app.active_action = None  # type: ignore[attr-defined]
-        self.app.active_stop_token = None  # type: ignore[attr-defined]
-        self.app.active_stop_requested = False  # type: ignore[attr-defined]
+    def _on_worker_failure(self, action_key: str, exc: Exception) -> None:
+        self.app.active_action = None
+        self.app.active_stop_token = None
+        self.app.active_stop_requested = False
+
         self.notify(f"Launch failed: {error}", severity="error", timeout=5)
         self._refresh_all()
 

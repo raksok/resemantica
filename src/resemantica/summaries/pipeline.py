@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from hashlib import sha256
 from pathlib import Path
 import re
@@ -73,8 +74,8 @@ def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> No
             message=message,
             payload=dict(kwargs),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("Failed to emit tracking event: %s", exc)
 
 
 def _collect_source_text(chapter_payload: dict[str, Any]) -> str:

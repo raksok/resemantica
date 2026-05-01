@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -127,8 +128,8 @@ def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> No
             message=message,
             payload=dict(kwargs),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("Failed to emit tracking event: %s", exc)
 
 
 def preprocess_graph(

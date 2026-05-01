@@ -177,10 +177,10 @@ class DashboardScreen(BaseScreen):
             if result is None:
                 self.notify("Session not initialised", severity="warning", timeout=3)
                 return
-            self.app.session.input_path = result.input_path  # type: ignore[attr-defined]
-            self.app.session.chapter_start = result.chapter_start  # type: ignore[attr-defined]
-            self.app.session.chapter_end = result.chapter_end  # type: ignore[attr-defined]
-            self.app.set_ids(result.release_id, result.run_id)  # type: ignore[attr-defined]
+            self.app.session.input_path = result.input_path
+            self.app.session.chapter_start = result.chapter_start
+            self.app.session.chapter_end = result.chapter_end
+            self.app.set_ids(result.release_id, result.run_id)
             self.notify(
                 f"Release: {result.release_id}, Run: {result.run_id}, File: {result.input_path.name}",
                 severity="information",
@@ -204,10 +204,10 @@ class DashboardScreen(BaseScreen):
             if result is None:
                 self.notify("Session not initialised", severity="warning", timeout=3)
                 return
-            self.app.session.input_path = None  # type: ignore[attr-defined]
-            self.app.session.chapter_start = result.chapter_start  # type: ignore[attr-defined]
-            self.app.session.chapter_end = result.chapter_end  # type: ignore[attr-defined]
-            self.app.set_ids(result.release_id, result.run_id)  # type: ignore[attr-defined]
+            self.app.session.input_path = None
+            self.app.session.chapter_start = result.chapter_start
+            self.app.session.chapter_end = result.chapter_end
+            self.app.set_ids(result.release_id, result.run_id)
             self.notify(
                 f"Release: {result.release_id}, Run: {result.run_id}",
                 severity="information",
