@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from collections import deque
+from threading import Lock
 from typing import Any
 
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
+from rich.rule import Rule
+from rich.text import Text
 
+from resemantica.logging_config import replace_stderr_sink, restore_stderr_sink
 from resemantica.observability.granularity import classify_event_level, cli_verbosity_to_level
 from resemantica.orchestration.events import default_event_bus
 from resemantica.tracking.models import Event
@@ -16,47 +24,108 @@ class CliProgressSubscriber:
         event_bus: Any = default_event_bus,
         progress: Progress | None = None,
         verbosity: int = 0,
+        log_lines: int = 10,
     ) -> None:
         self.event_bus = event_bus
         self._level = cli_verbosity_to_level(verbosity)
-        self.progress = progress or Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(show_speed=False),
-            TextColumn("{task.fields[counters]}"),
-        )
+        self._verbosity = verbosity
+        self._log_lines = log_lines
+        self._injected_progress = progress
+
         self.tasks_by_stage: dict[str, TaskID] = {}
         self.warning_count = 0
         self.skip_count = 0
         self.retry_count = 0
         self.artifact_count = 0
 
+        self._log_buffer: deque[str] = deque(maxlen=log_lines)
+        self._log_lock = Lock()
+        self._live: Live | None = None
+        self.progress: Progress | None = progress
+
     def __enter__(self) -> CliProgressSubscriber:
         self.event_bus.subscribe("*", self._on_event)
-        self.progress.start()
+
+        if self._injected_progress:
+            self.progress = self._injected_progress
+            self.progress.start()
+        else:
+            self.progress = Progress(
+                SpinnerColumn(),
+                TextColumn("{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(show_speed=False),
+            )
+            self._live = Live(self._render_layout, refresh_per_second=4, stderr=True, auto_clear=False)
+            self._live.__enter__()
+            replace_stderr_sink(self._log_sink, fmt="{message}")
+
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.event_bus.unsubscribe("*", self._on_event)
-        self.progress.stop()
+
+        if self._injected_progress:
+            self.progress.stop()
+        else:
+            self._live.__exit__(exc_type, exc_val, exc_tb)
+            restore_stderr_sink()
 
     def _counter_text(self) -> str:
-        parts: list[str] = []
+        pairs: list[str] = []
         if self.warning_count:
-            parts.append(f"run warn {self.warning_count}")
+            pairs.append(f"warn {self.warning_count}")
         if self.skip_count:
-            parts.append(f"run skip {self.skip_count}")
+            pairs.append(f"skip {self.skip_count}")
         if self.retry_count:
-            parts.append(f"run retry {self.retry_count}")
+            pairs.append(f"retry {self.retry_count}")
         if self.artifact_count:
-            parts.append(f"run artifacts {self.artifact_count}")
-        return " ".join(parts)
+            pairs.append(f"artifacts {self.artifact_count}")
+        return " ".join(pairs)
 
-    def _update_counters(self) -> None:
-        counters = self._counter_text()
-        for task_id in self.tasks_by_stage.values():
-            self.progress.update(task_id, counters=counters)
+    def _render_status(self) -> Text:
+        pairs: list[str] = []
+        if self.skip_count:
+            pairs.append(f"skip: {self.skip_count}")
+        if self.warning_count:
+            pairs.append(f"warn: {self.warning_count}")
+        if self.retry_count:
+            pairs.append(f"retry: {self.retry_count}")
+        if self.artifact_count:
+            pairs.append(f"artifacts: {self.artifact_count}")
+        return Text("  |  ".join(pairs))
+
+    def _render_log_panel(self) -> Panel | Text:
+        with self._log_lock:
+            lines = list(self._log_buffer)
+        if not lines:
+            return Text("")
+        return Panel("\n".join(lines), title="Log", border_style="dim")
+
+    def _render_layout(self) -> Layout:
+        layout = Layout()
+        log_renderable = self._render_log_panel()
+        has_log = not (isinstance(log_renderable, Text) and log_renderable.plain == "")
+
+        children: list[Layout] = [
+            Layout(name="progress", renderable=self.progress),
+            Layout(name="divider1", size=1, renderable=Rule(style="dim")),
+            Layout(name="status", size=1, renderable=self._render_status()),
+        ]
+        if has_log:
+            children.append(Layout(name="divider2", size=1, renderable=Rule(style="dim")))
+            children.append(
+                Layout(name="log", size=self._log_lines + 2, renderable=log_renderable)
+            )
+
+        layout.split_column(*children)
+        return layout
+
+    def _log_sink(self, msg: str) -> None:
+        _, _, resolved = msg.partition(" | ")
+        display = resolved.strip() if resolved else msg.strip()
+        with self._log_lock:
+            self._log_buffer.append(display)
 
     def _ensure_task(self, stage: str, *, total: int | None = None) -> TaskID:
         task_id = self.tasks_by_stage.get(stage)
@@ -64,7 +133,7 @@ class CliProgressSubscriber:
             if total is not None:
                 self.progress.update(task_id, total=total)
             return task_id
-        task_id = self.progress.add_task(stage, total=total, counters=self._counter_text())
+        task_id = self.progress.add_task(stage, total=total)
         self.tasks_by_stage[stage] = task_id
         return task_id
 
@@ -88,16 +157,12 @@ class CliProgressSubscriber:
 
         if event_type in {"validation_failed", "risk_detected"} or event_type.endswith(".validation_failed"):
             self.warning_count += 1
-            self._update_counters()
         if event_type.endswith("_skipped") or event_type.endswith(".chapter_skipped"):
             self.skip_count += 1
-            self._update_counters()
         if event_type.endswith("_retry") or event_type.endswith(".retry"):
             self.retry_count += 1
-            self._update_counters()
         if event_type.endswith(".artifact_written"):
             self.artifact_count += 1
-            self._update_counters()
 
         if event_type.endswith(".started"):
             stage = event_type.removesuffix(".started")

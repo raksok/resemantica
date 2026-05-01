@@ -117,7 +117,7 @@ def test_cli_progress_counter_text_is_global() -> None:
     subscriber.retry_count = 3
     subscriber.artifact_count = 4
 
-    assert subscriber._counter_text() == "run warn 1 run skip 2 run retry 3 run artifacts 4"
+    assert subscriber._counter_text() == "warn 1 skip 2 retry 3 artifacts 4"
 
 
 def test_cli_progress_filters_events_by_cli_verbosity() -> None:
