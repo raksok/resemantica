@@ -45,6 +45,13 @@ class HelpScreen(ModalScreen[None]):
                 "[b]Keys[/]",
                 "1-9     Switch screen",
                 "?       Toggle help",
+                "7       Observability screen",
+                "v       Screen 7 verbosity",
+                "s       Screen 7 source filter",
+                "e       Screen 7 severity filter",
+                "t       Screen 7 stage filter",
+                "c       Screen 7 chapter filter",
+                "r       Screen 7 refresh",
                 "escape  Close help",
                 "q       Quit",
             ]

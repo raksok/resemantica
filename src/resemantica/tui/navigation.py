@@ -20,7 +20,7 @@ SCREEN_INFOS: tuple[ScreenInfo, ...] = (
     ScreenInfo(4, "warnings", "WarningsScreen", "Warnings", "Warnings", "Warnings and failures"),
     ScreenInfo(5, "artifacts", "ArtifactsScreen", "Artifacts", "Artifacts", "Output files"),
     ScreenInfo(6, "cleanup", "CleanupScreen", "Cleanup", "Cleanup", "Cleanup workflow"),
-    ScreenInfo(7, "event-log", "EventLogScreen", "Events", "Events", "Live event log"),
+    ScreenInfo(7, "event-log", "EventLogScreen", "Observe", "Observability", "Run signals and logs"),
     ScreenInfo(8, "reset-preview", "ResetPreviewScreen", "Reset", "Reset", "Reset preview"),
     ScreenInfo(9, "settings", "SettingsScreen", "Settings", "Settings", "Active config"),
 )

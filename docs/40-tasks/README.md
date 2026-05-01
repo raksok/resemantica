@@ -50,3 +50,4 @@ Always follow the milestone sequence below.
 | M21 | task-21 | M18, M16, M19, M20A-M20E | TUI Completion + Reconstruction Smoke Validation |
 | M22 | task-22 | M21 | TUI Dashboard & Shell Completion |
 | M23 | task-23 | M22 | TUI Minimal Orientation |
+| M24 | task-24 | M23, M19 | TUI Read-Only Observability Parity |

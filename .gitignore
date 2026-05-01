@@ -38,6 +38,8 @@ mlruns/
 tmp/
 temp/
 cache/
+resemantica-pilot.toml
+tests/test_epub/
 
 # Local databases and event traces
 *.db

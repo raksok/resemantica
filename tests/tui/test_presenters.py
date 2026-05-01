@@ -700,13 +700,15 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
                 "Warnings",
                 "Artifacts",
                 "Cleanup",
-                "Events",
+                "Observability",
                 "Reset",
                 "Settings",
             ):
                 assert label in rendered
             assert "1-9     Switch screen" in rendered
             assert "?       Toggle help" in rendered
+            assert "v       Screen 7 verbosity" in rendered
+            assert "r       Screen 7 refresh" in rendered
 
             await pilot.press("escape")
             await pilot.pause()

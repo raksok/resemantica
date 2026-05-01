@@ -146,6 +146,22 @@ FooterBar {
     color: #D4D5F0;
 }
 
+#event-log-content {
+    height: 1fr;
+    overflow-y: auto;
+    padding-right: 1;
+}
+
+#event-log-counters,
+#event-log-latest-failure,
+#event-log-filters,
+#event-log-live,
+#event-log-persisted,
+#event-log-logs {
+    padding: 0 0 1 0;
+    color: #D4D5F0;
+}
+
 .status-complete {
     color: #C3E88D;
 }
