@@ -6,6 +6,12 @@ HelpScreen {
     background: transparent;
 }
 
+NewFileDialog,
+ResumeRunDialog {
+    background: transparent;
+    align: center middle;
+}
+
 HeaderBar {
     dock: top;
     height: 1;
@@ -122,22 +128,78 @@ HeaderBar {
 
 #dashboard-session-info,
 #dashboard-stage-list,
+#dashboard-event-tail,
 #dashboard-key-hints,
 #preprocessing-stage-list,
+#preprocessing-event-tail,
 #translation-header,
 #translation-block-list,
+#translation-event-tail,
 #settings-config-display,
 #ingestion-path,
 #ingestion-status,
 #ingestion-chapter-list,
+#ingestion-event-tail,
 #artifact-cleanup-preview {
     padding: 0 0 1 0;
 }
 
-#epub-path-input {
-    width: 1fr;
-    max-width: 80;
+.event-tail {
+    height: 7;
+    overflow-y: hidden;
+    border: solid #34324A;
+    padding: 0 1;
     margin: 0 0 1 0;
+}
+
+#dashboard-action-list {
+    layout: horizontal;
+    height: 1;
+    margin: 0 0 1 0;
+}
+
+Button {
+    height: 1;
+    min-width: 12;
+    padding: 0 1;
+    border: none;
+    background: transparent;
+    color: #82AAFF;
+    text-style: bold;
+}
+
+Button:hover,
+Button:focus {
+    background: #82AAFF;
+    color: #1E1F2B;
+    text-style: bold;
+}
+
+Button.-primary {
+    background: #82AAFF;
+    color: #1E1F2B;
+    text-style: bold;
+}
+
+Button.-primary:focus,
+Button.-primary:hover {
+    background: #89DDFF;
+    color: #1E1F2B;
+}
+
+Button:disabled {
+    background: transparent;
+    color: #676E95;
+    text-style: bold;
+}
+
+#btn-new-file,
+#btn-resume-run {
+    width: 19;
+}
+
+#btn-new-file {
+    margin: 0 4 0 0;
 }
 
 /* Observability split-pane layout */
@@ -241,6 +303,79 @@ FooterBar {
 
 #help-content {
     color: #D4D5F0;
+}
+
+#new-file-dialog,
+#resume-run-dialog {
+    width: 44;
+    height: auto;
+    padding: 1;
+    background: #1E1F2B;
+    border: round #82AAFF;
+}
+
+#new-file-title,
+#resume-run-title {
+    color: #C792EA;
+    text-style: bold;
+    padding: 0;
+}
+
+.dialog-label {
+    color: #676E95;
+    padding: 0;
+}
+
+#new-path-input,
+#new-release-input,
+#new-run-input,
+#new-start-input,
+#new-end-input,
+#resume-release-input,
+#resume-run-input,
+#resume-start-input,
+#resume-end-input {
+    width: 1fr;
+    height: 1;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    border: none;
+    background: #161720;
+    color: #EEFFFF;
+}
+
+#new-path-input:focus,
+#new-release-input:focus,
+#new-run-input:focus,
+#new-start-input:focus,
+#new-end-input:focus,
+#resume-release-input:focus,
+#resume-run-input:focus,
+#resume-start-input:focus,
+#resume-end-input:focus {
+    background: #001A43;
+}
+
+.chapter-bounds {
+    layout: horizontal;
+    height: 1;
+    margin: 0 0 1 0;
+}
+
+.chapter-bounds Input {
+    width: 1fr;
+    margin: 0 1 0 0;
+}
+
+#dialog-buttons {
+    layout: horizontal;
+    height: 1;
+    align: left middle;
+}
+
+#dialog-buttons Button {
+    margin: 0 1 0 0;
+    min-width: 12;
 }
 
 .status-complete {

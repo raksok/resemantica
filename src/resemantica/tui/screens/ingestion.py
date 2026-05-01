@@ -21,6 +21,7 @@ class IngestionScreen(BaseScreen):
             yield Static("", id="ingestion-path")
             yield Static("", id="ingestion-status")
             yield Static("", id="ingestion-chapter-list")
+            yield Static("", id="ingestion-event-tail", classes="event-tail")
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -90,12 +91,25 @@ class IngestionScreen(BaseScreen):
                         name = (ref.source_document_path or ref.chapter_path.name).replace(".xhtml", "")
                         lines.append(f"  Ch {ref.chapter_number}  {name}")
                     chapter_widget.update("\n".join(lines))
+                    self._update_event_tail()
                     return
             except Exception:
                 pass
             chapter_widget.update("[dim]Chapters extracted, but manifest could not be read.[/]")
         else:
             chapter_widget.update("")
+
+        self._update_event_tail()
+
+    def _update_event_tail(self) -> None:
+        events = [
+            event
+            for event in self._load_recent_run_events()
+            if self._event_matches_stage_prefix(event, ("epub-extract",))
+        ]
+        self.query_one("#ingestion-event-tail", Static).update(
+            self._render_event_tail(events, title="Extraction Events")
+        )
 
     def action_launch_extract(self) -> None:
         session = getattr(self.app, "session", None)

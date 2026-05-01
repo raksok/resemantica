@@ -8,7 +8,7 @@ from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
 from textual.widgets import DataTable, Static
 
-from resemantica.orchestration.events import subscribe, unsubscribe
+from resemantica.observability.adapter import LiveAdapter, NullAdapter, ObservabilityAdapter, PollAdapter
 from resemantica.tracking.models import Event
 from resemantica.tui.observability import (
     ObservabilityCounters,
@@ -51,7 +51,8 @@ class ObservabilityScreen(BaseScreen):
                 yield DataTable(id="observability-warnings-table")
 
     def on_mount(self) -> None:
-        self._events: list[Event] = []
+        self._adapter: ObservabilityAdapter | None = None
+        self._adapter_events: list[Event] = []
         self._verbosity: ObservabilityVerbosity = "normal"
         self._source_filter: ObservabilitySourceFilter = "all"
         self._severity_filter: ObservabilitySeverityFilter = "warnings/errors"
@@ -64,23 +65,43 @@ class ObservabilityScreen(BaseScreen):
             persisted_records=[],
             log_records=[],
         )
-        subscribe("*", self._on_event)
         table = self.query_one("#observability-warnings-table", DataTable)
         table.add_columns("Severity", "Event", "Message")
         super().on_mount()
 
     def on_unmount(self) -> None:
-        unsubscribe("*", self._on_event)
+        if self._adapter is not None:
+            self._adapter.close()
+            self._adapter = None
+
+    def _ensure_adapter(self) -> ObservabilityAdapter:
+        if self._adapter is not None:
+            return self._adapter
+
+        active = getattr(self.app, "active_action", None)
+        if active is not None:
+            adapter: ObservabilityAdapter = LiveAdapter()
+        else:
+            rid = self._get_release_id()
+            rn = self._get_run_id()
+            if rid and rn:
+                adapter = PollAdapter(release_id=rid, run_id=rn)
+            else:
+                adapter = NullAdapter()
+
+        self._adapter = adapter
+        self._adapter.subscribe(0, self._on_adapter_event)
+        return self._adapter
 
     def _refresh_all(self) -> None:
         super()._refresh_all()
         self._refresh_observability()
 
-    def _on_event(self, event: Event) -> None:
+    def _on_adapter_event(self, event: Event) -> None:
         if event.release_id != self._get_release_id() or event.run_id != self._get_run_id():
             return
-        self._events.insert(0, event)
-        self._events = self._events[:100]
+        self._adapter_events.insert(0, event)
+        self._adapter_events = self._adapter_events[:100]
         try:
             self.app.call_from_thread(self._refresh_observability)
         except RuntimeError:
@@ -112,11 +133,13 @@ class ObservabilityScreen(BaseScreen):
         self._refresh_observability()
 
     def _refresh_observability(self) -> None:
+        adapter = self._ensure_adapter()
         persisted_events = self._load_recent_run_events(limit=100)
         log_path = self._log_path()
         log_records = load_log_records(log_path, limit=100) if log_path is not None else []
+        live_events = self._adapter_events if isinstance(adapter, LiveAdapter) else []
         self._obs_snapshot = build_obs_snapshot(
-            live_events=self._events,
+            live_events=live_events,
             persisted_events=persisted_events,
             log_records=log_records,
         )

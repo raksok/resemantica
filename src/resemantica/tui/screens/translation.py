@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
@@ -22,6 +20,7 @@ class TranslationScreen(BaseScreen):
             yield Static("", id="translation-header")
             yield Static("", id="translation-block-list")
             yield Static("", id="translation-status")
+            yield Static("", id="translation-event-tail", classes="event-tail")
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -51,6 +50,7 @@ class TranslationScreen(BaseScreen):
             block_list.update("[dim]No translation run active.[/]")
 
         self._update_status()
+        self._update_event_tail()
 
     def _update_status(self) -> None:
         snapshot = self._build_snapshot()
@@ -72,14 +72,7 @@ class TranslationScreen(BaseScreen):
             return
 
         if stage_key == "translate-range":
-            session = getattr(self.app, "session", None)
-            chapter_start = session.chapter_start if session else None
-            chapter_end = session.chapter_end if session else None
-            kwargs: dict[str, Any] = {}
-            if chapter_start is not None:
-                kwargs["chapter_start"] = chapter_start
-            if chapter_end is not None:
-                kwargs["chapter_end"] = chapter_end
+            kwargs = self._chapter_scope_options()
             self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key, **kwargs))
         else:
             self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key))
@@ -89,6 +82,26 @@ class TranslationScreen(BaseScreen):
 
     def action_launch_rebuild(self) -> None:
         self._launch_stage("epub-rebuild")
+
+    def _update_event_tail(self) -> None:
+        events = [
+            event
+            for event in self._load_recent_run_events()
+            if self._is_translation_event(event)
+        ]
+        self.query_one("#translation-event-tail", Static).update(
+            self._render_event_tail(events, title="Translation Events")
+        )
+
+    @staticmethod
+    def _is_translation_event(event: object) -> bool:
+        stage_name = str(getattr(event, "stage_name", "") or "").lower()
+        event_type = str(getattr(event, "event_type", "") or "").lower()
+        if stage_name in {"translate-range", "translate-chapter"}:
+            return True
+        if "translate" in event_type or "pass" in event_type or "block" in event_type:
+            return True
+        return "chapter" in event_type and stage_name.startswith("translate")
 
     def _load_block_progress(self) -> dict[int, list[tuple[str, str]]]:
         release_id = self._get_release_id()

@@ -34,6 +34,7 @@ class PreprocessingScreen(BaseScreen):
             yield Static("Preprocessing Stages", classes="app-title")
             yield Static("", id="preprocessing-stage-list")
             yield Static("", id="preprocessing-status")
+            yield Static("", id="preprocessing-event-tail", classes="event-tail")
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -48,6 +49,7 @@ class PreprocessingScreen(BaseScreen):
         stage_list = self.query_one("#preprocessing-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
         self._update_status()
+        self._update_event_tail()
 
     def _build_stage_progress(self, state: dict | None = None) -> str:
         if state is None:
@@ -175,7 +177,18 @@ class PreprocessingScreen(BaseScreen):
             resolved = Path(input_path).expanduser().resolve()
             self.start_worker(stage_key, lambda: adapter.extract_epub(resolved))
         else:
-            self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key))
+            options = self._chapter_scope_options()
+            self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key, **options))
+
+    def _update_event_tail(self) -> None:
+        events = [
+            event
+            for event in self._load_recent_run_events()
+            if self._event_matches_stage_prefix(event, ("preprocess-", "packets-build"))
+        ]
+        self.query_one("#preprocessing-event-tail", Static).update(
+            self._render_event_tail(events, title="Preprocessing Events")
+        )
 
     def action_launch_glossary(self) -> None:
         self._launch_stage("preprocess-glossary")

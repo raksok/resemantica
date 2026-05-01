@@ -19,19 +19,26 @@ def _get_tracking_uri() -> str:
 
 
 def _on_stage_event(event: Event) -> None:
-    if event.event_type == "stage.started":
+    et = event.event_type
+    if et in ("stage_started", "orchestration.stage_started"):
         _STAGE_START_TIMES[event.stage_name] = time.time()
         mlflow.log_param(f"stage.{event.stage_name}.started", event.event_time)
         return
 
-    if event.event_type in ("stage.completed", "stage.failed"):
+    if et in (
+        "stage_completed",
+        "stage_failed",
+        "orchestration.stage_completed",
+        "orchestration.stage_failed",
+    ):
         start = _STAGE_START_TIMES.pop(event.stage_name, None)
         if start is not None:
             mlflow.log_metric(
                 f"stage.{event.stage_name}.latency_seconds",
                 round(time.time() - start, 2),
             )
-        status = "completed" if event.event_type == "stage.completed" else "failed"
+        is_completed = et in ("stage_completed", "orchestration.stage_completed")
+        status = "completed" if is_completed else "failed"
         mlflow.log_param(f"stage.{event.stage_name}.status", status)
         if event.message:
             mlflow.log_text(event.message, f"stage.{event.stage_name}.message.txt")
@@ -53,9 +60,12 @@ def start_run_tracking(release_id: str, run_id: str) -> None:
     mlflow.log_param("run_id", run_id)
 
     if not _SUBSCRIBED:
-        subscribe("stage.started", _on_stage_event)
-        subscribe("stage.completed", _on_stage_event)
-        subscribe("stage.failed", _on_stage_event)
+        subscribe("stage_started", _on_stage_event)
+        subscribe("stage_completed", _on_stage_event)
+        subscribe("stage_failed", _on_stage_event)
+        subscribe("orchestration.stage_started", _on_stage_event)
+        subscribe("orchestration.stage_completed", _on_stage_event)
+        subscribe("orchestration.stage_failed", _on_stage_event)
         _SUBSCRIBED = True
 
 

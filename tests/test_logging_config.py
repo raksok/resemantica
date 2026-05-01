@@ -34,11 +34,24 @@ def test_configure_logging_verbosity_one_shows_info(tmp_path: Path, capsys) -> N
     assert "hidden debug" not in captured
 
 
-def test_configure_logging_verbosity_two_shows_debug(tmp_path: Path, capsys) -> None:
+def test_configure_logging_verbosity_two_shows_info_not_debug(tmp_path: Path, capsys) -> None:
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
 
     configure_logging(verbosity=2, artifacts_dir=artifacts, run_id="verbosity-two")
+    logger.info("visible info")
+    logger.debug("hidden debug")
+
+    captured = capsys.readouterr().err
+    assert "visible info" in captured
+    assert "hidden debug" not in captured
+
+
+def test_configure_logging_verbosity_three_shows_debug(tmp_path: Path, capsys) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
+    configure_logging(verbosity=3, artifacts_dir=artifacts, run_id="verbosity-three")
     logger.debug("visible debug")
 
     captured = capsys.readouterr().err

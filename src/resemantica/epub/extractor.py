@@ -14,6 +14,7 @@ from resemantica.epub.validators import validate_extraction
 from resemantica.chapters.manifest import write_chapter_manifest
 from resemantica.db.extraction_repo import ExtractionRepo
 from resemantica.db.sqlite import open_connection
+from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 _XHTML_MEDIA_TYPES = {
@@ -169,7 +170,45 @@ def extract_epub(
             ).as_posix()
         )
 
-    chapter_results = parse_chapters(chapter_documents, placeholder_map_ref_builder=placeholder_map_ref)
+    chapter_results = []
+    for chapter_doc in chapter_documents:
+        emit_event(
+            run_id=run_id,
+            release_id=release_id,
+            event_type="epub.extraction.chapter_started",
+            stage_name="epub-extract",
+            chapter_number=chapter_doc.chapter_number,
+            message=f"Extracting chapter {chapter_doc.chapter_number}",
+        )
+        try:
+            result = parse_chapters([chapter_doc], placeholder_map_ref_builder=placeholder_map_ref)
+            chapter_results.extend(result)
+            emit_event(
+                run_id=run_id,
+                release_id=release_id,
+                event_type="epub.extraction.chapter_completed",
+                stage_name="epub-extract",
+                chapter_number=chapter_doc.chapter_number,
+                message=f"Extracted chapter {chapter_doc.chapter_number}",
+            )
+        except Exception as exc:
+            emit_event(
+                run_id=run_id,
+                release_id=release_id,
+                event_type="epub.extraction.chapter_skipped",
+                stage_name="epub-extract",
+                chapter_number=chapter_doc.chapter_number,
+                severity="warning",
+                message=f"Skipped chapter {chapter_doc.chapter_number}: {exc}",
+            )
+
+    emit_event(
+        run_id=run_id,
+        release_id=release_id,
+        event_type="epub.extraction.completed",
+        stage_name="epub-extract",
+        message=f"Extraction completed: {len(chapter_results)} chapters",
+    )
 
     _write_chapter_artifacts(
         chapter_results=chapter_results,

@@ -11,6 +11,16 @@ from resemantica.tracking.repo import ensure_tracking_db, save_event
 
 _EventCallback = Callable[[Event], None]
 
+_STANDARD_TYPE_ALIASES: dict[str, str] = {
+    "stage_started": "orchestration.stage_started",
+    "stage_completed": "orchestration.stage_completed",
+    "stage_failed": "orchestration.stage_failed",
+    "run_finalized": "orchestration.run_finalized",
+    "paragraph_started": "translate.paragraph_started",
+    "paragraph_completed": "translate.paragraph_completed",
+    "risk_detected": "translate.risk_detected",
+}
+
 
 class EventBus:
     def __init__(
@@ -146,4 +156,36 @@ def emit_event(
         block_id=block_id,
         payload=payload or {},
     )
-    return default_event_bus.publish(event)
+    result = default_event_bus.publish(event)
+
+    alias = _STANDARD_TYPE_ALIASES.get(event_type)
+    if alias is not None:
+        alias_event = Event(
+            event_type=alias,
+            run_id=run_id,
+            release_id=release_id,
+            stage_name=stage_name,
+            severity=severity,
+            message=message,
+            chapter_number=chapter_number,
+            block_id=block_id,
+            payload=payload or {},
+        )
+        default_event_bus.publish(alias_event)
+
+    _loguru_level = {"error": "ERROR", "warning": "WARNING"}.get(severity, "DEBUG")
+    logger.log(
+        _loguru_level,
+        "[{}] {} | {}",
+        event_type,
+        stage_name,
+        message,
+        event_type=event_type,
+        stage_name=stage_name,
+        chapter_number=chapter_number,
+        block_id=block_id,
+        run_id=run_id,
+        release_id=release_id,
+    )
+
+    return result

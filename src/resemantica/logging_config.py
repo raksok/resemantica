@@ -9,12 +9,16 @@ from loguru import logger
 _CONSOLE_FORMATS = {
     0: "{time:HH:mm:ss} | {level:<7} | {message}",
     1: "{time:HH:mm:ss} | {level:<7} | {name} | {message}",
-    2: "{time:HH:mm:ss.SSS} | {level:<7} | {name}:{function}:{line} | {message}",
+    2: "{time:HH:mm:ss.SSS} | {level:<7} | {name} | {message}",
+    3: "{time:HH:mm:ss.SSS} | {level:<7} | {name}:{function}:{line} | {message}",
+    4: "{time:HH:mm:ss.SSS} | {level:<7} | {name}:{function}:{line} | {message}",
 }
 _CONSOLE_LEVELS = {
     0: "WARNING",
     1: "INFO",
-    2: "DEBUG",
+    2: "INFO",
+    3: "DEBUG",
+    4: "DEBUG",
 }
 
 
@@ -25,7 +29,7 @@ def configure_logging(
     run_id: str | None = None,
 ) -> None:
     """Configure loguru console and structured JSON file logging."""
-    effective_verbosity = min(max(verbosity, 0), 2)
+    effective_verbosity = min(max(verbosity, 0), 4)
     logger.remove()
     logger.add(
         sys.stderr,

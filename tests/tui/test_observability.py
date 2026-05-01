@@ -360,6 +360,7 @@ def test_tui_observability_screen_shows_live_event(monkeypatch, tmp_path):
     async def run() -> None:
         app = ResemanticaApp(release_id="rel-1", run_id="run-1")
         async with app.run_test() as pilot:
+            app.active_action = "test-action"
             await pilot.press("5")
             await pilot.pause()
 
@@ -372,6 +373,11 @@ def test_tui_observability_screen_shows_live_event(monkeypatch, tmp_path):
                 message="Live warning",
                 chapter_number=2,
             )
+            await pilot.pause()
+            await pilot.pause()
+
+            screen = pilot.app.screen
+            screen._refresh_observability()
             await pilot.pause()
 
             live = pilot.app.screen.query_one("#observability-live", Static)

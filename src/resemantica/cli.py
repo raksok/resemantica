@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from loguru import logger
+
 from resemantica.cli_progress import CliProgressSubscriber
 from resemantica.epub.extractor import extract_epub
 from resemantica.glossary.pipeline import (
@@ -22,7 +24,7 @@ def _add_verbose_arg(parser: argparse.ArgumentParser) -> None:
         "--verbose",
         action="count",
         default=0,
-        help="-v for INFO, -vv for DEBUG.",
+        help="-v for INFO, -vv for CHAPTER, -vvv for DEBUG, -vvvv for TRACE.",
     )
 
 
@@ -56,6 +58,18 @@ def _configure_cli_logging(
         artifacts_dir=paths.artifact_root,
         run_id=run_id,
     )
+
+
+def _configure_tui_logging(*, config: AppConfig, release_id: str | None, run_id: str | None) -> None:
+    logger.remove()
+    if release_id is None:
+        return
+    paths = derive_paths(config, release_id=release_id)
+    if not paths.artifact_root.exists():
+        return
+    logs_dir = paths.artifact_root / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    logger.add(logs_dir / f"{run_id or 'tui'}.jsonl", level="DEBUG", serialize=True)
 
 
 def _with_cli_progress(fn):
@@ -269,6 +283,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to resemantica.toml",
     )
+    _add_chapter_range_args(tui_cmd)
 
     run = subparsers.add_parser(
         "run",
@@ -597,10 +612,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "tui":
         from resemantica.tui import ResemanticaApp
+        config = load_config(args.config)
+        _configure_tui_logging(config=config, release_id=args.release, run_id=args.run)
         app = ResemanticaApp(
             release_id=args.release,
             run_id=args.run,
             config_path=args.config,
+            chapter_start=args.start,
+            chapter_end=args.end,
         )
         app.run()
         return 0

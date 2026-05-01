@@ -142,10 +142,35 @@ class TestCliDispatch:
 
     def test_tui(self):
         parser = _build_parser()
-        args = parser.parse_args(["tui", "--release", "r1", "--run", "test-run"])
+        args = parser.parse_args(
+            ["tui", "--release", "r1", "--run", "test-run", "--start", "2", "--end", "5"]
+        )
         assert args.command == "tui"
         assert args.release == "r1"
         assert args.run == "test-run"
+        assert args.start == 2
+        assert args.end == 5
+
+    def test_tui_launches_without_bounds_flags(self, monkeypatch):
+        captured = {}
+
+        def fake_run(self):
+            captured["release_id"] = self.release_id
+            captured["run_id"] = self.run_id
+            captured["chapter_start"] = self.session.chapter_start
+            captured["chapter_end"] = self.session.chapter_end
+
+        monkeypatch.setattr("resemantica.tui.app.ResemanticaApp.run", fake_run)
+
+        result = cli_mod.main(["tui"])
+
+        assert result == 0
+        assert captured == {
+            "release_id": None,
+            "run_id": None,
+            "chapter_start": None,
+            "chapter_end": None,
+        }
 
     def test_no_verbose_defaults_to_zero(self):
         parser = _build_parser()

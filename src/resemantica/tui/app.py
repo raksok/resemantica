@@ -50,13 +50,18 @@ class ResemanticaApp(App):
         release_id: str | None = None,
         run_id: str | None = None,
         config_path: Path | None = None,
+        chapter_start: int | None = None,
+        chapter_end: int | None = None,
     ):
         super().__init__()
         self._release_id = release_id
         self._run_id = run_id
         self._config_path = config_path
         self.active_action: str | None = None
-        self.session = TuiSession()
+        self.session = TuiSession(
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+        )
         self._screen_bindings = {
             str(info.number): info.screen_id for info in SCREEN_INFOS
         }
@@ -94,6 +99,10 @@ class ResemanticaApp(App):
     async def action_show_help(self) -> None:
         screen_info = screen_info_for_class_name(self.screen.__class__.__name__)
         await self.push_screen(HelpScreen(current_screen_info=screen_info))
+
+    def set_ids(self, release_id: str, run_id: str) -> None:
+        self._release_id = release_id
+        self._run_id = run_id
 
     @property
     def release_id(self) -> str | None:

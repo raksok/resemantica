@@ -4,8 +4,8 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
-from textual.widgets import Input, Static
+from textual.containers import Container, Horizontal
+from textual.widgets import Button, Static
 
 from resemantica.tui.launch_control import STAGE_DEFINITIONS, next_available_stage
 from resemantica.tui.screens.base import BaseScreen
@@ -35,10 +35,10 @@ STATUS_GLYPH = {
 
 class DashboardScreen(BaseScreen):
     BINDINGS = [
-        Binding("e", "focus_input", "EPUB Path"),
-        Binding("escape", "blur_input", "Blur Input"),
         Binding("p", "launch_production", "Production"),
         Binding("n", "launch_next", "Next Stage"),
+        Binding("left", "focus_prev_action", "Previous"),
+        Binding("right", "focus_next_action", "Next"),
     ]
 
     async def key_2(self) -> None:
@@ -63,21 +63,17 @@ class DashboardScreen(BaseScreen):
         with Container(id="dashboard-content"):
             yield Static("Dashboard", classes="app-title")
             yield Static("", id="dashboard-session-info")
+            with Horizontal(id="dashboard-action-list"):
+                yield Button("[[ NEW FILE ]]", id="btn-new-file")
+                yield Button("[[ RESUME RUN ]]", id="btn-resume-run")
             yield Static("", id="dashboard-stage-list")
             yield Static("", id="dashboard-active-worker")
             yield Static("", id="dashboard-latest-failure")
+            yield Static("", id="dashboard-event-tail", classes="event-tail")
             yield Static("", id="dashboard-key-hints")
-            yield Input(placeholder="/path/to/book.epub  (absolute or relative, .epub only)", id="epub-path-input")
 
     def on_mount(self) -> None:
         super().on_mount()
-        self.call_after_refresh(self._blur_input)
-
-    def _blur_input(self) -> None:
-        try:
-            self.query_one("#epub-path-input", Input).blur()
-        except Exception:
-            pass
 
     def _refresh_all(self) -> None:
         super()._refresh_all()
@@ -129,57 +125,89 @@ class DashboardScreen(BaseScreen):
         else:
             failure_widget.update("")
 
-        hints = self.query_one("#dashboard-key-hints", Static)
-        hints.update(
-            "[dim]e[/]=EPUB Path  "
-            "[dim]p[/]=Production  "
-            "[dim]n[/]=Next Stage  "
-            "[dim]Esc[/]=Blur Input"
+        self.query_one("#dashboard-event-tail", Static).update(
+            self._render_event_tail(events, title="Recent Events")
         )
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        raw = event.value.strip()
-        if not raw:
-            return
-        path = Path(raw).expanduser().resolve()
-        if not path.exists():
-            self.notify(f"Path does not exist: {path}", severity="error", timeout=4)
-            return
-        if not path.is_file():
-            self.notify(f"Not a file: {path}", severity="error", timeout=4)
-            return
-        if path.suffix.lower() != ".epub":
-            self.notify(f"Not an .epub file: {path}", severity="error", timeout=4)
-            return
-        try:
-            with open(path, "rb"):
-                pass
-        except PermissionError:
-            self.notify(f"File not readable: {path}", severity="error", timeout=4)
-            return
+        hints = self.query_one("#dashboard-key-hints", Static)
+        hints.update(
+            "[dim]p[/]=Production  "
+            "[dim]n[/]=Next Stage"
+        )
 
-        self.app.session.input_path = path  # type: ignore[attr-defined]
-        input_widget = self.query_one("#epub-path-input", Input)
-        input_widget.clear()
-        input_widget.blur()
-        self.notify(f"EPUB path set: {path.name}", severity="information", timeout=2)
-        self._refresh_dashboard()
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-new-file":
+            self._on_new_file()
+        elif event.button.id == "btn-resume-run":
+            self._on_resume_run()
 
-    def action_focus_input(self) -> None:
-        self.query_one("#epub-path-input", Input).focus()
+    def action_focus_prev_action(self) -> None:
+        self.query_one("#btn-new-file", Button).focus()
 
-    def action_blur_input(self) -> None:
-        try:
-            self.query_one("#epub-path-input", Input).blur()
-        except Exception:
-            pass
+    def action_focus_next_action(self) -> None:
+        self.query_one("#btn-resume-run", Button).focus()
+
+    def _on_new_file(self) -> None:
+        from resemantica.tui.screens.run_dialog import NewFileDialog, NewFileResult
+
+        def handle(result: NewFileResult | None) -> None:
+            if result is None:
+                self.notify("Session not initialised", severity="warning", timeout=3)
+                return
+            self.app.session.input_path = result.input_path  # type: ignore[attr-defined]
+            self.app.session.chapter_start = result.chapter_start  # type: ignore[attr-defined]
+            self.app.session.chapter_end = result.chapter_end  # type: ignore[attr-defined]
+            self.app.set_ids(result.release_id, result.run_id)  # type: ignore[attr-defined]
+            self.notify(
+                f"Release: {result.release_id}, Run: {result.run_id}, File: {result.input_path.name}",
+                severity="information",
+                timeout=3,
+            )
+            self._refresh_dashboard()
+
+        session = getattr(self.app, "session", None)
+        self.app.push_screen(
+            NewFileDialog(
+                chapter_start=session.chapter_start if session else None,
+                chapter_end=session.chapter_end if session else None,
+            ),
+            handle,
+        )
+
+    def _on_resume_run(self) -> None:
+        from resemantica.tui.screens.run_dialog import ResumeRunDialog, ResumeRunResult
+
+        def handle(result: ResumeRunResult | None) -> None:
+            if result is None:
+                self.notify("Session not initialised", severity="warning", timeout=3)
+                return
+            self.app.session.input_path = None  # type: ignore[attr-defined]
+            self.app.session.chapter_start = result.chapter_start  # type: ignore[attr-defined]
+            self.app.session.chapter_end = result.chapter_end  # type: ignore[attr-defined]
+            self.app.set_ids(result.release_id, result.run_id)  # type: ignore[attr-defined]
+            self.notify(
+                f"Release: {result.release_id}, Run: {result.run_id}",
+                severity="information",
+                timeout=3,
+            )
+            self._refresh_dashboard()
+
+        session = getattr(self.app, "session", None)
+        self.app.push_screen(
+            ResumeRunDialog(
+                chapter_start=session.chapter_start if session else None,
+                chapter_end=session.chapter_end if session else None,
+            ),
+            handle,
+        )
 
     def action_launch_production(self) -> None:
         adapter = self._make_adapter()
         if adapter is None:
             self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
             return
-        self.start_worker("production", lambda: adapter.launch_production())
+        options = self._chapter_scope_options()
+        self.start_worker("production", lambda: adapter.launch_production(**options))
 
     def action_launch_next(self) -> None:
         snapshot = self._build_snapshot()
@@ -200,12 +228,13 @@ class DashboardScreen(BaseScreen):
             resolved = Path(input_path).expanduser().resolve()
             self.start_worker(next_stage.key, lambda: adapter.extract_epub(resolved))
         elif next_stage.key == "production":
-            self.start_worker(next_stage.key, lambda: adapter.launch_production())
-        else:
+            options = self._chapter_scope_options()
+            self.start_worker(next_stage.key, lambda: adapter.launch_production(**options))
+        elif next_stage.key == "epub-rebuild":
             self.start_worker(next_stage.key, lambda: adapter.launch_stage(next_stage.key))
-
-    # Legacy method wrappers for test compatibility.
-    # These match the old API so existing tests pass without changes.
+        else:
+            options = self._chapter_scope_options()
+            self.start_worker(next_stage.key, lambda: adapter.launch_stage(next_stage.key, **options))
 
     def _build_phase_progress(self, state: dict | None = None) -> str:
         return type(self)._build_phase_progress_static(state)

@@ -140,7 +140,9 @@ class BaseScreen(Screen):
 
     def _refresh_header_pass(self) -> None:
         indicator = getattr(self, "_header_pass_indicator", HeaderPassIndicator())
-        pass_widget = self.query_one("#header-pass", Static)
+        pass_widget = self.query_one_optional("#header-pass", Static)
+        if pass_widget is None:
+            return
         if indicator.stale:
             pass_widget.update("[orange]STALE[/]")
         elif indicator.running:
@@ -280,6 +282,18 @@ class BaseScreen(Screen):
             config_path=getattr(self.app, "config_path", None),
         )
 
+    def _chapter_scope_options(self) -> dict[str, int]:
+        session: TuiSession | None = getattr(self.app, "session", None)
+        if session is None:
+            return {}
+
+        options: dict[str, int] = {}
+        if session.chapter_start is not None:
+            options["chapter_start"] = session.chapter_start
+        if session.chapter_end is not None:
+            options["chapter_end"] = session.chapter_end
+        return options
+
     def _load_chapter_count(self) -> int:
         release_id = self._get_release_id()
         if not release_id:
@@ -309,6 +323,47 @@ class BaseScreen(Screen):
                 conn.close()
         except Exception:
             return []
+
+    @staticmethod
+    def _event_matches_stage_prefix(event: Event, prefixes: tuple[str, ...]) -> bool:
+        stage_name = (event.stage_name or "").lower()
+        event_type = (event.event_type or "").lower()
+        return any(
+            stage_name.startswith(prefix) or event_type.startswith(prefix)
+            for prefix in prefixes
+        )
+
+    @classmethod
+    def _event_summary(cls, event: Event) -> str:
+        severity = (event.severity or "info").lower()
+        color = "red" if severity == "error" else "orange" if severity == "warning" else "comment"
+        message = (event.message or "").strip() or event.event_type or "(event)"
+        parts = [message]
+        if event.chapter_number is not None:
+            parts.append(f"ch={event.chapter_number}")
+        if event.block_id:
+            parts.append(f"block={event.block_id}")
+        if event.stage_name:
+            parts.append(f"stage={event.stage_name}")
+        return f"  [{color}]{severity.upper():<7}[/] {'  '.join(parts)[:104]}"
+
+    @classmethod
+    def _render_event_tail(
+        cls,
+        events: list[Event],
+        *,
+        title: str,
+        limit: int = 5,
+    ) -> str:
+        lines = [f"[bold]{title}[/bold]"]
+        if not events:
+            lines.append("  [dim]No recent events.[/]")
+            return "\n".join(lines)
+        for event in events[:limit]:
+            lines.append(cls._event_summary(event))
+        if len(events) > limit:
+            lines.append(f"  [dim]+{len(events) - limit} more[/]")
+        return "\n".join(lines)
 
     @staticmethod
     def _coerce_int(value: Any) -> int | None:

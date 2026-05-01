@@ -46,12 +46,13 @@ def test_start_run_tracking_subscribes_once(mock_mlflow, tmp_path: Path):
     _subscribers.clear()
     _m._SUBSCRIBED = False
     _m.start_run_tracking("r1", "u1")
-    assert len(_subscribers.get("stage.started", [])) == 1
-    assert len(_subscribers.get("stage.completed", [])) == 1
-    assert len(_subscribers.get("stage.failed", [])) == 1
+    assert len(_subscribers.get("stage_started", [])) == 1
+    assert len(_subscribers.get("stage_completed", [])) == 1
+    assert len(_subscribers.get("stage_failed", [])) == 1
+    assert len(_subscribers.get("orchestration.stage_started", [])) == 1
 
     _m.start_run_tracking("r2", "u2")
-    assert len(_subscribers["stage.started"]) == 1
+    assert len(_subscribers["stage_started"]) == 1
 
     _m.stop_run_tracking()
 
@@ -97,7 +98,7 @@ def test_stage_event_handler_logs_start(mock_mlflow):
     from resemantica.tracking.models import Event
 
     event = Event(
-        event_type="stage.started",
+        event_type="stage_started",
         run_id="r1",
         release_id="rel1",
         stage_name="preprocess-glossary",
@@ -113,7 +114,7 @@ def test_stage_event_handler_logs_completion(mock_mlflow):
     from resemantica.tracking.models import Event
 
     _on_stage_event(Event(
-        event_type="stage.started",
+        event_type="stage_started",
         run_id="r1", release_id="rel1",
         stage_name="test-stage",
     ))
@@ -122,7 +123,7 @@ def test_stage_event_handler_logs_completion(mock_mlflow):
     time.sleep(0.01)
 
     _on_stage_event(Event(
-        event_type="stage.completed",
+        event_type="stage_completed",
         run_id="r1", release_id="rel1",
         stage_name="test-stage",
         message="done",

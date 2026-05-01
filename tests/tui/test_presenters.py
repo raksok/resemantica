@@ -46,6 +46,10 @@ def _static_text(widget) -> str:
     return str(widget.content)
 
 
+def _button_label(widget) -> str:
+    return str(widget.label)
+
+
 def test_event_bus_subscribe_unsubscribe():
     from resemantica.orchestration.events import subscribe, unsubscribe, emit_event
 
@@ -157,6 +161,272 @@ def test_tui_adapter_launch_workflow_delegates_to_runner():
     assert runner.calls == [("translate-range", {"chapter_start": 1, "chapter_end": 2})]
 
 
+def test_dialog_chapter_bounds_validation():
+    from resemantica.tui.screens.run_dialog import parse_chapter_bounds
+
+    assert parse_chapter_bounds("", "") == (None, None, None)
+    assert parse_chapter_bounds("2", "5") == (2, 5, None)
+    assert parse_chapter_bounds("x", "")[2] == "Chapter start must be a positive integer"
+    assert parse_chapter_bounds("", "0")[2] == "Chapter end must be a positive integer"
+    assert parse_chapter_bounds("5", "2")[2] == "Chapter end must be greater than or equal to start"
+
+
+def test_new_file_dialog_callback_saves_bounds(tmp_path):
+    from textual.widgets import Input
+
+    from resemantica.tui.app import ResemanticaApp
+
+    epub = tmp_path / "book.epub"
+    epub.write_bytes(b"epub")
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.click("#btn-new-file")
+            await pilot.pause()
+
+            screen = pilot.app.screen
+            screen.query_one("#new-path-input", Input).value = str(epub)
+            screen.query_one("#new-release-input", Input).value = "rel-1"
+            screen.query_one("#new-run-input", Input).value = "run-1"
+            screen.query_one("#new-start-input", Input).value = "2"
+            screen.query_one("#new-end-input", Input).value = "4"
+
+            await pilot.click("#new-submit")
+            await pilot.pause()
+
+            assert pilot.app.session.input_path == epub.resolve()
+            assert pilot.app.release_id == "rel-1"
+            assert pilot.app.run_id == "run-1"
+            assert pilot.app.session.chapter_start == 2
+            assert pilot.app.session.chapter_end == 4
+
+    asyncio.run(run())
+
+
+def test_resume_run_dialog_callback_saves_bounds():
+    from textual.widgets import Input
+
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.click("#btn-resume-run")
+            await pilot.pause()
+
+            screen = pilot.app.screen
+            screen.query_one("#resume-release-input", Input).value = "rel-1"
+            screen.query_one("#resume-run-input", Input).value = "run-1"
+            screen.query_one("#resume-start-input", Input).value = "3"
+            screen.query_one("#resume-end-input", Input).value = "8"
+
+            await pilot.click("#resume-submit")
+            await pilot.pause()
+
+            assert pilot.app.session.input_path is None
+            assert pilot.app.release_id == "rel-1"
+            assert pilot.app.run_id == "run-1"
+            assert pilot.app.session.chapter_start == 3
+            assert pilot.app.session.chapter_end == 8
+
+    asyncio.run(run())
+
+
+def test_scoped_launches_pass_chapter_bounds():
+    from resemantica.tui.launch_control import (
+        LaunchAction,
+        LaunchContext,
+        LaunchSnapshot,
+        LaunchStageStatus,
+    )
+    from resemantica.tui.screens.dashboard import DashboardScreen
+    from resemantica.tui.screens.preprocessing import PreprocessingScreen
+    from resemantica.tui.screens.translation import TranslationScreen
+
+    calls: list[tuple[str, dict[str, int]]] = []
+
+    class Adapter:
+        def launch_production(self, **options):
+            calls.append(("production", options))
+
+        def launch_stage(self, stage_name: str, **options):
+            calls.append((stage_name, options))
+
+    def fake_start(action_key, fn):
+        fn()
+
+    dashboard = DashboardScreen()
+    dashboard._make_adapter = lambda: Adapter()  # type: ignore[method-assign]
+    dashboard._chapter_scope_options = lambda: {"chapter_start": 2, "chapter_end": 5}  # type: ignore[method-assign]
+    dashboard.start_worker = fake_start  # type: ignore[method-assign]
+    dashboard.action_launch_production()
+
+    ready_stage = LaunchStageStatus(
+        key="preprocess-glossary",
+        label="Glossary",
+        status="ready",
+        action=LaunchAction(
+            key="preprocess-glossary",
+            label="Glossary",
+            enabled=True,
+            reason="",
+            shortcut="g",
+        ),
+        latest_event=None,
+        latest_failure=None,
+    )
+    dashboard._build_snapshot = lambda: LaunchSnapshot(  # type: ignore[method-assign]
+        context=LaunchContext(release_id="rel-1", run_id="run-1"),
+        active_action=None,
+        stages=[ready_stage],
+        latest_failure=None,
+    )
+    dashboard.action_launch_next()
+
+    preprocessing = PreprocessingScreen()
+    preprocessing._make_adapter = lambda: Adapter()  # type: ignore[method-assign]
+    preprocessing._chapter_scope_options = lambda: {"chapter_start": 2, "chapter_end": 5}  # type: ignore[method-assign]
+    preprocessing.start_worker = fake_start  # type: ignore[method-assign]
+    preprocessing._launch_stage("packets-build")
+
+    translation = TranslationScreen()
+    translation._make_adapter = lambda: Adapter()  # type: ignore[method-assign]
+    translation._chapter_scope_options = lambda: {"chapter_start": 2, "chapter_end": 5}  # type: ignore[method-assign]
+    translation.start_worker = fake_start  # type: ignore[method-assign]
+    translation._launch_stage("translate-range")
+
+    assert calls == [
+        ("production", {"chapter_start": 2, "chapter_end": 5}),
+        ("preprocess-glossary", {"chapter_start": 2, "chapter_end": 5}),
+        ("packets-build", {"chapter_start": 2, "chapter_end": 5}),
+        ("translate-range", {"chapter_start": 2, "chapter_end": 5}),
+    ]
+
+
+def test_screen_event_tails_render_filtered_events():
+    from resemantica.tui.screens.base import BaseScreen
+    from resemantica.tui.screens.ingestion import IngestionScreen
+    from resemantica.tui.screens.preprocessing import PreprocessingScreen
+    from resemantica.tui.screens.translation import TranslationScreen
+
+    events = [
+        _make_event(
+            event_type="epub-extract.completed",
+            event_time=_iso(12, 1),
+            message="extracted",
+        ),
+        _make_event(
+            event_type="preprocess-glossary.completed",
+            event_time=_iso(12, 2),
+            message="glossary done",
+        ),
+        _make_event(
+            event_type="packets-build.chapter_started",
+            event_time=_iso(12, 3),
+            message="packet chapter",
+            chapter_number=2,
+        ),
+        _make_event(
+            event_type="translate.pass.completed",
+            event_time=_iso(12, 4),
+            message="pass done",
+        ),
+    ]
+    events[0].stage_name = "epub-extract"
+    events[1].stage_name = "preprocess-glossary"
+    events[2].stage_name = "packets-build"
+    events[3].stage_name = "translate-range"
+
+    dashboard_tail = BaseScreen._render_event_tail(events, title="Recent Events")
+    ingestion_events = [
+        event
+        for event in events
+        if IngestionScreen._event_matches_stage_prefix(event, ("epub-extract",))
+    ]
+    preprocessing_events = [
+        event
+        for event in events
+        if PreprocessingScreen._event_matches_stage_prefix(event, ("preprocess-", "packets-build"))
+    ]
+    translation_events = [
+        event for event in events if TranslationScreen._is_translation_event(event)
+    ]
+
+    assert "extracted" in dashboard_tail
+    assert "extracted" in IngestionScreen._render_event_tail(ingestion_events, title="Extraction Events")
+    preprocessing_tail = PreprocessingScreen._render_event_tail(
+        preprocessing_events,
+        title="Preprocessing Events",
+    )
+    assert "glossary done" in preprocessing_tail
+    assert "packet chapter" in preprocessing_tail
+    assert "pass done" in TranslationScreen._render_event_tail(
+        translation_events,
+        title="Translation Events",
+    )
+
+
+def test_tui_screen_event_tail_widgets_render(monkeypatch):
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.base import BaseScreen
+
+    events = [
+        _make_event(
+            event_type="epub-extract.completed",
+            event_time=_iso(12, 1),
+            message="extracted",
+        ),
+        _make_event(
+            event_type="preprocess-glossary.completed",
+            event_time=_iso(12, 2),
+            message="glossary done",
+        ),
+        _make_event(
+            event_type="translate.pass.completed",
+            event_time=_iso(12, 3),
+            message="pass done",
+        ),
+    ]
+    events[0].stage_name = "epub-extract"
+    events[1].stage_name = "preprocess-glossary"
+    events[2].stage_name = "translate-range"
+
+    monkeypatch.setattr(BaseScreen, "_load_recent_run_events", lambda self, **kwargs: events)
+    monkeypatch.setattr(BaseScreen, "_check_extraction_manifest", lambda self: False)
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.pause()
+            dashboard_tail = pilot.app.screen.query_one("#dashboard-event-tail", Static)
+            assert "extracted" in _static_text(dashboard_tail)
+
+            await pilot.press("2")
+            await pilot.pause()
+            ingestion_tail = pilot.app.screen.query_one("#ingestion-event-tail", Static)
+            assert "extracted" in _static_text(ingestion_tail)
+            assert "glossary done" not in _static_text(ingestion_tail)
+
+            await pilot.press("3")
+            await pilot.pause()
+            preprocessing_tail = pilot.app.screen.query_one("#preprocessing-event-tail", Static)
+            assert "glossary done" in _static_text(preprocessing_tail)
+            assert "pass done" not in _static_text(preprocessing_tail)
+
+            await pilot.press("4")
+            await pilot.pause()
+            translation_tail = pilot.app.screen.query_one("#translation-event-tail", Static)
+            assert "pass done" in _static_text(translation_tail)
+            assert "extracted" not in _static_text(translation_tail)
+
+    asyncio.run(run())
+
+
 def test_reset_preview_screen_renders_delete_and_preserve_targets():
     from resemantica.tui.screens.reset_preview import ResetPreviewScreen
 
@@ -232,7 +502,7 @@ def test_preprocessing_presenter_builds_stages():
     assert "Graph MVP" in result
     assert "Packets" in result
     assert "◉[/] Glossary" in result
-    assert "━━━━━━━━━━╺─────────" in result
+    assert "━━━━━━━━╺─────────" in result
     assert "█" not in result
 
 
@@ -819,5 +1089,76 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
             await pilot.pause()
 
             assert isinstance(pilot.app.screen, SettingsScreen)
+
+    asyncio.run(run())
+
+
+def test_tui_run_dialogs_are_centered_transparent_and_compact():
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+
+            await pilot.click("#btn-new-file")
+            await pilot.pause()
+
+            new_screen = pilot.app.screen
+            new_dialog = new_screen.query_one("#new-file-dialog")
+
+            assert new_screen.styles.background.a == 0
+            assert new_dialog.region.x > 0
+            assert new_dialog.region.y > 0
+            assert new_dialog.region.x + new_dialog.region.width <= pilot.app.size.width
+            assert new_dialog.region.y + new_dialog.region.height <= pilot.app.size.height
+            assert new_dialog.region.height <= 18
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await pilot.click("#btn-resume-run")
+            await pilot.pause()
+
+            resume_screen = pilot.app.screen
+            resume_dialog = resume_screen.query_one("#resume-run-dialog")
+
+            assert resume_screen.styles.background.a == 0
+            assert resume_dialog.region.x > 0
+            assert resume_dialog.region.y > 0
+            assert resume_dialog.region.x + resume_dialog.region.width <= pilot.app.size.width
+            assert resume_dialog.region.y + resume_dialog.region.height <= pilot.app.size.height
+            assert resume_dialog.region.height <= 15
+
+    asyncio.run(run())
+
+
+def test_tui_command_buttons_use_unified_bracket_labels():
+    from textual.widgets import Button
+
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+
+            assert _button_label(pilot.app.screen.query_one("#btn-new-file", Button)) == "[[ NEW FILE ]]"
+            assert _button_label(pilot.app.screen.query_one("#btn-resume-run", Button)) == "[[ RESUME RUN ]]"
+
+            await pilot.click("#btn-new-file")
+            await pilot.pause()
+
+            assert _button_label(pilot.app.screen.query_one("#new-submit", Button)) == "[[ SUBMIT ]]"
+            assert _button_label(pilot.app.screen.query_one("#new-cancel", Button)) == "[[ CANCEL ]]"
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await pilot.click("#btn-resume-run")
+            await pilot.pause()
+
+            assert _button_label(pilot.app.screen.query_one("#resume-submit", Button)) == "[[ SUBMIT ]]"
+            assert _button_label(pilot.app.screen.query_one("#resume-cancel", Button)) == "[[ CANCEL ]]"
 
     asyncio.run(run())

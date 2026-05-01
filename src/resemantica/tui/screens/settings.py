@@ -28,7 +28,11 @@ class SettingsScreen(BaseScreen):
     def _build_config_text(self) -> str:
         try:
             from resemantica.settings import load_config
-            config = load_config()
+            try:
+                app = self.app
+            except Exception:
+                app = None
+            config = load_config(getattr(app, "config_path", None) if app else None)
             lines: list[str] = []
 
             lines.append("[bold]Models[/bold]")
