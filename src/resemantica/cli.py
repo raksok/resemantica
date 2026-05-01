@@ -82,23 +82,72 @@ class _InterruptedStop:
 _INTERRUPTED_STOP = _InterruptedStop()
 
 
+_FORCE_STOP_HANDLER: Any = None  # keep ctypes callback alive to prevent GC
+
+
+def _install_interrupt_handlers(stop_token: StopToken) -> None:
+    """Install OS-level interrupt handlers that fire even during blocking I/O.
+
+    On Windows uses SetConsoleCtrlHandler (dedicated handler thread, fires
+    immediately). On Unix uses Python signal.signal (interrupts system calls).
+    """
+    global _FORCE_STOP_HANDLER
+
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+
+        @ctypes.CFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+        def _ctrl_handler(ctrl_type: int) -> bool:
+            if ctrl_type != 0:  # CTRL_C_EVENT
+                return False
+            if not stop_token.requested:
+                stop_token.request_stop()
+                os.write(2, b"Stopping after current task...\n")
+                return True
+            stop_token.force = True
+            os.write(2, b"Force stopping...\n")
+            os._exit(130)
+            return True
+
+        _FORCE_STOP_HANDLER = _ctrl_handler
+        kernel32.SetConsoleCtrlHandler(_ctrl_handler, True)
+    else:
+        signal.signal(signal.SIGINT, lambda _sig, _fr: _unix_interrupt(_sig, _fr, stop_token))
+
+
+def _uninstall_interrupt_handlers(stop_token: StopToken) -> None:
+    """Restore default interrupt handling."""
+    global _FORCE_STOP_HANDLER
+    if sys.platform == "win32":
+        import ctypes
+
+        if _FORCE_STOP_HANDLER is not None:
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetConsoleCtrlHandler(_FORCE_STOP_HANDLER, False)
+            _FORCE_STOP_HANDLER = None
+    else:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
+def _unix_interrupt(_signum: int, _frame: object, stop_token: StopToken) -> None:
+    if not stop_token.requested:
+        stop_token.request_stop()
+        print("Stopping after current task...", file=sys.stderr)
+        return
+    stop_token.force = True
+    print("Force stopping...", file=sys.stderr)
+    os._exit(130)
+
+
 def _with_cli_progress(fn, *, stop_token: StopToken | None = None, verbosity: int = 0):
     if stop_token is None:
         with CliProgressSubscriber(verbosity=verbosity):
             return fn()
 
-    previous_handler = signal.getsignal(signal.SIGINT)
-
-    def request_stop(_signum, _frame):  # type: ignore[no-untyped-def]
-        if not stop_token.requested:
-            stop_token.request_stop()
-            print("Stopping after current task...", file=sys.stderr)
-            return
-        stop_token.force = True
-        print("Force stopping...", file=sys.stderr)
-        os._exit(130)
-
-    signal.signal(signal.SIGINT, request_stop)
+    _install_interrupt_handlers(stop_token)
     try:
         with CliProgressSubscriber(verbosity=verbosity):
             return fn()
@@ -106,7 +155,7 @@ def _with_cli_progress(fn, *, stop_token: StopToken | None = None, verbosity: in
         print(f"status=stopped\nmessage={exc.message}")
         return _INTERRUPTED_STOP
     finally:
-        signal.signal(signal.SIGINT, previous_handler)
+        _uninstall_interrupt_handlers(stop_token)
 
 
 def _status_text(result: Any) -> str:
