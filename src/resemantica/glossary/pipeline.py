@@ -141,6 +141,12 @@ def discover_glossary_candidates(
         f"{_STAGE_NAME}.started",
         total_chapters=len(chapter_refs),
     )
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.discover.started",
+        total_chapters=len(chapter_refs),
+    )
     discovered = discover_candidates_from_extracted(
         release_id=release_id,
         extracted_chapters_dir=paths.extracted_chapters_dir,
@@ -175,6 +181,13 @@ def discover_glossary_candidates(
     finally:
         conn.close()
 
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.discover.completed",
+        discovered_count=len(discovered),
+    )
+
     return {
         "status": "success",
         "release_id": release_id,
@@ -201,6 +214,13 @@ def translate_glossary_candidates(
     ensure_glossary_schema(conn)
     try:
         pending = list_candidates_for_translation(conn, release_id=release_id)
+        chapters_with_pending = {candidate.first_seen_chapter for candidate in pending}
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.translate.started",
+            total_chapters=len(chapters_with_pending),
+        )
         active_chapter: int | None = None
         for candidate in pending:
             chapter = candidate.first_seen_chapter
@@ -251,6 +271,13 @@ def translate_glossary_candidates(
         )
     finally:
         conn.close()
+
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.translate.completed",
+        translated_count=len(pending),
+    )
 
     return {
         "status": "success",

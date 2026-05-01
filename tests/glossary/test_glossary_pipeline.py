@@ -207,10 +207,15 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
 
     event_types = [event.event_type for event in received]
     assert "preprocess-glossary.started" in event_types
+    assert "preprocess-glossary.discover.started" in event_types
     assert "preprocess-glossary.discover.chapter_started" in event_types
     assert "preprocess-glossary.discover.term_found" in event_types
+    assert "preprocess-glossary.discover.completed" in event_types
+    assert "preprocess-glossary.translate.started" in event_types
     assert "preprocess-glossary.translate.chapter_started" in event_types
+    assert "preprocess-glossary.translate.completed" in event_types
     assert "preprocess-glossary.promote.started" in event_types
+    assert "preprocess-glossary.promote.completed" in event_types
     assert event_types[-1] == "preprocess-glossary.completed"
 
 

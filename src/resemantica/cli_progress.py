@@ -36,13 +36,13 @@ class CliProgressSubscriber:
     def _counter_text(self) -> str:
         parts: list[str] = []
         if self.warning_count:
-            parts.append(f"warn {self.warning_count}")
+            parts.append(f"run warn {self.warning_count}")
         if self.skip_count:
-            parts.append(f"skip {self.skip_count}")
+            parts.append(f"run skip {self.skip_count}")
         if self.retry_count:
-            parts.append(f"retry {self.retry_count}")
+            parts.append(f"run retry {self.retry_count}")
         if self.artifact_count:
-            parts.append(f"artifacts {self.artifact_count}")
+            parts.append(f"run artifacts {self.artifact_count}")
         return " ".join(parts)
 
     def _update_counters(self) -> None:
@@ -65,7 +65,11 @@ class CliProgressSubscriber:
         if task_id is None:
             return
         task = self.progress.tasks[task_id]
-        total = task.total if task.total is not None else task.completed
+        if task.total is None:
+            total = max(int(task.completed), 1)
+            self.progress.update(task_id, total=total, completed=total)
+            return
+        total = int(task.total)
         self.progress.update(task_id, completed=total)
 
     def _on_event(self, event: Event) -> None:

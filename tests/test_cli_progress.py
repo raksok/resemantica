@@ -82,3 +82,39 @@ def test_cli_progress_counts_warnings_and_skips() -> None:
 
     assert subscriber.warning_count == 1
     assert subscriber.skip_count == 1
+
+
+def test_cli_progress_completes_indeterminate_task() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress())
+
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-glossary.promote.started",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-glossary",
+        )
+    )
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-glossary.promote.completed",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-glossary",
+        )
+    )
+
+    task = subscriber.progress.tasks[subscriber.tasks_by_stage["preprocess-glossary.promote"]]
+    assert task.finished
+    assert task.total == 1
+    assert task.completed == 1
+
+
+def test_cli_progress_counter_text_is_global() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress())
+    subscriber.warning_count = 1
+    subscriber.skip_count = 2
+    subscriber.retry_count = 3
+    subscriber.artifact_count = 4
+
+    assert subscriber._counter_text() == "run warn 1 run skip 2 run retry 3 run artifacts 4"
