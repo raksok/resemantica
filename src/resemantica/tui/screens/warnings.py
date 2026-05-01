@@ -14,9 +14,9 @@ class WarningsScreen(BaseScreen):
             yield DataTable(id="warnings-table")
 
     def on_mount(self) -> None:
-        super().on_mount()
         table = self.query_one("#warnings-table", DataTable)
         table.add_columns("Severity", "Event", "Message")
+        super().on_mount()
         self._refresh_warnings()
 
     def _refresh_all(self) -> None:

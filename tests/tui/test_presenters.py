@@ -620,3 +620,22 @@ def test_tui_dashboard_mount_refresh_is_idempotent():
             assert len(list(dashboard.query("#spine-items > .spine-item"))) == 1
 
     asyncio.run(run())
+
+
+def test_tui_warnings_screen_mounts_without_release():
+    from textual.widgets import DataTable
+
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test() as pilot:
+            await pilot.press("4")
+            await pilot.pause()
+
+            table = pilot.app.screen.query_one("#warnings-table", DataTable)
+
+            assert table.row_count == 1
+            assert len(table.ordered_columns) == 3
+
+    asyncio.run(run())
