@@ -40,9 +40,15 @@ class HelpScreen(ModalScreen[None]):
             [
                 "",
                 "[b]Keys[/]",
-                "1-9 Switch   ? Help   esc Close   q Quit",
-                "7 Observe   v Verbose   s Source   e Severity",
-                "t Stage     c Chapter   r Refresh",
+                "1-7 Switch   ? Help   q Quit",
+                "",
+                "[b]Screen Keys[/]",
+                "1: e=EPUB Path   Esc=Blur Input   p=Production   n=Next Stage",
+                "2: e=Extract",
+                "3: g=Glossary   s=Summaries   i=Idioms   r=Graph   b=Packets",
+                "4: t=Translate   u=Rebuild",
+                "5: v=Verbose   s=Source   e=Severity   f=Stage   c=Chapter   r=Refresh",
+                "6: y=Dry Run   a=Apply",
             ]
         )
         return "\n".join(lines)

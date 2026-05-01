@@ -729,7 +729,7 @@ def test_tui_shell_places_main_content_beside_spine():
     asyncio.run(run())
 
 
-def test_tui_warnings_screen_mounts_without_release():
+def test_tui_observability_warnings_bottom_pane():
     from textual.widgets import DataTable
 
     from resemantica.tui.app import ResemanticaApp
@@ -737,10 +737,10 @@ def test_tui_warnings_screen_mounts_without_release():
     async def run() -> None:
         app = ResemanticaApp()
         async with app.run_test() as pilot:
-            await pilot.press("4")
+            await pilot.press("5")
             await pilot.pause()
 
-            table = pilot.app.screen.query_one("#warnings-table", DataTable)
+            table = pilot.app.screen.query_one("#observability-warnings-table", DataTable)
 
             assert table.row_count == 1
             assert len(table.ordered_columns) == 3
@@ -760,19 +760,19 @@ def test_tui_header_and_footer_show_current_screen_location():
 
             header = pilot.app.screen.query_one("#header-screen-location", Static)
             footer = pilot.app.screen.query_one("#footer-keys", Static)
-            assert _static_text(header) == "Screen 1/9 Dashboard"
+            assert _static_text(header) == "Screen 1/7 Dashboard"
             assert "Active: 1 Dashboard" in _static_text(footer)
             assert "? Help" in _static_text(footer)
 
             await pilot.press("4")
             await pilot.pause()
             header = pilot.app.screen.query_one("#header-screen-location", Static)
-            assert _static_text(header) == "Screen 4/9 Warnings"
+            assert _static_text(header) == "Screen 4/7 Translation"
 
-            await pilot.press("9")
+            await pilot.press("7")
             await pilot.pause()
             header = pilot.app.screen.query_one("#header-screen-location", Static)
-            assert _static_text(header) == "Screen 9/9 Settings"
+            assert _static_text(header) == "Screen 7/7 Settings"
 
     asyncio.run(run())
 
@@ -786,7 +786,7 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
     async def run() -> None:
         app = ResemanticaApp()
         async with app.run_test() as pilot:
-            await pilot.press("9")
+            await pilot.press("7")
             await pilot.pause()
 
             await pilot.press("?")
@@ -799,23 +799,21 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
             help_content = pilot.app.screen.query_one("#help-content", Static)
             rendered = _static_text(help_content)
 
-            assert "Screen 9/9 Settings" in rendered
+            assert "Screen 7/7 Settings" in rendered
             for label in (
                 "Dashboard",
+                "Ingestion",
                 "Preprocessing",
                 "Translation",
-                "Warnings",
-                "Artifacts",
-                "Cleanup",
                 "Observability",
-                "Reset",
+                "Artifact",
                 "Settings",
             ):
                 assert label in rendered
-            assert "1-9 Switch" in rendered
+            assert "1-7 Switch" in rendered
             assert "? Help" in rendered
-            assert "v Verbose" in rendered
-            assert "r Refresh" in rendered
+            assert "v=Verbose" in rendered
+            assert "r=Refresh" in rendered
 
             await pilot.press("escape")
             await pilot.pause()

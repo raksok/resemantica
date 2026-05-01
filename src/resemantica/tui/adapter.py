@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from resemantica.epub.extractor import extract_epub as _extract_epub
 from resemantica.orchestration import OrchestrationRunner
 from resemantica.orchestration.cleanup import apply_cleanup, plan_cleanup
 from resemantica.settings import load_config
@@ -24,6 +25,21 @@ class TUIAdapter:
             self.run_id,
             config=load_config(self.config_path),
         )
+
+    def extract_epub(self, input_path: Path) -> Any:
+        config = load_config(self.config_path)
+        return _extract_epub(
+            input_path=input_path,
+            release_id=self.release_id,
+            config=config,
+            run_id=self.run_id,
+        )
+
+    def launch_stage(self, stage_name: str, **options: Any) -> Any:
+        return self._runner().run_stage(stage_name, **options)
+
+    def launch_production(self, **options: Any) -> Any:
+        return self._runner().run_production(**options)
 
     def launch_workflow(self, workflow_name: str, **options: Any) -> Any:
         runner = self._runner()

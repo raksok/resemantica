@@ -99,12 +99,13 @@ HeaderBar {
 #dashboard-content,
 #preprocessing-content,
 #translation-content,
-#warnings-content,
-#artifacts-content,
-#cleanup-content,
-#reset-preview-content,
-#settings-content,
-#event-log-content {
+#ingestion-content,
+#settings-content {
+    max-width: 118;
+}
+
+#observability-content,
+#artifact-content {
     width: 1fr;
     height: 1fr;
 }
@@ -112,35 +113,76 @@ HeaderBar {
 #dashboard-content,
 #preprocessing-content,
 #translation-content,
-#cleanup-content,
-#reset-preview-content,
+#ingestion-content,
+#observability-content,
+#artifact-content,
 #settings-content {
-    max-width: 118;
+    height: 1fr;
 }
 
-#dashboard-run-info,
-#dashboard-phase-progress,
-#dashboard-recent-warnings,
-#dashboard-quick-stats,
+#dashboard-session-info,
+#dashboard-stage-list,
+#dashboard-key-hints,
 #preprocessing-stage-list,
 #translation-header,
 #translation-block-list,
 #settings-config-display,
-#cleanup-preview,
-#reset-preview {
+#ingestion-path,
+#ingestion-status,
+#ingestion-chapter-list,
+#artifact-cleanup-preview {
     padding: 0 0 1 0;
 }
 
-#warnings-table,
-#artifacts-tree {
-    height: 1fr;
+#epub-path-input {
     width: 1fr;
+    max-width: 80;
+    margin: 0 0 1 0;
 }
 
-#cleanup-buttons,
-#reset-buttons {
+/* Observability split-pane layout */
+
+#observability-top {
+    height: 70%;
+    overflow-y: auto;
+    padding-right: 1;
+    border-bottom: solid #34324A;
+}
+
+#observability-bottom {
+    height: 30%;
+    overflow-y: auto;
+    padding-right: 1;
+}
+
+#observability-warnings-table {
+    height: 1fr;
+}
+
+#observability-counters,
+#observability-latest-failure,
+#observability-filters,
+#observability-live,
+#observability-persisted,
+#observability-logs {
+    padding: 0 0 1 0;
+    color: #D4D5F0;
+}
+
+/* Artifact split-pane layout */
+
+#artifact-tree-section {
+    height: 1fr;
+    border-bottom: solid #34324A;
+}
+
+#artifact-cleanup-section {
     height: auto;
-    width: 44;
+    min-height: 8;
+}
+
+#artifact-tree {
+    height: 1fr;
 }
 
 FooterBar {
@@ -198,22 +240,6 @@ FooterBar {
 }
 
 #help-content {
-    color: #D4D5F0;
-}
-
-#event-log-content {
-    height: 1fr;
-    overflow-y: auto;
-    padding-right: 1;
-}
-
-#event-log-counters,
-#event-log-latest-failure,
-#event-log-filters,
-#event-log-live,
-#event-log-persisted,
-#event-log-logs {
-    padding: 0 0 1 0;
     color: #D4D5F0;
 }
 

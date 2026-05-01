@@ -277,12 +277,12 @@ def test_tui_observability_screen_mounts_without_release():
     async def run() -> None:
         app = ResemanticaApp()
         async with app.run_test() as pilot:
-            await pilot.press("7")
+            await pilot.press("5")
             await pilot.pause()
 
-            counters = pilot.app.screen.query_one("#event-log-counters", Static)
-            persisted = pilot.app.screen.query_one("#event-log-persisted", Static)
-            logs = pilot.app.screen.query_one("#event-log-logs", Static)
+            counters = pilot.app.screen.query_one("#observability-counters", Static)
+            persisted = pilot.app.screen.query_one("#observability-persisted", Static)
+            logs = pilot.app.screen.query_one("#observability-logs", Static)
 
             assert "Warnings 0" in _static_text(counters)
             assert "No release/run selected." in _static_text(persisted)
@@ -320,17 +320,17 @@ def test_tui_observability_screen_renders_persisted_events(monkeypatch, tmp_path
     monkeypatch.setattr("resemantica.tracking.repo.ensure_tracking_db", fake_ensure_tracking_db)
     monkeypatch.setattr("resemantica.tracking.repo.load_events", fake_load_events)
     monkeypatch.setattr(
-        "resemantica.tui.screens.event_log.EventLogScreen._log_path",
+        "resemantica.tui.screens.observability.ObservabilityScreen._log_path",
         lambda self: tmp_path / "missing.jsonl",
     )
 
     async def run() -> None:
         app = ResemanticaApp(release_id="rel-1", run_id="run-1")
         async with app.run_test() as pilot:
-            await pilot.press("7")
+            await pilot.press("5")
             await pilot.pause()
 
-            persisted = pilot.app.screen.query_one("#event-log-persisted", Static)
+            persisted = pilot.app.screen.query_one("#observability-persisted", Static)
 
             assert "Persisted warning" in _static_text(persisted)
             assert "ch=4" in _static_text(persisted)
@@ -353,14 +353,14 @@ def test_tui_observability_screen_shows_live_event(monkeypatch, tmp_path):
     monkeypatch.setattr("resemantica.orchestration.events.ensure_tracking_db", lambda release_id: _Conn())
     monkeypatch.setattr("resemantica.orchestration.events.save_event", lambda conn, event: None)
     monkeypatch.setattr(
-        "resemantica.tui.screens.event_log.EventLogScreen._log_path",
+        "resemantica.tui.screens.observability.ObservabilityScreen._log_path",
         lambda self: tmp_path / "missing.jsonl",
     )
 
     async def run() -> None:
         app = ResemanticaApp(release_id="rel-1", run_id="run-1")
         async with app.run_test() as pilot:
-            await pilot.press("7")
+            await pilot.press("5")
             await pilot.pause()
 
             emit_event(
@@ -374,7 +374,7 @@ def test_tui_observability_screen_shows_live_event(monkeypatch, tmp_path):
             )
             await pilot.pause()
 
-            live = pilot.app.screen.query_one("#event-log-live", Static)
+            live = pilot.app.screen.query_one("#observability-live", Static)
             assert "Live warning" in _static_text(live)
             assert "ch=2" in _static_text(live)
 

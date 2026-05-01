@@ -15,14 +15,12 @@ class ScreenInfo:
 
 SCREEN_INFOS: tuple[ScreenInfo, ...] = (
     ScreenInfo(1, "dashboard", "DashboardScreen", "Dashboard", "Dashboard", "Run overview"),
-    ScreenInfo(2, "preprocessing", "PreprocessingScreen", "Prep", "Preprocessing", "Prepare chapters"),
-    ScreenInfo(3, "translation", "TranslationScreen", "Translate", "Translation", "Translation progress"),
-    ScreenInfo(4, "warnings", "WarningsScreen", "Warnings", "Warnings", "Warnings and failures"),
-    ScreenInfo(5, "artifacts", "ArtifactsScreen", "Artifacts", "Artifacts", "Output files"),
-    ScreenInfo(6, "cleanup", "CleanupScreen", "Cleanup", "Cleanup", "Cleanup workflow"),
-    ScreenInfo(7, "event-log", "EventLogScreen", "Observe", "Observability", "Run signals and logs"),
-    ScreenInfo(8, "reset-preview", "ResetPreviewScreen", "Reset", "Reset", "Reset preview"),
-    ScreenInfo(9, "settings", "SettingsScreen", "Settings", "Settings", "Active config"),
+    ScreenInfo(2, "ingestion", "IngestionScreen", "Ingestion", "Ingestion", "EPUB path and extraction"),
+    ScreenInfo(3, "preprocessing", "PreprocessingScreen", "Prep", "Preprocessing", "Prepare chapters"),
+    ScreenInfo(4, "translation", "TranslationScreen", "Translate", "Translation", "Translation progress"),
+    ScreenInfo(5, "observability", "ObservabilityScreen", "Observe", "Observability", "Run signals and logs"),
+    ScreenInfo(6, "artifact", "ArtifactScreen", "Artifact", "Artifact", "Output files and cleanup"),
+    ScreenInfo(7, "settings", "SettingsScreen", "Settings", "Settings", "Active config"),
 )
 
 TOTAL_PRIMARY_SCREENS = len(SCREEN_INFOS)
@@ -47,5 +45,5 @@ def format_location(info: ScreenInfo | None) -> str:
 
 def format_footer_keys(info: ScreenInfo | None) -> str:
     if info is None:
-        return "1-9 Switch  ? Help  q Quit"
-    return f"Active: {info.number} {info.title} | 1-9 Switch  ? Help  q Quit"
+        return "1-7 Switch  ? Help  q Quit"
+    return f"Active: {info.number} {info.title} | 1-7 Switch  ? Help  q Quit"

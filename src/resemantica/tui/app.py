@@ -2,22 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from textual import events
 from textual.app import App
 from textual.binding import Binding
 
-from resemantica.tui.screens import (
-    DashboardScreen,
-    PreprocessingScreen,
-    TranslationScreen,
-    WarningsScreen,
-    ArtifactsScreen,
-    CleanupScreen,
-    EventLogScreen,
-    ResetPreviewScreen,
-    SettingsScreen,
-    HelpScreen,
-)
+from resemantica.tui.launch_control import TuiSession
 from resemantica.tui.navigation import SCREEN_INFOS, screen_info_for_class_name
+from resemantica.tui.screens import (
+    ArtifactScreen,
+    DashboardScreen,
+    HelpScreen,
+    IngestionScreen,
+    ObservabilityScreen,
+    PreprocessingScreen,
+    SettingsScreen,
+    TranslationScreen,
+)
 
 
 class ResemanticaApp(App):
@@ -27,13 +27,11 @@ class ResemanticaApp(App):
 
     SCREENS = {
         "dashboard": DashboardScreen,
+        "ingestion": IngestionScreen,
         "preprocessing": PreprocessingScreen,
         "translation": TranslationScreen,
-        "warnings": WarningsScreen,
-        "artifacts": ArtifactsScreen,
-        "cleanup": CleanupScreen,
-        "event-log": EventLogScreen,
-        "reset-preview": ResetPreviewScreen,
+        "observability": ObservabilityScreen,
+        "artifact": ArtifactScreen,
         "settings": SettingsScreen,
         "help": HelpScreen,
     }
@@ -57,13 +55,45 @@ class ResemanticaApp(App):
         self._release_id = release_id
         self._run_id = run_id
         self._config_path = config_path
+        self.active_action: str | None = None
+        self.session = TuiSession()
+        self._screen_bindings = {
+            str(info.number): info.screen_id for info in SCREEN_INFOS
+        }
 
     def on_mount(self) -> None:
         self.push_screen("dashboard")
 
-    def action_show_help(self) -> None:
+    async def on_event(self, event: events.Event) -> None:
+        if isinstance(event, events.Key):
+            if event.key in ("?", "question_mark"):
+                await self.action_show_help()
+                event.stop()
+                return
+            if event.key == "q":
+                focused = self.screen.focused
+                if focused is None or focused.__class__.__name__ != "Input":
+                    await self.action_quit()
+                    event.stop()
+                    return
+            if event.key in self._screen_bindings:
+                focused = self.screen.focused
+                if focused is None or focused.__class__.__name__ != "Input":
+                    screen_id = self._screen_bindings[event.key]
+                    await self.action_switch_screen(screen_id)
+                    event.stop()
+                    return
+            ctrl_key = event.key.startswith("ctrl+") and event.key[5:] in self._screen_bindings
+            if ctrl_key:
+                screen_id = self._screen_bindings[event.key[5:]]
+                await self.action_switch_screen(screen_id)
+                event.stop()
+                return
+        await super().on_event(event)
+
+    async def action_show_help(self) -> None:
         screen_info = screen_info_for_class_name(self.screen.__class__.__name__)
-        self.push_screen(HelpScreen(current_screen_info=screen_info))
+        await self.push_screen(HelpScreen(current_screen_info=screen_info))
 
     @property
     def release_id(self) -> str | None:

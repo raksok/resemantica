@@ -51,3 +51,5 @@ Always follow the milestone sequence below.
 | M22 | task-22 | M21 | TUI Dashboard & Shell Completion |
 | M23 | task-23 | M22 | TUI Minimal Orientation |
 | M24 | task-24 | M23, M19 | TUI Read-Only Observability Parity |
+| M25 | task-25 | M24, M19, M16 | TUI Launch Control |
+| M26 | task-26 | M25, M19 | Global Observability & Event Granularity |

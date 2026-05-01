@@ -3,13 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
+from resemantica.tui.launch_control import (
+    LaunchContext,
+    LaunchSnapshot,
+    TuiSession,
+    build_snapshot,
+)
 from resemantica.tui.navigation import format_footer_keys, format_location, screen_info_for_class_name
 
 if TYPE_CHECKING:
@@ -424,15 +431,78 @@ class BaseScreen(Screen):
         if not state or state.get("status") != "running":
             return False
 
+        from resemantica.tui.launch_control import is_stale
+
+        started_at = state.get("started_at")
         latest_event_time = cls._latest_event_time(events)
-        if latest_event_time is None:
-            latest_event_time = cls._parse_timestamp(state.get("started_at"))
-        if latest_event_time is None:
+        timestamp = latest_event_time.isoformat() if latest_event_time else started_at
+        return is_stale(timestamp, now=now, timeout_seconds=cls._STALE_AFTER_SECONDS)
+
+    def _build_launch_context(self) -> LaunchContext:
+        session: TuiSession | None = getattr(self.app, "session", None)
+        return LaunchContext(
+            release_id=self._get_release_id(),
+            run_id=self._get_run_id(),
+            input_path=session.input_path if session else None,
+            chapter_start=session.chapter_start if session else None,
+            chapter_end=session.chapter_end if session else None,
+        )
+
+    def _check_extraction_manifest(self) -> bool:
+        release_id = self._get_release_id()
+        if not release_id:
+            return False
+        try:
+            from resemantica.chapters.manifest import list_extracted_chapters
+            from resemantica.settings import derive_paths, load_config
+
+            config = load_config(getattr(self.app, "config_path", None))
+            paths = derive_paths(config, release_id=release_id)
+            refs = list_extracted_chapters(paths)
+            return len(refs) > 0
+        except Exception:
             return False
 
-        current_time = now or datetime.now(timezone.utc)
-        age_seconds = (current_time - latest_event_time).total_seconds()
-        return age_seconds >= cls._STALE_AFTER_SECONDS
+    def _build_snapshot(
+        self,
+        events: list[Event] | None = None,
+        run_state: dict | None = None,
+    ) -> LaunchSnapshot:
+        if events is None:
+            events = self._load_recent_run_events()
+        if run_state is None:
+            run_state = self._get_run_state()
+        return build_snapshot(
+            context=self._build_launch_context(),
+            active_action=getattr(self.app, "active_action", None),
+            run_state=run_state,
+            events=events,
+            extraction_manifest_exists=self._check_extraction_manifest(),
+        )
+
+    def start_worker(self, action_key: str, adapter_method: Callable[[], Any]) -> None:
+        if getattr(self.app, "active_action", None) is not None:
+            self.notify("Another action is already running", severity="warning", timeout=3)
+            return
+        self.app.active_action = action_key  # type: ignore[attr-defined]
+        self._run_worker(action_key, adapter_method)
+
+    @work(thread=True)
+    async def _run_worker(self, action_key: str, adapter_method: Callable[[], Any]) -> None:
+        try:
+            result = adapter_method()
+            self.app.call_from_thread(self._on_worker_success, action_key, result)
+        except Exception as exc:
+            self.app.call_from_thread(self._on_worker_failure, action_key, str(exc))
+
+    def _on_worker_success(self, action_key: str, result: Any) -> None:
+        self.app.active_action = None  # type: ignore[attr-defined]
+        self._refresh_all()
+
+    def _on_worker_failure(self, action_key: str, error: str) -> None:
+        self.app.active_action = None  # type: ignore[attr-defined]
+        self.notify(f"Launch failed: {error}", severity="error", timeout=5)
+        self._refresh_all()
 
     @classmethod
     def _format_activity_age(

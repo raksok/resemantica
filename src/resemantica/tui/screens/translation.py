@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import Static
 
@@ -8,12 +11,17 @@ from resemantica.tui.screens.base import BaseScreen
 
 
 class TranslationScreen(BaseScreen):
+    BINDINGS = [
+        Binding("t", "launch_translate", "Translate"),
+        Binding("u", "launch_rebuild", "Rebuild"),
+    ]
+
     def _content_widgets(self) -> ComposeResult:
         with Container(id="translation-content"):
             yield Static("Translation Progress", classes="app-title")
             yield Static("", id="translation-header")
             yield Static("", id="translation-block-list")
-            yield Static("", id="translation-launch-control")
+            yield Static("", id="translation-status")
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -24,8 +32,9 @@ class TranslationScreen(BaseScreen):
         self._refresh_translation()
 
     def _refresh_translation(self) -> None:
-        header = self.query_one("#translation-header", Static)
         state = self._get_run_state()
+
+        header = self.query_one("#translation-header", Static)
         if state:
             header.update(
                 f"[bold]Stage:[/] {state['stage_name']}\n"
@@ -41,37 +50,45 @@ class TranslationScreen(BaseScreen):
         else:
             block_list.update("[dim]No translation run active.[/]")
 
-        self._update_launch_control()
+        self._update_status()
 
-    def _update_launch_control(self) -> None:
-        control = self.query_one("#translation-launch-control", Static)
-        release_id = self._get_release_id()
-        run_id = self._get_run_id()
-        if release_id and run_id:
-            control.update("[green]\\[t\\] Launch Translation[/]")
-        else:
-            control.update("[comment]\\[t\\] Launch Translation (set release/run first)[/]")
+    def _update_status(self) -> None:
+        snapshot = self._build_snapshot()
+        widget = self.query_one("#translation-status", Static)
+        parts: list[str] = []
+        if snapshot.active_action:
+            parts.append(f"[cyan]{self._spinner_frame()} {snapshot.active_action} in progress...[/]")
+        if snapshot.latest_failure:
+            parts.append(f"[red]Failure: {snapshot.latest_failure}[/]")
+        if parts:
+            parts.append("")
+        parts.append("[dim]t[/]=Translate  [dim]u[/]=Rebuild")
+        widget.update("\n".join(parts))
 
-    def key_t(self) -> None:
+    def _launch_stage(self, stage_key: str) -> None:
         adapter = self._make_adapter()
         if adapter is None:
+            self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
             return
-        control = self.query_one("#translation-launch-control", Static)
-        control.update("[cyan]Translation started...[/]")
-        from threading import Thread
 
-        def _run() -> None:
-            try:
-                adapter.launch_workflow("translation")
-                self.app.call_from_thread(
-                    control.update, "[green]Translation completed.[/]"
-                )
-            except Exception as e:
-                self.app.call_from_thread(
-                    control.update, f"[red]Launch failed: {e}[/]"
-                )
+        if stage_key == "translate-range":
+            session = getattr(self.app, "session", None)
+            chapter_start = session.chapter_start if session else None
+            chapter_end = session.chapter_end if session else None
+            kwargs: dict[str, Any] = {}
+            if chapter_start is not None:
+                kwargs["chapter_start"] = chapter_start
+            if chapter_end is not None:
+                kwargs["chapter_end"] = chapter_end
+            self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key, **kwargs))
+        else:
+            self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key))
 
-        Thread(target=_run, daemon=True).start()
+    def action_launch_translate(self) -> None:
+        self._launch_stage("translate-range")
+
+    def action_launch_rebuild(self) -> None:
+        self._launch_stage("epub-rebuild")
 
     def _load_block_progress(self) -> dict[int, list[tuple[str, str]]]:
         release_id = self._get_release_id()
@@ -83,9 +100,7 @@ class TranslationScreen(BaseScreen):
 
             conn = ensure_tracking_db(release_id)
             try:
-                events = load_events(
-                    conn, run_id=run_id, release_id=release_id, limit=500
-                )
+                events = load_events(conn, run_id=run_id, release_id=release_id, limit=500)
                 chapters: dict[int, dict[str, str]] = {}
                 for ev in reversed(events):
                     if ev.chapter_number is None:
@@ -114,7 +129,7 @@ class TranslationScreen(BaseScreen):
             done = sum(1 for _, s in blocks if s == "done")
             lines.append(f"[bold]Ch {ch_num}[/]  {done}/{len(blocks)} blocks")
             for bid, status in blocks[:15]:
-                char = "■" if status == "done" else "✗" if status == "failed" else "▸"
+                char = "\u25a0" if status == "done" else "\u2717" if status == "failed" else "\u25b8"
                 color = "green" if status == "done" else "red" if status == "failed" else "cyan"
                 lines.append(f"  [{color}]{char}[/] {bid}")
             if len(blocks) > 15:

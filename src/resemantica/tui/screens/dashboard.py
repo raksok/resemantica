@@ -1,53 +1,217 @@
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container
-from textual.widgets import Static
+from textual.widgets import Input, Static
 
+from resemantica.tui.launch_control import STAGE_DEFINITIONS, next_available_stage
 from resemantica.tui.screens.base import BaseScreen
+
+STATUS_COLORS = {
+    "missing": "comment",
+    "ready": "green",
+    "running": "cyan",
+    "done": "green",
+    "failed": "red",
+    "blocked": "orange",
+    "stale": "orange",
+    "disabled": "dim",
+}
+
+STATUS_GLYPH = {
+    "missing": "○",
+    "ready": "◉",
+    "running": "◉",
+    "done": "●",
+    "failed": "✗",
+    "blocked": "⊘",
+    "stale": "◉",
+    "disabled": "○",
+}
 
 
 class DashboardScreen(BaseScreen):
+    BINDINGS = [
+        Binding("e", "focus_input", "EPUB Path"),
+        Binding("escape", "blur_input", "Blur Input"),
+        Binding("p", "launch_production", "Production"),
+        Binding("n", "launch_next", "Next Stage"),
+    ]
+
+    async def key_2(self) -> None:
+        await self.app.action_switch_screen("ingestion")
+
+    async def key_3(self) -> None:
+        await self.app.action_switch_screen("preprocessing")
+
+    async def key_4(self) -> None:
+        await self.app.action_switch_screen("translation")
+
+    async def key_5(self) -> None:
+        await self.app.action_switch_screen("observability")
+
+    async def key_6(self) -> None:
+        await self.app.action_switch_screen("artifact")
+
+    async def key_7(self) -> None:
+        await self.app.action_switch_screen("settings")
+
     def _content_widgets(self) -> ComposeResult:
         with Container(id="dashboard-content"):
-            yield Static("Resemantica — Run Overview", classes="app-title")
-            yield Static("", id="dashboard-run-info")
-            yield Static("", id="dashboard-phase-progress")
-            yield Static("", id="dashboard-recent-warnings")
-            yield Static("", id="dashboard-quick-stats")
+            yield Static("Dashboard", classes="app-title")
+            yield Static("", id="dashboard-session-info")
+            yield Static("", id="dashboard-stage-list")
+            yield Static("", id="dashboard-active-worker")
+            yield Static("", id="dashboard-latest-failure")
+            yield Static("", id="dashboard-key-hints")
+            yield Input(placeholder="/path/to/book.epub  (absolute or relative, .epub only)", id="epub-path-input")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self.call_after_refresh(self._blur_input)
+
+    def _blur_input(self) -> None:
+        try:
+            self.query_one("#epub-path-input", Input).blur()
+        except Exception:
+            pass
 
     def _refresh_all(self) -> None:
         super()._refresh_all()
         self._refresh_dashboard()
 
     def _refresh_dashboard(self) -> None:
-        state = self._get_run_state()
         events = self._load_recent_run_events()
+        snapshot = self._build_snapshot(events)
 
-        run_info = self.query_one("#dashboard-run-info", Static)
-        if state:
-            run_info.update(
-                f"Status: {self._format_status_label(state, events)}\n"
-                f"Stage:  {state['stage_name']}\n"
-                f"Started: {state['started_at']}\n"
-                f"Last event: {self._format_activity_age(state, events)}"
-            )
+        session = getattr(self.app, "session", None)
+        info_lines = ["[bold]Session[/bold]"]
+        info_lines.append(f"  Release:  {snapshot.context.release_id or '[dim]not set[/]'}")
+        info_lines.append(f"  Run:      {snapshot.context.run_id or '[dim]not set[/]'}")
+        info_lines.append(f"  EPUB:     {snapshot.context.input_path or '[dim]not set[/]'}")
+        if snapshot.context.chapter_start is not None or snapshot.context.chapter_end is not None:
+            rng = f"Ch {snapshot.context.chapter_start or 1}\u2013{snapshot.context.chapter_end or 'end'}"
+            info_lines.append(f"  Chapters: {rng}")
+
+        if session and session.input_path:
+            resolved = Path(session.input_path).expanduser().resolve()
+            info_lines.append(f"  Resolved: {resolved}")
+            info_lines.append(f"  Exists:   {'[green]yes[/]' if resolved.exists() else '[red]no[/]'}")
+            info_lines.append(f"  Is .epub: {'[green]yes[/]' if resolved.suffix == '.epub' else '[red]no[/]'}")
+
+        self.query_one("#dashboard-session-info", Static).update("\n".join(info_lines))
+
+        stage_lines = ["[bold]Stages[/bold]"]
+        for stage in snapshot.stages:
+            color = STATUS_COLORS.get(stage.status, "comment")
+            glyph = STATUS_GLYPH.get(stage.status, "\u25cb")
+            st = stage.status.upper()
+            hint = f"  [{color}]{glyph}[/] {stage.label:<16} [{color}]{st:<7}[/]"
+            if stage.action.reason:
+                hint += f" [dim]({stage.action.reason})[/]"
+            stage_lines.append(hint)
+        self.query_one("#dashboard-stage-list", Static).update("\n".join(stage_lines))
+
+        worker_widget = self.query_one("#dashboard-active-worker", Static)
+        if snapshot.active_action:
+            sdef = next((d for d in STAGE_DEFINITIONS if d["key"] == snapshot.active_action), None)
+            lbl = sdef["label"] if sdef else snapshot.active_action
+            worker_widget.update(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
         else:
-            run_info.update("No active run.")
+            worker_widget.update("")
 
-        phase = self.query_one("#dashboard-phase-progress", Static)
-        phase_progress = self._build_phase_progress(state)
-        phase.update(phase_progress)
+        failure_widget = self.query_one("#dashboard-latest-failure", Static)
+        if snapshot.latest_failure:
+            failure_widget.update(f"[red]Latest failure: {snapshot.latest_failure}[/]")
+        else:
+            failure_widget.update("")
 
-        warnings_text = self.query_one("#dashboard-recent-warnings", Static)
-        warnings_text.update(self._build_recent_warnings())
+        hints = self.query_one("#dashboard-key-hints", Static)
+        hints.update(
+            "[dim]e[/]=EPUB Path  "
+            "[dim]p[/]=Production  "
+            "[dim]n[/]=Next Stage  "
+            "[dim]Esc[/]=Blur Input"
+        )
 
-        stats = self.query_one("#dashboard-quick-stats", Static)
-        stats.update(self._build_quick_stats(state=state, events=events))
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        raw = event.value.strip()
+        if not raw:
+            return
+        path = Path(raw).expanduser().resolve()
+        if not path.exists():
+            self.notify(f"Path does not exist: {path}", severity="error", timeout=4)
+            return
+        if not path.is_file():
+            self.notify(f"Not a file: {path}", severity="error", timeout=4)
+            return
+        if path.suffix.lower() != ".epub":
+            self.notify(f"Not an .epub file: {path}", severity="error", timeout=4)
+            return
+        try:
+            with open(path, "rb"):
+                pass
+        except PermissionError:
+            self.notify(f"File not readable: {path}", severity="error", timeout=4)
+            return
 
-    def _build_phase_progress(self, state: dict[str, Any] | None) -> str:
+        self.app.session.input_path = path  # type: ignore[attr-defined]
+        input_widget = self.query_one("#epub-path-input", Input)
+        input_widget.clear()
+        input_widget.blur()
+        self.notify(f"EPUB path set: {path.name}", severity="information", timeout=2)
+        self._refresh_dashboard()
+
+    def action_focus_input(self) -> None:
+        self.query_one("#epub-path-input", Input).focus()
+
+    def action_blur_input(self) -> None:
+        try:
+            self.query_one("#epub-path-input", Input).blur()
+        except Exception:
+            pass
+
+    def action_launch_production(self) -> None:
+        adapter = self._make_adapter()
+        if adapter is None:
+            self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
+            return
+        self.start_worker("production", lambda: adapter.launch_production())
+
+    def action_launch_next(self) -> None:
+        snapshot = self._build_snapshot()
+        next_stage = next_available_stage(snapshot)
+        if next_stage is None:
+            self.notify("No available stage to launch", severity="warning", timeout=3)
+            return
+        adapter = self._make_adapter()
+        if adapter is None:
+            self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
+            return
+        if next_stage.key == "epub-extract":
+            session = getattr(self.app, "session", None)
+            input_path = session.input_path if session else None
+            if not input_path:
+                self.notify("No EPUB path selected", severity="error", timeout=3)
+                return
+            resolved = Path(input_path).expanduser().resolve()
+            self.start_worker(next_stage.key, lambda: adapter.extract_epub(resolved))
+        elif next_stage.key == "production":
+            self.start_worker(next_stage.key, lambda: adapter.launch_production())
+        else:
+            self.start_worker(next_stage.key, lambda: adapter.launch_stage(next_stage.key))
+
+    # Legacy method wrappers for test compatibility.
+    # These match the old API so existing tests pass without changes.
+
+    def _build_phase_progress(self, state: dict | None = None) -> str:
+        return type(self)._build_phase_progress_static(state)
+
+    @staticmethod
+    def _build_phase_progress_static(state: dict | None) -> str:
         lines = ["[bold]Phase Progress[/bold]"]
         stages = [
             "preprocess-glossary",
@@ -67,7 +231,7 @@ class DashboardScreen(BaseScreen):
                 idx_s = stages.index(s)
                 if idx_s < idx_now:
                     done = True
-            marker = "■" if done else "▸" if s == current_stage else "□"
+            marker = "\u25a0" if done else "\u25b8" if s == current_stage else "\u25a1"
             color = "green" if done else "cyan" if s == current_stage else "comment"
             lines.append(f"  [{color}]{marker}[/] {s}")
         return "\n".join(lines)
@@ -98,7 +262,7 @@ class DashboardScreen(BaseScreen):
             return "[dim]Could not load events.[/]"
 
     @staticmethod
-    def _format_event_summary(event: Any) -> str:
+    def _format_event_summary(event: object) -> str:
         message = str(getattr(event, "message", "") or "").strip()
         event_type = str(getattr(event, "event_type", "") or "").strip()
         stage_name = str(getattr(event, "stage_name", "") or "").strip()
@@ -125,18 +289,17 @@ class DashboardScreen(BaseScreen):
     def _build_quick_stats(
         self,
         *,
-        state: dict[str, Any] | None = None,
-        events: list[Any] | None = None,
+        state: dict | None = None,
+        events: list | None = None,
     ) -> str:
         state = self._get_run_state() if state is None else state
         if state is None:
             return "[dim]Quick stats unavailable without an active run.[/]"
-
         events = self._load_recent_run_events() if events is None else events
         return self._build_quick_stats_from_events(events)
 
     @staticmethod
-    def _build_quick_stats_from_events(events: list[Any]) -> str:
+    def _build_quick_stats_from_events(events: list) -> str:
         glossary_terms = sum(
             1
             for event in events
