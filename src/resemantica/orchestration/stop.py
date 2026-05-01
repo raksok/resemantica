@@ -20,6 +20,7 @@ class StopRequested(Exception):
 @dataclass(slots=True)
 class StopToken:
     _event: Event = field(default_factory=Event)
+    force: bool = False
 
     def request_stop(self) -> None:
         self._event.set()

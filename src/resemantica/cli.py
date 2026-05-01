@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 from pathlib import Path
@@ -91,9 +92,11 @@ def _with_cli_progress(fn, *, stop_token: StopToken | None = None, verbosity: in
     def request_stop(_signum, _frame):  # type: ignore[no-untyped-def]
         if not stop_token.requested:
             stop_token.request_stop()
-            print("Stopping after current chapter...", file=sys.stderr)
+            print("Stopping after current task...", file=sys.stderr)
             return
-        raise KeyboardInterrupt
+        stop_token.force = True
+        print("Force stopping...", file=sys.stderr)
+        os._exit(130)
 
     signal.signal(signal.SIGINT, request_stop)
     try:
@@ -101,9 +104,6 @@ def _with_cli_progress(fn, *, stop_token: StopToken | None = None, verbosity: in
             return fn()
     except StopRequested as exc:
         print(f"status=stopped\nmessage={exc.message}")
-        return _INTERRUPTED_STOP
-    except KeyboardInterrupt:
-        stop_token.request_stop()
         return _INTERRUPTED_STOP
     finally:
         signal.signal(signal.SIGINT, previous_handler)

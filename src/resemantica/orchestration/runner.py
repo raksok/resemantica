@@ -533,6 +533,11 @@ class OrchestrationRunner:
             message="Pass1 artifact written",
             payload={"artifact_path": pass1_result.get("pass1_artifact")},
         )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"chapter_number": chapter_number, "pass": "pass1", "status": pass1_result.get("status")},
+            message=f"Stopped after pass1 of chapter {chapter_number}",
+        )
         pass2_result = translate_chapter_pass2(
             release_id=self.release_id,
             chapter_number=chapter_number,
@@ -549,6 +554,11 @@ class OrchestrationRunner:
             chapter_number=chapter_number,
             message="Pass2 artifact written",
             payload={"artifact_path": pass2_result.get("pass2_artifact")},
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"chapter_number": chapter_number, "pass": "pass2", "status": pass2_result.get("status")},
+            message=f"Stopped after pass2 of chapter {chapter_number}",
         )
         pass3_result = translate_chapter_pass3(
             release_id=self.release_id,
@@ -586,7 +596,7 @@ class OrchestrationRunner:
         raise_if_stop_requested(
             stop_token,
             checkpoint=checkpoint,
-            message=f"Stopped after chapter {chapter_number}",
+            message=f"Stopped after pass3 of chapter {chapter_number}",
         )
         return StageResult(
             True,
