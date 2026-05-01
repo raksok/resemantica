@@ -1,20 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
 
+from resemantica.validators import ValidationResult
+
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
-
-
-@dataclass(slots=True)
-class ValidationResult:
-    status: str
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-    @property
-    def is_valid(self) -> bool:
-        return self.status == "success"
 
 
 def _placeholder_tokens(text: str) -> list[str]:

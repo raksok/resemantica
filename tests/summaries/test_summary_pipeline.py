@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import hashlib
 import json
-from pathlib import Path
 import re
+from datetime import UTC, datetime
+from pathlib import Path
 
 from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_entries
 from resemantica.db.sqlite import open_connection

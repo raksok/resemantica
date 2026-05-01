@@ -3,17 +3,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from resemantica.orchestration import (
+    OrchestrationRunner,
+    apply_cleanup,
+    emit_event,
+    plan_cleanup,
+    resume_run,
+    run_stage,
+)
 from resemantica.orchestration.models import (
+    STAGE_ORDER,
     legal_transition,
     next_stage,
-    STAGE_ORDER,
 )
 from resemantica.orchestration.stop import StopToken
-from resemantica.orchestration import OrchestrationRunner, emit_event, run_stage, resume_run, plan_cleanup, apply_cleanup
 from resemantica.tracking.models import Event, RunState
 from resemantica.tracking.repo import (
-    get_tracking_db_path,
     ensure_tracking_db,
+    get_tracking_db_path,
     load_events,
 )
 
@@ -186,8 +193,9 @@ class TestRunStage:
 
     def test_translate_range_infers_bounds_from_extracted_chapters(self, monkeypatch):
         import uuid
-        from resemantica.settings import derive_paths, load_config
+
         from resemantica.orchestration.models import StageResult
+        from resemantica.settings import derive_paths, load_config
 
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"
         run_id = f"test-run-{uuid.uuid4().hex[:8]}"
@@ -247,6 +255,7 @@ class TestRunStage:
 
     def test_translate_range_stop_after_chapter_does_not_start_next(self, monkeypatch):
         import uuid
+
         from resemantica.orchestration.models import StageResult
 
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"

@@ -5,7 +5,6 @@ from pathlib import Path
 
 from loguru import logger
 
-
 _CONSOLE_FORMATS = {
     0: "{time:HH:mm:ss} | {level:<7} | {message}",
     1: "{time:HH:mm:ss} | {level:<7} | {name} | {message}",

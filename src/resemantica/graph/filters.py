@@ -3,12 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from resemantica.graph.models import (
+    WORLD_MODEL_EDGE_TYPES,
     GraphAlias,
     GraphAppearance,
     GraphEntity,
     GraphRelationship,
-    WORLD_MODEL_EDGE_TYPES,
-    WorldModelEdge,
 )
 
 
@@ -94,20 +93,13 @@ def get_hierarchy_context(
     relationships: list[GraphRelationship],
     chapter_number: int,
     entity_id: str | None = None,
-) -> list[WorldModelEdge]:
-    visible_edges = [
+) -> list[GraphRelationship]:
+    return [
         relationship
         for relationship in relationships
         if relationship.type in WORLD_MODEL_EDGE_TYPES
         and _relationship_visible_for_chapter(relationship, chapter_number=chapter_number)
         and (entity_id is None or relationship.source_entity_id == entity_id)
-    ]
-    return [
-        WorldModelEdge.from_graph_relationship(relationship)
-        for relationship in sorted(
-            visible_edges,
-            key=lambda row: (row.type, row.source_entity_id, row.target_entity_id, row.relationship_id),
-        )
     ]
 
 
@@ -116,8 +108,8 @@ def get_revealed_lore(
     relationships: list[GraphRelationship],
     chapter_number: int,
     masked_only: bool = False,
-) -> list[WorldModelEdge]:
-    visible_lore_edges = [
+) -> list[GraphRelationship]:
+    return [
         relationship
         for relationship in relationships
         if relationship.type in WORLD_MODEL_EDGE_TYPES
@@ -126,13 +118,6 @@ def get_revealed_lore(
         and relationship.lore_text.strip()
         and (not masked_only or relationship.is_masked_identity)
     ]
-    return [
-        WorldModelEdge.from_graph_relationship(relationship)
-        for relationship in sorted(
-            visible_lore_edges,
-            key=lambda row: (row.revealed_chapter, row.relationship_id),
-        )
-    ]
 
 
 def select_local_world_model_edges(
@@ -140,16 +125,12 @@ def select_local_world_model_edges(
     relationships: list[GraphRelationship],
     chapter_number: int,
     local_entity_ids: set[str],
-) -> list[WorldModelEdge]:
-    selected = [
+) -> list[GraphRelationship]:
+    return [
         relationship
         for relationship in relationships
         if relationship.type in WORLD_MODEL_EDGE_TYPES
         and _relationship_visible_for_chapter(relationship, chapter_number=chapter_number)
         and relationship.source_entity_id in local_entity_ids
         and relationship.target_entity_id in local_entity_ids
-    ]
-    return [
-        WorldModelEdge.from_graph_relationship(relationship)
-        for relationship in sorted(selected, key=lambda row: row.relationship_id)
     ]

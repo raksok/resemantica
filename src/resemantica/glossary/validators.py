@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from hashlib import sha256
-import re
 
-from resemantica.glossary.models import CATEGORY_VALUES, GlossaryCandidate, GlossaryConflict, LockedGlossaryEntry
+from resemantica.glossary.models import GlossaryCandidate, GlossaryConflict, LockedGlossaryEntry
+
+_GLOSSARY_CATEGORIES: set[str] = {
+    "character", "alias", "title_honorific", "faction", "location",
+    "technique", "item_artifact", "realm_concept", "creature_race",
+    "generic_role", "event", "idiom",
+}
 
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -84,7 +90,7 @@ def validate_candidates_for_promotion(
         target_term = (candidate.candidate_translation_en or "").strip()
         normalized_target = normalize_term(target_term)
 
-        if candidate.category not in CATEGORY_VALUES:
+        if candidate.category not in _GLOSSARY_CATEGORIES:
             reasons.append((f"category_invalid: {candidate.category}", None))
         if not candidate.normalized_source_term.strip():
             reasons.append(("naming_policy: empty normalized source term", None))

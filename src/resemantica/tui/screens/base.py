@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import math
 from typing import TYPE_CHECKING, Any, Callable, cast
 
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
+from resemantica.orchestration.stop import StopToken
 from resemantica.tui.launch_control import (
     LaunchContext,
     LaunchSnapshot,
@@ -18,7 +19,6 @@ from resemantica.tui.launch_control import (
     build_snapshot,
 )
 from resemantica.tui.navigation import format_footer_keys, format_location, screen_info_for_class_name
-from resemantica.orchestration.stop import StopToken
 
 if TYPE_CHECKING:
     from resemantica.tracking.models import Event
@@ -296,8 +296,8 @@ class BaseScreen(Screen):
         if not release_id:
             return []
         try:
-            from resemantica.settings import derive_paths, load_config
             from resemantica.chapters.manifest import list_extracted_chapters
+            from resemantica.settings import derive_paths, load_config
 
             config = load_config(getattr(self.app, "config_path", None))
             paths = derive_paths(config, release_id=release_id)
@@ -739,7 +739,7 @@ class BaseScreen(Screen):
         self.app.active_stop_token = None
         self.app.active_stop_requested = False
 
-        self.notify(f"Launch failed: {error}", severity="error", timeout=5)
+        self.notify(f"Launch failed: {exc}", severity="error", timeout=5)
         self._refresh_all()
 
     @classmethod

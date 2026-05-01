@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
-from pathlib import Path
 import re
+from datetime import UTC, datetime
+from pathlib import Path
 
 from resemantica.db.idiom_repo import (
     ensure_idiom_schema,
-    insert_detected_candidates,
     list_candidates,
     list_candidates_for_promotion,
     list_candidates_for_translation,
@@ -15,6 +14,7 @@ from resemantica.db.idiom_repo import (
     list_policies,
     promote_policies,
     save_idiom_translation,
+    upsert_discovered_candidates,
 )
 from resemantica.db.sqlite import open_connection
 from resemantica.idioms.extractor import extract_idioms
@@ -203,7 +203,7 @@ def test_save_idiom_translation_fills_candidate_rendering(
     conn = open_connection(paths.db_path)
     ensure_idiom_schema(conn)
     try:
-        insert_detected_candidates(conn, candidates=candidates)
+        upsert_discovered_candidates(conn, candidates=candidates)
         pending_translation = list_candidates_for_translation(conn, release_id=release_id)
         assert len(pending_translation) == 1
         assert list_candidates_for_promotion(conn, release_id=release_id) == []

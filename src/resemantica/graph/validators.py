@@ -1,31 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
 
 from resemantica.graph.models import (
     GLOSSARY_COVERED_CATEGORIES,
+    WORLD_MODEL_EDGE_TYPES,
     GraphAlias,
     GraphAppearance,
     GraphEntity,
     GraphRelationship,
-    SUPPORTED_RELATIONSHIP_TYPES,
-    WORLD_MODEL_EDGE_TYPES,
 )
+from resemantica.validators import ValidationResult
 
 _FUTURE_CHAPTER_ZH_RE = re.compile(r"第\s*(\d+)\s*章")
 _FUTURE_CHAPTER_EN_RE = re.compile(r"\bchapter\s+(\d+)\b", re.IGNORECASE)
-
-
-@dataclass(slots=True)
-class GraphValidationResult:
-    status: str
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-    @property
-    def is_valid(self) -> bool:
-        return self.status == "success"
 
 
 def validate_graph_state(
@@ -34,7 +22,7 @@ def validate_graph_state(
     aliases: list[GraphAlias],
     appearances: list[GraphAppearance],
     relationships: list[GraphRelationship],
-) -> GraphValidationResult:
+) -> ValidationResult:
     errors: list[str] = []
 
     entity_ids = {entity.entity_id for entity in entities}
@@ -85,7 +73,7 @@ def validate_graph_state(
             )
 
     for relationship in relationships:
-        if relationship.type not in SUPPORTED_RELATIONSHIP_TYPES:
+        if relationship.type not in WORLD_MODEL_EDGE_TYPES:
             errors.append(
                 f"unsupported_relationship_type: relationship {relationship.relationship_id} "
                 f"type {relationship.type!r} is not in supported graph scope"
@@ -151,7 +139,7 @@ def validate_graph_state(
                 f"schema_invalid: relationship {relationship.relationship_id} masked identity is only supported for world-model edges"
             )
 
-    return GraphValidationResult(
+    return ValidationResult(
         status="failed" if errors else "success",
         errors=errors,
         warnings=[],

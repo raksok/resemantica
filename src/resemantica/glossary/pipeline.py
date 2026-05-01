@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
-import logging
 from pathlib import Path
 from typing import Any
 
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import (
-    ensure_glossary_schema,
     find_exact_locked_entry,
     insert_conflicts,
     list_candidates,
@@ -21,38 +18,21 @@ from resemantica.db.glossary_repo import (
     save_candidate_translation,
     upsert_discovered_candidates,
 )
-from resemantica.db.sqlite import open_connection
+from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.glossary.discovery import discover_candidates_from_extracted
 from resemantica.glossary.validators import normalize_term, validate_candidates_for_promotion
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt
-from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.utils import _build_llm_client, _chapter_number_from_path, _write_json
+from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-glossary"
 
 
-def _chapter_number_from_path(path: Path) -> int:
-    return int(path.stem.split("-", 1)[1])
-
-
-def _write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
-
-def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMClient:
-    if llm_client is not None:
-        return llm_client
-    return LLMClient(
-        base_url=config.llm.base_url,
-        timeout_seconds=config.llm.timeout_seconds,
-        max_retries=config.llm.max_retries,
-    )
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
 
 
 def _filtered_chapter_count(
@@ -73,25 +53,6 @@ def _filtered_chapter_count(
             and (chapter_end is None or _chapter_number_from_path(path) <= chapter_end)
         ]
     )
-
-
-def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
-    chapter_number = kwargs.pop("chapter_number", None)
-    message = str(kwargs.pop("message", ""))
-    severity = str(kwargs.pop("severity", "info"))
-    try:
-        emit_event(
-            run_id,
-            release_id,
-            event_type,
-            _STAGE_NAME,
-            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
-            severity=severity,
-            message=message,
-            payload=dict(kwargs),
-        )
-    except Exception as exc:
-        logging.getLogger(__name__).debug("Failed to emit tracking event: %s", exc)
 
 
 def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
@@ -174,7 +135,7 @@ def discover_glossary_candidates(
     )
 
     conn = open_connection(paths.db_path)
-    ensure_glossary_schema(conn)
+    ensure_schema(conn, "glossary")
     try:
         upsert_discovered_candidates(conn, candidates=discovered)
         _write_candidate_snapshot(
@@ -221,7 +182,7 @@ def translate_glossary_candidates(
     client = _build_llm_client(config_obj, llm_client)
 
     conn = open_connection(paths.db_path)
-    ensure_glossary_schema(conn)
+    ensure_schema(conn, "glossary")
     try:
         pending = list_candidates_for_translation(conn, release_id=release_id)
         chapters_with_pending = {candidate.first_seen_chapter for candidate in pending}
@@ -328,7 +289,7 @@ def promote_glossary_candidates(
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
 
     conn = open_connection(paths.db_path)
-    ensure_glossary_schema(conn)
+    ensure_schema(conn, "glossary")
     try:
         raise_if_stop_requested(
             stop_token,
@@ -420,7 +381,7 @@ def resolve_locked_glossary_term(
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     conn = open_connection(paths.db_path)
-    ensure_glossary_schema(conn)
+    ensure_schema(conn, "glossary")
     try:
         exact = find_exact_locked_entry(
             conn,

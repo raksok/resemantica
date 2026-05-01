@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sqlite3
 from typing import Sequence
 
-from resemantica.db.sqlite import apply_migrations
+from resemantica.db.sqlite import ensure_schema
 from resemantica.idioms.models import IdiomCandidate, IdiomConflict, IdiomPolicy
 
 
 def ensure_idiom_schema(conn: sqlite3.Connection) -> None:
-    migrations_dir = Path(__file__).resolve().parent / "migrations"
-    apply_migrations(conn, migrations_dir)
+    ensure_schema(conn, "idioms")
 
 
 def _candidate_from_row(row: sqlite3.Row) -> IdiomCandidate:
@@ -31,7 +29,7 @@ def _candidate_from_row(row: sqlite3.Row) -> IdiomCandidate:
         validation_status=str(row["validation_status"]),
         conflict_reason=None if row["conflict_reason"] is None else str(row["conflict_reason"]),
         analyst_model_name=str(row["analyst_model_name"]),
-        prompt_version=str(row["prompt_version"]),
+        analyst_prompt_version=str(row["analyst_prompt_version"]),
         translation_run_id=None if row["translation_run_id"] is None else str(row["translation_run_id"]),
         translator_model_name=None if row["translator_model_name"] is None else str(row["translator_model_name"]),
         translator_prompt_version=None if row["translator_prompt_version"] is None else str(row["translator_prompt_version"]),
@@ -70,7 +68,7 @@ def _conflict_from_row(row: sqlite3.Row) -> IdiomConflict:
     )
 
 
-def insert_detected_candidates(
+def upsert_discovered_candidates(
     conn: sqlite3.Connection,
     *,
     candidates: Sequence[IdiomCandidate],
@@ -86,7 +84,7 @@ def insert_detected_candidates(
                 first_seen_chapter, last_seen_chapter, appearance_count,
                 evidence_snippet, detection_run_id, candidate_status,
                 validation_status, conflict_reason, analyst_model_name,
-                prompt_version, translation_run_id, translator_model_name,
+                analyst_prompt_version, translation_run_id, translator_model_name,
                 translator_prompt_version, schema_version, updated_at
             )
             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -106,7 +104,7 @@ def insert_detected_candidates(
                 validation_status = excluded.validation_status,
                 conflict_reason = excluded.conflict_reason,
                 analyst_model_name = excluded.analyst_model_name,
-                prompt_version = excluded.prompt_version,
+                analyst_prompt_version = excluded.analyst_prompt_version,
                 translation_run_id = excluded.translation_run_id,
                 translator_model_name = excluded.translator_model_name,
                 translator_prompt_version = excluded.translator_prompt_version,
@@ -131,7 +129,7 @@ def insert_detected_candidates(
                     candidate.validation_status,
                     candidate.conflict_reason,
                     candidate.analyst_model_name,
-                    candidate.prompt_version,
+                    candidate.analyst_prompt_version,
                     candidate.translation_run_id,
                     candidate.translator_model_name,
                     candidate.translator_prompt_version,
@@ -149,7 +147,7 @@ def list_candidates(conn: sqlite3.Connection, *, release_id: str) -> list[IdiomC
                meaning_zh, preferred_rendering_en, usage_notes, first_seen_chapter,
                last_seen_chapter, appearance_count, evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
-               analyst_model_name, prompt_version, translator_model_name,
+               analyst_model_name, analyst_prompt_version, translator_model_name,
                translator_prompt_version, schema_version
         FROM idiom_candidates
         WHERE release_id = ?
@@ -171,8 +169,8 @@ def list_candidates_for_translation(
                meaning_zh, preferred_rendering_en, usage_notes, first_seen_chapter,
                last_seen_chapter, appearance_count, evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
-               analyst_model_name, prompt_version, translator_model_name,
-               translator_prompt_version, schema_version
+                analyst_model_name, analyst_prompt_version, translator_model_name,
+                translator_prompt_version, schema_version
         FROM idiom_candidates
         WHERE release_id = ?
           AND candidate_status = 'discovered'
@@ -220,8 +218,8 @@ def list_candidates_for_promotion(
                meaning_zh, preferred_rendering_en, usage_notes, first_seen_chapter,
                last_seen_chapter, appearance_count, evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
-               analyst_model_name, prompt_version, translator_model_name,
-               translator_prompt_version, schema_version
+                analyst_model_name, analyst_prompt_version, translator_model_name,
+                translator_prompt_version, schema_version
         FROM idiom_candidates
         WHERE release_id = ?
           AND candidate_status = 'translated'
@@ -252,7 +250,7 @@ def mark_candidate_conflict(
         )
 
 
-def mark_candidate_approved(conn: sqlite3.Connection, *, candidate_id: str) -> None:
+def mark_candidate_promoted(conn: sqlite3.Connection, *, candidate_id: str) -> None:
     with conn:
         conn.execute(
             """

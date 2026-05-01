@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from hashlib import sha256
 import importlib
 import json
+from dataclasses import asdict, dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -14,10 +14,7 @@ from resemantica.graph.models import (
     GraphRelationship,
     GraphSnapshotRecord,
 )
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+from resemantica.utils import _canonical_json
 
 
 class GraphBackend(Protocol):

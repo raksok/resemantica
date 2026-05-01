@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import replace
-import re
 from xml.etree import ElementTree as ET
 
 from resemantica.epub.models import PlaceholderEntry

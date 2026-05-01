@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+import shutil
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-import json
 from pathlib import Path
-import shutil
 from typing import Any
 from xml.etree import ElementTree as ET
-import zipfile
 
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.utils import _read_json, _write_json
 
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "div", "li", "td", "table"}
 
@@ -100,18 +100,6 @@ def _text_blocks(root: ET.Element) -> list[ET.Element]:
         and _is_leaf_block(element)
         and (_has_text_content(element) or _local_name(element.tag).lower() == "table")
     ]
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
 
 
 def rebuild_epub(unpacked_dir: Path, output_path: Path) -> Path:

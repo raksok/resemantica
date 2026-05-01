@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
 import re
 import sqlite3
-from pathlib import Path
 import zipfile
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 

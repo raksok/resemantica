@@ -51,7 +51,7 @@ def _button_label(widget) -> str:
 
 
 def test_event_bus_subscribe_unsubscribe():
-    from resemantica.orchestration.events import subscribe, unsubscribe, emit_event
+    from resemantica.orchestration.events import emit_event, subscribe, unsubscribe
 
     received: list[dict[str, Any]] = []
 
@@ -90,7 +90,7 @@ def test_event_bus_subscribe_unsubscribe():
 
 
 def test_event_bus_filters_by_type():
-    from resemantica.orchestration.events import subscribe, unsubscribe, emit_event
+    from resemantica.orchestration.events import emit_event, subscribe, unsubscribe
 
     received: list[str] = []
 
@@ -116,7 +116,7 @@ def test_event_bus_filters_by_type():
 
 
 def test_event_bus_deduplicates_subscribers():
-    from resemantica.orchestration.events import subscribe, unsubscribe, emit_event
+    from resemantica.orchestration.events import emit_event, subscribe, unsubscribe
 
     received: list[str] = []
 

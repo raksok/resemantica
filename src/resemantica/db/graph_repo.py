@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sqlite3
 from typing import Sequence
 
-from resemantica.db.sqlite import apply_migrations
+from resemantica.db.sqlite import ensure_schema
 from resemantica.graph.models import DeferredEntityRecord, GraphSnapshotRecord
 
 
 def ensure_graph_schema(conn: sqlite3.Connection) -> None:
-    migrations_dir = Path(__file__).resolve().parent / "migrations"
-    apply_migrations(conn, migrations_dir)
+    ensure_schema(conn, "graph")
 
 
 def _deferred_from_row(row: sqlite3.Row) -> DeferredEntityRecord:

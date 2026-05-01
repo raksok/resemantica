@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-
 GlossaryCategory = Literal[
     "character",
     "alias",
@@ -22,21 +21,6 @@ GlossaryCategory = Literal[
 CandidateStatus = Literal["discovered", "translated", "conflict", "promoted"]
 ValidationStatus = Literal["pending", "approved", "conflict"]
 LockedGlossaryStatus = Literal["approved"]
-
-CATEGORY_VALUES: set[str] = {
-    "character",
-    "alias",
-    "title_honorific",
-    "faction",
-    "location",
-    "technique",
-    "item_artifact",
-    "realm_concept",
-    "creature_race",
-    "generic_role",
-    "event",
-    "idiom",
-}
 
 
 @dataclass(slots=True)

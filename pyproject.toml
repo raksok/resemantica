@@ -9,10 +9,13 @@ description = "Local-first EPUB translation pipeline"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "ebooklib>=0.18",
     "ladybug>=0.15.3",
     "loguru>=0.7.3",
+    "lxml>=5.3",
     "mlflow>=3.11.1",
     "openai>=2.32.0",
+    "rich>=13.9",
     "textual>=2.0.0",
     "tiktoken>=0.9.0",
 ]
@@ -32,3 +35,17 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = false
+warn_return_any = true
+warn_unused_ignores = true
+check_untyped_defs = true

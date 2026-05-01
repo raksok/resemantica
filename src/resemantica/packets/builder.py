@@ -1,21 +1,19 @@
 from __future__ import annotations
 
+import math
+import re
 from datetime import UTC, datetime
 from hashlib import sha256
-import json
-import math
 from pathlib import Path
-import re
 from typing import Any
 
 from resemantica.chapters.manifest import list_extracted_chapters
-from resemantica.db.glossary_repo import ensure_glossary_schema, list_locked_entries
-from resemantica.db.graph_repo import ensure_graph_schema, list_graph_snapshots
-from resemantica.db.idiom_repo import ensure_idiom_schema, list_policies
-from resemantica.db.packet_repo import ensure_packet_schema, get_latest_packet_metadata, save_packet_metadata
-from resemantica.db.sqlite import open_connection
+from resemantica.db.glossary_repo import list_locked_entries
+from resemantica.db.graph_repo import list_graph_snapshots
+from resemantica.db.idiom_repo import list_policies
+from resemantica.db.packet_repo import get_latest_packet_metadata, save_packet_metadata
+from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import (
-    ensure_summary_schema,
     get_validated_summary,
     is_non_story_chapter,
     list_validated_summaries,
@@ -30,10 +28,8 @@ from resemantica.graph.filters import (
 from resemantica.graph.models import GraphRelationship
 from resemantica.idioms.models import IdiomPolicy
 from resemantica.llm.tokens import count_tokens
-from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.packets.bundler import build_paragraph_bundle
-from resemantica.packets.models import ParagraphBundle
 from resemantica.packets.invalidation import detect_stale_packet
 from resemantica.packets.models import (
     PACKET_BUILDER_VERSION,
@@ -41,56 +37,18 @@ from resemantica.packets.models import (
     ChapterPacket,
     PacketBuildOutput,
     PacketMetadataRecord,
+    ParagraphBundle,
 )
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.utils import _canonical_json, _read_json, _write_json
+from resemantica.utils import _emit as _emit_shared
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _STAGE_NAME = "packets-build"
 
 
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _read_json(path: Path) -> dict[str, object]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Invalid JSON root in {path}")
-    return payload
-
-
-def _write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
-
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
-    chapter_number = kwargs.pop("chapter_number", None)
-    message = str(kwargs.pop("message", ""))
-    severity = str(kwargs.pop("severity", "info"))
-    try:
-        emit_event(
-            run_id,
-            release_id,
-            event_type,
-            _STAGE_NAME,
-            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
-            severity=severity,
-            message=message,
-            payload=dict(kwargs),
-        )
-    except Exception:
-        pass
-
-
-def _chapter_number_from_path(path: Path) -> int:
-    match = _CHAPTER_FILE_RE.search(path.name)
-    if match is None:
-        raise ValueError(f"Unexpected chapter filename: {path.name}")
-    return int(match.group(1))
+    _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
 
 
 def _build_graph_client(paths: Any, graph_client: GraphClient | None) -> GraphClient:
@@ -286,10 +244,10 @@ def enrich_with_graph_context(
     )
     chapter_safe_relationship_snippets: list[dict[str, object]] = [
         {
-            "relationship_id": edge.edge_id,
+            "relationship_id": edge.relationship_id,
             "snippet": (
                 f"{entity_names.get(edge.source_entity_id, edge.source_entity_id)} "
-                f"{edge.edge_type} "
+                f"{edge.type} "
                 f"{entity_names.get(edge.target_entity_id, edge.target_entity_id)}"
             ),
             "revealed_chapter": edge.revealed_chapter,
@@ -324,8 +282,8 @@ def enrich_with_graph_context(
     )
     reveal_safe_identity_notes: list[dict[str, object]] = [
         {
-            "relationship_id": row.edge_id,
-            "edge_type": row.edge_type,
+            "relationship_id": row.relationship_id,
+            "edge_type": row.type,
             "source_entity_id": row.source_entity_id,
             "target_entity_id": row.target_entity_id,
             "lore_text": row.lore_text,
@@ -483,11 +441,11 @@ def build_chapter_packet(
     source_text = _collect_source_text(records)
 
     conn = open_connection(paths.db_path)
-    ensure_glossary_schema(conn)
-    ensure_summary_schema(conn)
-    ensure_idiom_schema(conn)
-    ensure_graph_schema(conn)
-    ensure_packet_schema(conn)
+    ensure_schema(conn, "glossary")
+    ensure_schema(conn, "summaries")
+    ensure_schema(conn, "idioms")
+    ensure_schema(conn, "graph")
+    ensure_schema(conn, "packets")
 
     if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
         conn.close()

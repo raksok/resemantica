@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS idiom_candidates (
     validation_status TEXT NOT NULL,
     conflict_reason TEXT,
     analyst_model_name TEXT NOT NULL,
-    prompt_version TEXT NOT NULL,
+    analyst_prompt_version TEXT NOT NULL,
     schema_version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

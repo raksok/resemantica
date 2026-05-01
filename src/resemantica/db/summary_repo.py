@@ -1,17 +1,16 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import asdict, dataclass
 from hashlib import sha256
-import json
-from pathlib import Path
-import sqlite3
 from typing import Any
 
-from resemantica.db.sqlite import apply_migrations
+from resemantica.db.sqlite import ensure_schema
+from resemantica.utils import _canonical_json
 
 
-def _canonical_json(payload: dict[str, object]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+def ensure_summary_schema(conn: sqlite3.Connection) -> None:
+    ensure_schema(conn, "summaries")
 
 
 def _draft_id(*, release_id: str, chapter_number: int, summary_type: str) -> str:
@@ -76,12 +75,6 @@ class DerivedSummaryEnRecord:
 
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
-
-
-def ensure_summary_schema(conn: sqlite3.Connection) -> None:
-    migrations_dir = Path(__file__).resolve().parent / "migrations"
-
-    apply_migrations(conn, migrations_dir)
 
 
 def save_summary_draft(

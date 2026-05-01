@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 from resemantica.epub.extractor import extract_epub
 from resemantica.translation.pass2 import translate_pass2

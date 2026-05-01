@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import signal
 import sys
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -568,9 +568,9 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
         from resemantica.orchestration import (
-            resume_run,
-            plan_cleanup,
             apply_cleanup,
+            plan_cleanup,
+            resume_run,
         )
 
         if args.run_command == "production":

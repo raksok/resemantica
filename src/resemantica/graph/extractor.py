@@ -1,24 +1,24 @@
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from hashlib import sha256
-import json
 from pathlib import Path
-import re
 from typing import Any, Callable
 
 from resemantica.chapters.manifest import ChapterRef
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
 from resemantica.graph.models import (
-    DeferredEntityRecord,
-    GRAPH_ENTITY_CATEGORIES,
     GLOSSARY_COVERED_CATEGORIES,
+    GRAPH_ENTITY_CATEGORIES,
+    WORLD_MODEL_EDGE_TYPES,
+    DeferredEntityRecord,
     GraphAlias,
     GraphAppearance,
     GraphEntity,
     GraphRelationship,
-    WORLD_MODEL_EDGE_TYPES,
 )
 from resemantica.llm.budget import (
     PromptBudgetError,
@@ -31,7 +31,7 @@ from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, load_config
-
+from resemantica.utils import _chapter_number_from_path
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
@@ -91,13 +91,6 @@ class _LLMRelationship:
     confidence: float
     lore_text: str | None
     is_masked_identity: bool
-
-
-def _chapter_number_from_path(path: Path) -> int:
-    match = _CHAPTER_FILE_RE.search(path.name)
-    if match is None:
-        raise ValueError(f"Unexpected chapter filename: {path.name}")
-    return int(match.group(1))
 
 
 def _strip_placeholders(text: str) -> str:

@@ -9,7 +9,7 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import Static
 
-from resemantica.tui.launch_control import LaunchSnapshot, STAGE_DEFINITIONS
+from resemantica.tui.launch_control import STAGE_DEFINITIONS, LaunchSnapshot
 from resemantica.tui.screens.base import BaseScreen
 
 PREPRO_STAGE_KEYS = [

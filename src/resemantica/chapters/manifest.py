@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
 import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from resemantica.settings import DerivedPaths
+from resemantica.utils import _chapter_number_from_path
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 
@@ -18,13 +19,6 @@ class ChapterRef:
     placeholder_path: Path
     source_document_path: str | None
     chapter_source_hash: str | None
-
-
-def _chapter_number_from_path(path: Path) -> int:
-    match = _CHAPTER_FILE_RE.search(path.name)
-    if match is None:
-        raise ValueError(f"Unexpected chapter filename: {path.name}")
-    return int(match.group(1))
 
 
 def _read_chapter_ref(paths: DerivedPaths, chapter_path: Path) -> ChapterRef:

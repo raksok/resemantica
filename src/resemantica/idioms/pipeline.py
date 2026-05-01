@@ -1,60 +1,39 @@
 from __future__ import annotations
 
-import json
-import logging
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.idiom_repo import (
-    ensure_idiom_schema,
     find_exact_policy,
     insert_conflicts,
-    insert_detected_candidates,
     list_candidates,
     list_candidates_for_promotion,
     list_candidates_for_translation,
     list_conflicts,
     list_policies,
-    mark_candidate_approved,
     mark_candidate_conflict,
+    mark_candidate_promoted,
     promote_policies,
     save_idiom_translation,
+    upsert_discovered_candidates,
 )
-from resemantica.db.sqlite import open_connection
-from resemantica.db.summary_repo import ensure_summary_schema
+from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.idioms.extractor import extract_idioms
 from resemantica.idioms.validators import normalize_idiom_source, validate_idiom_policy
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt, render_named_sections
-from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.utils import _build_llm_client, _chapter_number_from_path, _write_json
+from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-idioms"
 
 
-def _chapter_number_from_path(path: Path) -> int:
-    return int(path.stem.split("-", 1)[1])
-
-
-def _write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
-
-def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMClient:
-    if llm_client is not None:
-        return llm_client
-    return LLMClient(
-        base_url=config.llm.base_url,
-        timeout_seconds=config.llm.timeout_seconds,
-        max_retries=config.llm.max_retries,
-    )
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
 
 
 def _filtered_chapter_count(
@@ -75,25 +54,6 @@ def _filtered_chapter_count(
             and (chapter_end is None or _chapter_number_from_path(path) <= chapter_end)
         ]
     )
-
-
-def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
-    chapter_number = kwargs.pop("chapter_number", None)
-    message = str(kwargs.pop("message", ""))
-    severity = str(kwargs.pop("severity", "info"))
-    try:
-        emit_event(
-            run_id,
-            release_id,
-            event_type,
-            _STAGE_NAME,
-            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
-            severity=severity,
-            message=message,
-            payload=dict(kwargs),
-        )
-    except Exception as exc:
-        logging.getLogger(__name__).debug("Failed to emit tracking event: %s", exc)
 
 
 def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
@@ -219,8 +179,8 @@ def preprocess_idioms(
     translator_client = _build_llm_client(config_obj, translator_llm_client)
 
     conn = open_connection(paths.db_path)
-    ensure_idiom_schema(conn)
-    ensure_summary_schema(conn)
+    ensure_schema(conn, "idioms")
+    ensure_schema(conn, "summaries")
     try:
         _emit(
             run_id,
@@ -260,7 +220,7 @@ def preprocess_idioms(
             ),
             stop_token=stop_token,
         )
-        insert_detected_candidates(conn, candidates=detected_candidates)
+        upsert_discovered_candidates(conn, candidates=detected_candidates)
         raise_if_stop_requested(
             stop_token,
             checkpoint={
@@ -314,7 +274,7 @@ def preprocess_idioms(
         for candidate_id in validation.promoted_candidate_ids:
             if candidate_id in reasons_by_candidate:
                 continue
-            mark_candidate_approved(conn, candidate_id=candidate_id)
+            mark_candidate_promoted(conn, candidate_id=candidate_id)
 
         _write_candidate_snapshot(
             conn,
@@ -383,7 +343,7 @@ def resolve_idiom_policy(
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     conn = open_connection(paths.db_path)
-    ensure_idiom_schema(conn)
+    ensure_schema(conn, "idioms")
     try:
         policy = find_exact_policy(
             conn,

@@ -5,8 +5,8 @@ from typing import Any, Optional
 
 import mlflow
 
-from resemantica.tracking.models import Event
 from resemantica.orchestration.events import subscribe
+from resemantica.tracking.models import Event
 
 _STAGE_START_TIMES: dict[str, float] = {}
 _SUBSCRIBED: bool = False

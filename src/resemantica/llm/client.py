@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import time
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from resemantica.llm.prompts import render_named_sections
-
 
 GenerationHook = Callable[[str, str], str]
 

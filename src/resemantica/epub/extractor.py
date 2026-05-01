@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import shutil
+import zipfile
+from pathlib import Path
 from typing import Iterable
 from xml.etree import ElementTree as ET
-import zipfile
 
+from resemantica.chapters.manifest import write_chapter_manifest
+from resemantica.db.extraction_repo import record_extraction_metadata
+from resemantica.db.sqlite import open_connection
 from resemantica.epub.models import ChapterDocument, ChapterParseResult, RoundTripResult
 from resemantica.epub.parser import parse_chapters
 from resemantica.epub.rebuild import rebuild_epub
 from resemantica.epub.validators import validate_extraction
-from resemantica.chapters.manifest import write_chapter_manifest
-from resemantica.db.extraction_repo import ExtractionRepo
-from resemantica.db.sqlite import open_connection
 from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.utils import _write_json
 
 _XHTML_MEDIA_TYPES = {
     "application/xhtml+xml",
@@ -98,14 +98,6 @@ def _chapter_documents(opf_path: Path) -> list[ChapterDocument]:
         )
 
     return chapter_documents
-
-
-def _write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
 
 
 def _write_chapter_artifacts(
@@ -218,9 +210,9 @@ def extract_epub(
     write_chapter_manifest(paths)
     conn = open_connection(paths.db_path)
     try:
-        repo = ExtractionRepo(conn)
         for chapter_result in chapter_results:
-            repo.record_extraction_metadata(
+            record_extraction_metadata(
+                conn,
                 release_id=release_id,
                 run_id=run_id,
                 chapter_result=chapter_result,

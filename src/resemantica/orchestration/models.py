@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 STAGE_ORDER = [
     "preprocess-glossary",
     "preprocess-summaries",
@@ -22,8 +21,8 @@ class StageResult:
     success: bool
     stage_name: str
     message: str = ""
-    checkpoint: dict = field(default_factory=dict)
-    metadata: dict = field(default_factory=dict)
+    checkpoint: dict[str, object] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
     stopped: bool = False
 
 

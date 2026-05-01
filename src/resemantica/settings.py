@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-import tomllib
 
 
 @dataclass(slots=True)
@@ -44,7 +44,7 @@ class BudgetConfig:
 
 @dataclass(slots=True)
 class TranslationConfig:
-    pass3_default: bool = True
+    pass3_default: bool = False
     risk_threshold_high: float = 0.7
     batched_model_order: bool = False
 
@@ -127,7 +127,10 @@ def _as_int(value: object, field_name: str) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
-        return int(value)
+        try:
+            return int(value)
+        except ValueError:
+            raise ValueError(f"{field_name} must be an integer.") from None
     raise ValueError(f"{field_name} must be an integer.")
 
 
@@ -137,7 +140,10 @@ def _as_float(value: object, field_name: str) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
-        return float(value)
+        try:
+            return float(value)
+        except ValueError:
+            raise ValueError(f"{field_name} must be numeric.") from None
     raise ValueError(f"{field_name} must be numeric.")
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from hashlib import sha256
 import re
+from hashlib import sha256
 from typing import Callable
 from xml.etree import ElementTree as ET
 

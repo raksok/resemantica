@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from resemantica.tracking.models import Event
+from resemantica.tracking.quality import get_metric_totals, get_stage_summary, get_warning_trends
 from resemantica.tracking.repo import ensure_tracking_db, save_event
-from resemantica.tracking.quality import get_stage_summary, get_warning_trends, get_metric_totals
 
 
 @pytest.fixture(autouse=True)

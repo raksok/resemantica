@@ -40,8 +40,8 @@ def test_start_run_tracking_sets_experiment_and_run(mock_mlflow, tmp_path: Path)
 
 
 def test_start_run_tracking_subscribes_once(mock_mlflow, tmp_path: Path):
-    from resemantica.tracking import mlflow as _m
     from resemantica.orchestration.events import _subscribers
+    from resemantica.tracking import mlflow as _m
 
     _subscribers.clear()
     _m._SUBSCRIBED = False

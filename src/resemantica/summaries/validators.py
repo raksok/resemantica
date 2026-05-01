@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import re
 from typing import Any
+
+from loguru import logger
 
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.llm.budget import ensure_prompt_within_budget
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
 from resemantica.settings import AppConfig
+from resemantica.summaries._context import _format_glossary_context
+from resemantica.validators import ValidationResult
 
 _REQUIRED_FIELDS = {
     "chapter_number",
@@ -24,17 +27,6 @@ _REQUIRED_FIELDS = {
 }
 _FUTURE_CHAPTER_ZH_RE = re.compile(r"第\s*(\d+)\s*章")
 _FUTURE_CHAPTER_EN_RE = re.compile(r"\bchapter\s+(\d+)\b", re.IGNORECASE)
-
-
-@dataclass(slots=True)
-class SummaryValidationResult:
-    status: str
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-    @property
-    def is_valid(self) -> bool:
-        return self.status == "success"
 
 
 def _is_list_of_strings(value: object) -> bool:
@@ -168,7 +160,7 @@ def validate_chinese_summary(
     structured_summary: dict[str, Any],
     expected_chapter_number: int,
     locked_glossary: list[LockedGlossaryEntry],
-) -> SummaryValidationResult:
+) -> ValidationResult:
     errors: list[str] = []
     errors.extend(_validate_schema(structured_summary, expected_chapter_number))
     errors.extend(
@@ -188,19 +180,10 @@ def validate_chinese_summary(
     if is_story_chapter is False:
         errors.insert(0, "non_story_chapter_flagged")
 
-    return SummaryValidationResult(
+    return ValidationResult(
         status="failed" if errors else "success",
         errors=errors,
         warnings=[],
-    )
-
-
-def _glossary_context(entries: list[LockedGlossaryEntry]) -> str:
-    if not entries:
-        return "(empty)"
-    return "\n".join(
-        f"- {entry.source_term} => {entry.target_term} ({entry.category})"
-        for entry in entries
     )
 
 
@@ -220,7 +203,7 @@ def validate_chinese_summary_content(
             "CHAPTER_NUMBER": str(structured_summary.get("chapter_number", "")),
             "SOURCE_TEXT": source_text_zh,
             "STRUCTURED_SUMMARY": json.dumps(structured_summary, ensure_ascii=False, indent=2),
-            "LOCKED_GLOSSARY": _glossary_context(locked_glossary),
+            "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
         },
     )
     if config is not None:
@@ -235,7 +218,8 @@ def validate_chinese_summary_content(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        return []
+        logger.warning("Summary validation JSON parse error: raw={}", raw[:200])
+        return ["<parse_error>"]
     flags = parsed.get("flags", []) if isinstance(parsed, dict) else []
     if not isinstance(flags, list):
         return []

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from resemantica.epub.extractor import extract_epub
+from resemantica.settings import derive_paths, load_config
 from resemantica.translation.pipeline import (
     translate_chapter_pass1,
     translate_chapter_pass2,
     translate_chapter_pass3,
 )
-from resemantica.settings import derive_paths, load_config
 from resemantica.translation.risk import classify_paragraph_risk, classify_paragraph_risk_from_text
 from resemantica.translation.validators import validate_pass3_integrity
 
@@ -83,6 +83,9 @@ def _run_full_pipeline(
     config=None,
     project_root=None,
 ):
+    if config is None:
+        from resemantica.settings import AppConfig, TranslationConfig
+        config = AppConfig(translation=TranslationConfig(pass3_default=True))
     r1 = translate_chapter_pass1(
         release_id=release_id, chapter_number=chapter_number,
         run_id=run_id, llm_client=llm_client, config=config, project_root=project_root,

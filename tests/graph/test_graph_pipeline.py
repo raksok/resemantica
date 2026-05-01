@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
-from pathlib import Path
 import re
+from datetime import UTC, datetime
+from pathlib import Path
 
 from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_entries
 from resemantica.db.graph_repo import ensure_graph_schema, list_deferred_entities, list_graph_snapshots
@@ -768,4 +768,4 @@ def test_local_world_model_selector_filters_non_local_edges() -> None:
         chapter_number=2,
         local_entity_ids={"ent_a", "ent_b"},
     )
-    assert [row.edge_id for row in selected] == ["rel_local"]
+    assert [row.relationship_id for row in selected] == ["rel_local"]

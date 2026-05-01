@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from hashlib import sha256
-import json
 import math
+from hashlib import sha256
 
 from resemantica.llm.tokens import count_tokens
 from resemantica.packets.models import ChapterPacket, ParagraphBundle
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+from resemantica.utils import _canonical_json
 
 
 def _normalized(text: str) -> str:

@@ -61,8 +61,8 @@ class EventBus:
             try:
                 callback(event)
             except Exception:
-                logger.opt(exception=True).warning(
-                    "Event subscriber failed for {}", event.event_type
+                logger.opt(exception=True).error(
+                    "Event subscriber {} failed for {}", callback.__name__, event.event_type
                 )
         return event
 

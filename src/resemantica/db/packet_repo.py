@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sqlite3
 
-from resemantica.db.sqlite import apply_migrations
+from resemantica.db.sqlite import ensure_schema
 from resemantica.packets.models import PacketMetadataRecord
 
 
 def ensure_packet_schema(conn: sqlite3.Connection) -> None:
-    migrations_dir = Path(__file__).resolve().parent / "migrations"
-    apply_migrations(conn, migrations_dir)
+    ensure_schema(conn, "packets")
 
 
 def _metadata_from_row(row: sqlite3.Row) -> PacketMetadataRecord:

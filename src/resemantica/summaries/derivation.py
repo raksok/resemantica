@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from hashlib import sha256
-import json
 
 from resemantica.db.summary_repo import ValidatedSummaryZhRecord
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+from resemantica.summaries._context import _format_glossary_context
+from resemantica.utils import _canonical_json
 
 
 def hash_validated_summary(summary: ValidatedSummaryZhRecord) -> str:
@@ -45,15 +42,6 @@ def build_story_so_far(*, short_summaries: list[ValidatedSummaryZhRecord]) -> st
     return "\n".join(lines)
 
 
-def _glossary_context(entries: list[LockedGlossaryEntry]) -> str:
-    if not entries:
-        return "(empty)"
-    return "\n".join(
-        f"- {entry.source_term} => {entry.target_term} ({entry.category})"
-        for entry in entries
-    )
-
-
 def derive_english_summary(
     *,
     llm_client: LLMClient,
@@ -66,7 +54,7 @@ def derive_english_summary(
         prompt_template,
         sections={
             "SOURCE_TEXT_ZH": source_text_zh,
-            "LOCKED_GLOSSARY": _glossary_context(locked_glossary),
+            "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
         },
     )
     return llm_client.generate_text(model_name=model_name, prompt=prompt).strip()

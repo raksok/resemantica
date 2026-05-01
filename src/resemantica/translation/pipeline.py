@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -27,6 +26,7 @@ from resemantica.translation.validators import (
     validate_pass3_integrity,
     validate_structure,
 )
+from resemantica.utils import _build_llm_client, _read_json, _write_json
 
 _PLACEHOLDER_RE = re.compile(r"\u27e6/?[A-Z]+_\d+\u27e7")
 
@@ -59,18 +59,6 @@ def _split_for_retry(text: str, max_chars: int = 1500) -> list[str]:
     if current:
         segments.append(current)
     return segments
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
 
 
 def _emit_translation_event(
@@ -110,16 +98,6 @@ def _is_blocking_restore_warning(warning: str) -> bool:
 
 def _to_placeholder_entries(raw_entries: list[dict[str, Any]]) -> list[PlaceholderEntry]:
     return [PlaceholderEntry(**entry) for entry in raw_entries]
-
-
-def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMClient:
-    if llm_client is not None:
-        return llm_client
-    return LLMClient(
-        base_url=config.llm.base_url,
-        timeout_seconds=config.llm.timeout_seconds,
-        max_retries=config.llm.max_retries,
-    )
 
 
 def _prevalidate_source(source_text: str) -> str:

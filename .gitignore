@@ -41,6 +41,9 @@ cache/
 resemantica-pilot.toml
 tests/test_epub/
 
+# Tool artifact directories
+.codex/
+
 # Local databases and event traces
 *.db
 *.sqlite

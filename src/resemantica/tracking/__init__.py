@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from .models import Event, RunState, SCHEMA_VERSION
+from .models import SCHEMA_VERSION, Event, RunState
 
 __all__ = ["Event", "RunState", "SCHEMA_VERSION"]

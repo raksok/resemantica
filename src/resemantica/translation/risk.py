@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-
+from dataclasses import dataclass
 
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
 

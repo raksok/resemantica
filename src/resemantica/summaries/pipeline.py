@@ -1,28 +1,24 @@
 from __future__ import annotations
 
-import json
-import logging
+import re
 from hashlib import sha256
 from pathlib import Path
-import re
 from typing import Any
 
 from resemantica.chapters.manifest import list_extracted_chapters
-from resemantica.db.glossary_repo import ensure_glossary_schema, list_locked_entries
-from resemantica.db.sqlite import open_connection
+from resemantica.db.glossary_repo import list_locked_entries
+from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import (
-    ensure_summary_schema,
     get_validated_summary,
     is_non_story_chapter,
     list_validated_summaries,
     save_derived_summary,
     save_validated_summary,
 )
-from resemantica.llm.client import LLMClient
 from resemantica.llm.budget import PromptBudgetError
+from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
-from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
     build_story_so_far,
@@ -32,50 +28,15 @@ from resemantica.summaries.derivation import (
 )
 from resemantica.summaries.generator import generate_chapter_summary
 from resemantica.summaries.validators import validate_chinese_summary_content
+from resemantica.utils import _build_llm_client, _read_json, _write_json
+from resemantica.utils import _emit as _emit_shared
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _STAGE_NAME = "preprocess-summaries"
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Invalid JSON root in {path}")
-    return payload
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
-
-def _chapter_number_from_path(path: Path) -> int:
-    match = _CHAPTER_FILE_RE.search(path.name)
-    if match is None:
-        raise ValueError(f"Unexpected chapter filename: {path.name}")
-    return int(match.group(1))
-
-
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
-    chapter_number = kwargs.pop("chapter_number", None)
-    message = str(kwargs.pop("message", ""))
-    severity = str(kwargs.pop("severity", "info"))
-    try:
-        emit_event(
-            run_id,
-            release_id,
-            event_type,
-            _STAGE_NAME,
-            chapter_number=chapter_number if isinstance(chapter_number, int) else None,
-            severity=severity,
-            message=message,
-            payload=dict(kwargs),
-        )
-    except Exception as exc:
-        logging.getLogger(__name__).debug("Failed to emit tracking event: %s", exc)
+    _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
 
 
 def _collect_source_text(chapter_payload: dict[str, Any]) -> str:
@@ -91,16 +52,6 @@ def _collect_source_text(chapter_payload: dict[str, Any]) -> str:
     )
     parts = [str(row.get("source_text_zh", "")) for row in records]
     return "\n".join(part for part in parts if part.strip())
-
-
-def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMClient:
-    if llm_client is not None:
-        return llm_client
-    return LLMClient(
-        base_url=config.llm.base_url,
-        timeout_seconds=config.llm.timeout_seconds,
-        max_retries=config.llm.max_retries,
-    )
 
 
 def preprocess_summaries(
@@ -136,8 +87,8 @@ def preprocess_summaries(
     prompt_validate = load_prompt("summary_zh_validate.txt")
 
     conn = open_connection(paths.db_path)
-    ensure_glossary_schema(conn)
-    ensure_summary_schema(conn)
+    ensure_schema(conn, "glossary")
+    ensure_schema(conn, "summaries")
 
     chapter_results: list[dict[str, Any]] = []
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
 from resemantica.tracking.evaluation import (
     run_benchmark,
     score_fidelity,

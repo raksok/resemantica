@@ -21,7 +21,7 @@ class IdiomCandidate:
     validation_status: str
     conflict_reason: str | None
     analyst_model_name: str
-    prompt_version: str
+    analyst_prompt_version: str
     translation_run_id: str | None = None
     translator_model_name: str | None = None
     translator_prompt_version: str | None = None

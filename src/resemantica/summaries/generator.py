@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from resemantica.db.summary_repo import (
@@ -24,19 +24,9 @@ from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
 from resemantica.settings import AppConfig, load_config
-from resemantica.summaries.validators import (
-    SummaryValidationResult,
-    validate_chinese_summary,
-)
-
-
-def _glossary_context(entries: list[LockedGlossaryEntry]) -> str:
-    if not entries:
-        return "(empty)"
-    return "\n".join(
-        f"- {entry.source_term} => {entry.target_term} ({entry.category})"
-        for entry in entries
-    )
+from resemantica.summaries._context import _format_glossary_context
+from resemantica.summaries.validators import validate_chinese_summary
+from resemantica.validators import ValidationResult
 
 
 @dataclass(slots=True)
@@ -45,7 +35,7 @@ class GeneratedChapterSummary:
     draft_record: SummaryDraftRecord
     structured_record: ValidatedSummaryZhRecord
     short_record: ValidatedSummaryZhRecord
-    validation: SummaryValidationResult
+    validation: ValidationResult
 
 
 def _parse_summary(raw_output: str) -> dict[str, Any] | None:
@@ -123,9 +113,10 @@ def _generate_structured_summary(
         sections={
             "CHAPTER_NUMBER": str(chapter_number),
             "SOURCE_TEXT": "",
-            "LOCKED_GLOSSARY": _glossary_context(locked_glossary),
+            "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
         },
     )
+
     chunks = chunk_text_for_prompt(
         source_text_zh,
         config=config,
@@ -144,7 +135,7 @@ def _generate_structured_summary(
             sections={
                 "CHAPTER_NUMBER": str(chapter_number),
                 "SOURCE_TEXT": chunk_text,
-                "LOCKED_GLOSSARY": _glossary_context(locked_glossary),
+                "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
             },
         )
         ensure_prompt_within_budget(

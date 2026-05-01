@@ -19,9 +19,11 @@ from resemantica.tui.observability import (
     apply_record_filters,
     available_chapter_filters,
     available_stage_filters,
-    build_snapshot as build_obs_snapshot,
     format_record,
     load_log_records,
+)
+from resemantica.tui.observability import (
+    build_snapshot as build_obs_snapshot,
 )
 from resemantica.tui.screens.base import BaseScreen
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Optional
 
 from resemantica.tracking.repo import ensure_tracking_db, load_run_state
-from .models import StageResult, STAGE_ORDER, next_stage
+
 from .events import emit_event
+from .models import STAGE_ORDER, StageResult, next_stage
 from .runner import run_stage
 
 

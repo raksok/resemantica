@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import json
 import shutil
+from pathlib import Path
+
+from resemantica.settings import derive_paths, load_config
 
 from .events import emit_event
-from resemantica.settings import derive_paths, load_config
 
 
 def _get_cleanup_plan_path(release_id: str) -> Path:
@@ -70,14 +70,14 @@ def _estimate_size(paths: list[Path]) -> int:
                 try:
                     total += p.stat().st_size
                 except OSError:
-                    pass
+                    total = -1
             elif p.is_dir():
                 for f in p.rglob("*"):
                     if f.is_file():
                         try:
                             total += f.stat().st_size
                         except OSError:
-                            pass
+                            total = -1
     return total
 
 
@@ -87,12 +87,12 @@ def plan_cleanup(
     *,
     scope: str = "run",
     dry_run: bool = True,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     plan_path = _get_cleanup_plan_path(release_id)
 
     deletable, preserved = _collect_scope_artifacts(release_id, run_id, scope)
 
-    plan: dict[str, Any] = {
+    plan: dict[str, object] = {
         "release_id": release_id,
         "run_id": run_id,
         "scope": scope,
@@ -129,7 +129,7 @@ def apply_cleanup(
     *,
     scope: str = "run",
     force: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     plan_path = _get_cleanup_plan_path(release_id)
 
     if not plan_path.exists():
@@ -151,7 +151,7 @@ def apply_cleanup(
         )
         return {"success": False, "message": msg}
 
-    report: dict[str, Any] = {
+    report: dict[str, object] = {
         "release_id": release_id,
         "run_id": run_id,
         "scope": scope,
