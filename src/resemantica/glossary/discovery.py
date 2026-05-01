@@ -19,6 +19,7 @@ from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_tex
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
+from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, load_config
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
@@ -138,6 +139,7 @@ def discover_candidates_from_extracted(
     chapter_refs: list[ChapterRef] | None = None,
     cache_root: Path | None = None,
     event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
+    stop_token: StopToken | None = None,
 ) -> list[GlossaryCandidate]:
     config_obj = config or load_config()
     refs = chapter_refs
@@ -168,6 +170,11 @@ def discover_candidates_from_extracted(
         chapter_file = chapter_ref.chapter_path
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", chapter_ref.chapter_number))
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},
+            message="Glossary discovery stopped before next chapter",
+        )
         if event_callback is not None:
             event_callback("chapter_started", chapter_number, {})
         source_text_zh = _collect_source_text(payload)
@@ -333,5 +340,10 @@ def discover_candidates_from_extracted(
             )
         if event_callback is not None:
             event_callback("chapter_completed", chapter_number, {})
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},
+            message=f"Glossary discovery stopped after chapter {chapter_number}",
+        )
 
     return candidates

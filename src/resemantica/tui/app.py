@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
+from threading import Lock
+from typing import TYPE_CHECKING
 
 from textual import events
 from textual.app import App
 from textual.binding import Binding
 
+from resemantica.orchestration.stop import StopToken
 from resemantica.tui.launch_control import TuiSession
 from resemantica.tui.navigation import SCREEN_INFOS, screen_info_for_class_name
 from resemantica.tui.screens import (
@@ -19,11 +23,17 @@ from resemantica.tui.screens import (
     TranslationScreen,
 )
 
+if TYPE_CHECKING:
+    from resemantica.tracking.models import Event
+
 
 class ResemanticaApp(App):
     TITLE = "Resemantica"
     SUB_TITLE = "Translation Pipeline"
     CSS_PATH = "palenight.tcss"
+    LIVE_PENDING_LIMIT = 1000
+    LIVE_RETAINED_LIMIT = 500
+    LIVE_REFRESH_INTERVAL_SECONDS = 0.25
 
     SCREENS = {
         "dashboard": DashboardScreen,
@@ -42,6 +52,7 @@ class ResemanticaApp(App):
             for info in SCREEN_INFOS
         ],
         Binding("?", "show_help", "Help", priority=True),
+        Binding("x", "request_stop", "Stop", priority=True, show=False),
         Binding("q", "quit", "Quit", priority=True),
     ]
 
@@ -58,6 +69,8 @@ class ResemanticaApp(App):
         self._run_id = run_id
         self._config_path = config_path
         self.active_action: str | None = None
+        self.active_stop_token: StopToken | None = None
+        self.active_stop_requested = False
         self.session = TuiSession(
             chapter_start=chapter_start,
             chapter_end=chapter_end,
@@ -65,9 +78,74 @@ class ResemanticaApp(App):
         self._screen_bindings = {
             str(info.number): info.screen_id for info in SCREEN_INFOS
         }
+        self._live_pending_events: deque[Event] = deque(maxlen=self.LIVE_PENDING_LIMIT)
+        self._live_events: deque[Event] = deque(maxlen=self.LIVE_RETAINED_LIMIT)
+        self._live_event_lock = Lock()
+        self._live_events_subscribed = False
 
     def on_mount(self) -> None:
+        self._subscribe_live_events()
         self.push_screen("dashboard")
+        self.set_interval(self.LIVE_REFRESH_INTERVAL_SECONDS, self._drain_live_events)
+
+    def on_unmount(self) -> None:
+        self._unsubscribe_live_events()
+
+    def _subscribe_live_events(self) -> None:
+        if self._live_events_subscribed:
+            return
+        from resemantica.orchestration.events import subscribe
+
+        subscribe("*", self._on_live_event)
+        self._live_events_subscribed = True
+
+    def _unsubscribe_live_events(self) -> None:
+        if not self._live_events_subscribed:
+            return
+        from resemantica.orchestration.events import unsubscribe
+
+        unsubscribe("*", self._on_live_event)
+        self._live_events_subscribed = False
+
+    def _on_live_event(self, event: Event) -> None:
+        if not self._live_event_matches(event):
+            return
+        with self._live_event_lock:
+            self._live_pending_events.append(event)
+
+    def _live_event_matches(self, event: Event) -> bool:
+        if self.active_action is None:
+            return False
+        if self._run_id and event.run_id != self._run_id:
+            return False
+        if self._release_id and event.release_id != self._release_id:
+            return False
+        return True
+
+    def _drain_live_events(self) -> None:
+        with self._live_event_lock:
+            if not self._live_pending_events:
+                return
+            pending = list(self._live_pending_events)
+            self._live_pending_events.clear()
+
+        self._live_events.extend(pending)
+        if self.active_action is None:
+            return
+
+        refresh_live = getattr(self.screen, "_refresh_live_progress", None)
+        if callable(refresh_live):
+            refresh_live()
+
+    def recent_live_events(self, *, limit: int = LIVE_RETAINED_LIMIT) -> list[Event]:
+        with self._live_event_lock:
+            events = list(self._live_events)
+        return list(reversed(events))[:limit]
+
+    def clear_live_events(self) -> None:
+        with self._live_event_lock:
+            self._live_pending_events.clear()
+            self._live_events.clear()
 
     async def on_event(self, event: events.Event) -> None:
         if isinstance(event, events.Key):
@@ -79,6 +157,12 @@ class ResemanticaApp(App):
                 focused = self.screen.focused
                 if focused is None or focused.__class__.__name__ != "Input":
                     await self.action_quit()
+                    event.stop()
+                    return
+            if event.key == "x":
+                focused = self.screen.focused
+                if focused is None or focused.__class__.__name__ != "Input":
+                    self.action_request_stop()
                     event.stop()
                     return
             if event.key in self._screen_bindings:
@@ -100,9 +184,20 @@ class ResemanticaApp(App):
         screen_info = screen_info_for_class_name(self.screen.__class__.__name__)
         await self.push_screen(HelpScreen(current_screen_info=screen_info))
 
+    def action_request_stop(self) -> None:
+        token = self.active_stop_token
+        if self.active_action is None or token is None:
+            return
+        token.request_stop()
+        self.active_stop_requested = True
+        refresh_live = getattr(self.screen, "_refresh_live_progress", None)
+        if callable(refresh_live):
+            refresh_live()
+
     def set_ids(self, release_id: str, run_id: str) -> None:
         self._release_id = release_id
         self._run_id = run_id
+        self.clear_live_events()
 
     @property
     def release_id(self) -> str | None:

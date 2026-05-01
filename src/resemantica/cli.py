@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import signal
 import sys
 from typing import Any
 
@@ -15,6 +16,7 @@ from resemantica.glossary.pipeline import (
 )
 from resemantica.logging_config import configure_logging
 from resemantica.orchestration import OrchestrationRunner
+from resemantica.orchestration.stop import StopRequested, StopToken
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 
@@ -72,9 +74,51 @@ def _configure_tui_logging(*, config: AppConfig, release_id: str | None, run_id:
     logger.add(logs_dir / f"{run_id or 'tui'}.jsonl", level="DEBUG", serialize=True)
 
 
-def _with_cli_progress(fn):
-    with CliProgressSubscriber():
-        return fn()
+class _InterruptedStop:
+    pass
+
+
+_INTERRUPTED_STOP = _InterruptedStop()
+
+
+def _with_cli_progress(fn, *, stop_token: StopToken | None = None):
+    if stop_token is None:
+        with CliProgressSubscriber():
+            return fn()
+
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    def request_stop(_signum, _frame):  # type: ignore[no-untyped-def]
+        if not stop_token.requested:
+            stop_token.request_stop()
+            print("Stopping after current chapter...", file=sys.stderr)
+            return
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, request_stop)
+    try:
+        with CliProgressSubscriber():
+            return fn()
+    except StopRequested as exc:
+        print(f"status=stopped\nmessage={exc.message}")
+        return _INTERRUPTED_STOP
+    except KeyboardInterrupt:
+        stop_token.request_stop()
+        return _INTERRUPTED_STOP
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+
+
+def _status_text(result: Any) -> str:
+    if getattr(result, "stopped", False):
+        return "stopped"
+    return "success" if getattr(result, "success", False) else "failed"
+
+
+def _exit_code(result: Any) -> int:
+    if result is _INTERRUPTED_STOP or getattr(result, "stopped", False):
+        return 130
+    return 0 if getattr(result, "success", False) else 1
 
 
 def _add_chapter_range_args(parser: argparse.ArgumentParser) -> None:
@@ -380,20 +424,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "translate-chapter":
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
+        stop_token = StopToken()
         result = _with_cli_progress(
             lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                 "translate-chapter",
                 chapter_number=args.chapter,
                 force=bool(getattr(args, "force_pass1", False)),
-            )
+                stop_token=stop_token,
+            ),
+            stop_token=stop_token,
         )
-        print(f"status={'success' if result.success else 'failed'}")
+        if result is _INTERRUPTED_STOP:
+            return 130
+        print(f"status={_status_text(result)}")
         print(f"message={result.message}")
-        return 0 if result.success else 1
+        return _exit_code(result)
 
     if args.command == "preprocess":
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
+        stop_token = StopToken()
         if args.preprocess_command == "glossary-discover":
             from resemantica.glossary.pipeline import discover_glossary_candidates
             result = _with_cli_progress(
@@ -401,8 +451,12 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
-                )
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
             )
+            if result is _INTERRUPTED_STOP:
+                return 130
             print(f"status={result['status']}")
             print(f"candidates_written={result['candidates_written']}")
             return 0
@@ -413,8 +467,12 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
-                )
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
             )
+            if result is _INTERRUPTED_STOP:
+                return 130
             print(f"status={result['status']}")
             print(f"translated_count={result['translated_count']}")
             print(f"candidates_artifact={result['candidates_artifact']}")
@@ -426,8 +484,12 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
-                )
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
             )
+            if result is _INTERRUPTED_STOP:
+                return 130
             print(f"status={result['status']}")
             print(f"candidate_count={result['candidate_count']}")
             print(f"promoted_count={result['promoted_count']}")
@@ -439,32 +501,44 @@ def main(argv: list[str] | None = None) -> int:
         if args.preprocess_command == "summaries":
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                    "preprocess-summaries"
-                )
+                    "preprocess-summaries",
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
             )
-            print(f"status={'success' if stage_result.success else 'failed'}")
+            if stage_result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={_status_text(stage_result)}")
             print(f"message={stage_result.message}")
-            return 0 if stage_result.success else 1
+            return _exit_code(stage_result)
 
         if args.preprocess_command == "idioms":
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                    "preprocess-idioms"
-                )
+                    "preprocess-idioms",
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
             )
-            print(f"status={'success' if stage_result.success else 'failed'}")
+            if stage_result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={_status_text(stage_result)}")
             print(f"message={stage_result.message}")
-            return 0 if stage_result.success else 1
+            return _exit_code(stage_result)
 
         if args.preprocess_command == "graph":
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                    "preprocess-graph"
-                )
+                    "preprocess-graph",
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
             )
-            print(f"status={'success' if stage_result.success else 'failed'}")
+            if stage_result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={_status_text(stage_result)}")
             print(f"message={stage_result.message}")
-            return 0 if stage_result.success else 1
+            return _exit_code(stage_result)
 
         parser.print_help()
         return 2
@@ -472,16 +546,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "packets":
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
+        stop_token = StopToken()
         if args.packets_command == "build":
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                     "packets-build",
                     chapter_number=args.chapter,
-                )
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
             )
-            print(f"status={'success' if stage_result.success else 'failed'}")
+            if stage_result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={_status_text(stage_result)}")
             print(f"message={stage_result.message}")
-            return 0 if stage_result.success else 1
+            return _exit_code(stage_result)
         parser.print_help()
         return 2
 
@@ -505,16 +584,25 @@ def main(argv: list[str] | None = None) -> int:
                 for stage in result.metadata.get("stages", []):
                     print(stage["stage_name"])
                 return 0
+            stop_token = StopToken()
             result = _with_cli_progress(
-                lambda: OrchestrationRunner(args.release, args.run, config=config).run_production(
+                lambda: OrchestrationRunner(
+                    args.release,
+                    args.run,
+                    config=config,
+                    stop_token=stop_token,
+                ).run_production(
                     dry_run=False,
                     chapter_start=args.start,
                     chapter_end=args.end,
                     batched_model_order=bool(getattr(args, "batched_model_order", False)),
-                )
+                ),
+                stop_token=stop_token,
             )
+            if result is _INTERRUPTED_STOP:
+                return 130
             print(result.message)
-            return 0 if result.success else 1
+            return _exit_code(result)
 
         if args.run_command == "resume":
             resume_result = resume_run(
@@ -574,41 +662,62 @@ def main(argv: list[str] | None = None) -> int:
             for stage in result.metadata.get("stages", []):
                 print(stage["stage_name"])
             return 0
+        stop_token = StopToken()
         result = _with_cli_progress(
-            lambda: OrchestrationRunner(args.release, args.run, config=config).run_production(
+            lambda: OrchestrationRunner(
+                args.release,
+                args.run,
+                config=config,
+                stop_token=stop_token,
+            ).run_production(
                 dry_run=False,
                 chapter_start=args.start,
                 chapter_end=args.end,
                 batched_model_order=bool(getattr(args, "batched_model_order", False)),
-            )
+            ),
+            stop_token=stop_token,
         )
+        if result is _INTERRUPTED_STOP:
+            return 130
         print(result.message)
-        return 0 if result.success else 1
+        return _exit_code(result)
 
     if args.command == "rebuild-epub":
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run_id)
+        stop_token = StopToken()
         result = _with_cli_progress(
-            lambda: OrchestrationRunner(args.release, args.run_id, config=config).run_stage("epub-rebuild")
+            lambda: OrchestrationRunner(args.release, args.run_id, config=config).run_stage(
+                "epub-rebuild",
+                stop_token=stop_token,
+            ),
+            stop_token=stop_token,
         )
-        print(f"status={'success' if result.success else 'failed'}")
+        if result is _INTERRUPTED_STOP:
+            return 130
+        print(f"status={_status_text(result)}")
         print(f"message={result.message}")
-        return 0 if result.success else 1
+        return _exit_code(result)
 
     if args.command == "translate-range":
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
+        stop_token = StopToken()
         result = _with_cli_progress(
             lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                 "translate-range",
                 chapter_start=args.start,
                 chapter_end=args.end,
                 batched_model_order=bool(getattr(args, "batched_model_order", False)),
-            )
+                stop_token=stop_token,
+            ),
+            stop_token=stop_token,
         )
-        print(f"status={'success' if result.success else 'failed'}")
+        if result is _INTERRUPTED_STOP:
+            return 130
+        print(f"status={_status_text(result)}")
         print(f"message={result.message}")
-        return 0 if result.success else 1
+        return _exit_code(result)
 
     if args.command == "tui":
         from resemantica.tui import ResemanticaApp

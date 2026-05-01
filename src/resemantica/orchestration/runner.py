@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,6 +13,7 @@ from resemantica.tracking.repo import ensure_tracking_db, load_run_state, save_r
 
 from .events import emit_event
 from .models import CALLABLE_STAGES, STAGE_ORDER, StageResult, legal_transition
+from .stop import StopRequested, StopToken, raise_if_stop_requested
 
 
 @dataclass(slots=True)
@@ -34,10 +36,12 @@ class OrchestrationRunner:
         release_id: str,
         run_id: str,
         config: AppConfig | None = None,
+        stop_token: StopToken | None = None,
     ) -> None:
         self.release_id = release_id
         self.run_id = run_id
         self.config = config or load_config()
+        self.stop_token = stop_token
 
     def plan_production(
         self,
@@ -79,12 +83,42 @@ class OrchestrationRunner:
 
         completed: list[str] = []
         for item in plan.stages:
+            if self.stop_token is not None and self.stop_token.requested:
+                checkpoint = {"completed_stages": completed}
+                self._update_run_state("production", "stopped", checkpoint)
+                emit_event(
+                    self.run_id,
+                    self.release_id,
+                    "stage_stopped",
+                    "production",
+                    message="Production stopped before launching next stage",
+                    payload={"checkpoint": checkpoint},
+                )
+                return StageResult(
+                    success=True,
+                    stage_name="production",
+                    message="Production stopped before launching next stage",
+                    checkpoint=checkpoint,
+                    metadata={"checkpoint": checkpoint},
+                    stopped=True,
+                )
             stage_result = self.run_stage(
                 item["stage_name"],
                 **dict(item.get("options", {})),
                 batched_model_order=batched_model_order,
             )
             completed.append(item["stage_name"])
+            if stage_result.stopped:
+                checkpoint = {"completed_stages": completed, "stopped_stage": item["stage_name"]}
+                self._update_run_state("production", "stopped", checkpoint)
+                return StageResult(
+                    success=True,
+                    stage_name="production",
+                    message=f"Production stopped during {item['stage_name']}",
+                    checkpoint=checkpoint,
+                    metadata={"stopped_stage": item["stage_name"]},
+                    stopped=True,
+                )
             if not stage_result.success:
                 return StageResult(
                     success=False,
@@ -120,6 +154,7 @@ class OrchestrationRunner:
         dry_run: bool = False,
         force: bool = False,
         batched_model_order: bool | None = None,
+        stop_token: StopToken | None = None,
     ) -> StageResult:
         if stage_name not in CALLABLE_STAGES:
             return StageResult(
@@ -158,6 +193,12 @@ class OrchestrationRunner:
         )
 
         try:
+            active_stop_token = stop_token or self.stop_token
+            raise_if_stop_requested(
+                active_stop_token,
+                checkpoint=active_checkpoint,
+                message=f"Stage {stage_name} stopped before starting",
+            )
             result = self._execute_stage(
                 stage_name,
                 chapter_number=chapter_number,
@@ -167,20 +208,40 @@ class OrchestrationRunner:
                 dry_run=dry_run,
                 force=force,
                 batched_model_order=batched_model_order,
+                stop_token=active_stop_token,
+            )
+        except StopRequested as exc:
+            result = StageResult(
+                success=True,
+                stage_name=stage_name,
+                message=exc.message,
+                checkpoint=exc.checkpoint,
+                metadata={"checkpoint": exc.checkpoint},
+                stopped=True,
             )
         except Exception as exc:
             result = StageResult(success=False, stage_name=stage_name, message=str(exc))
 
-        status = "completed" if result.success else "failed"
+        status = "stopped" if result.stopped else "completed" if result.success else "failed"
         self._update_run_state(stage_name, status, result.checkpoint or {})
+        event_type = (
+            "stage_stopped"
+            if result.stopped
+            else "stage_completed"
+            if result.success
+            else "stage_failed"
+        )
         emit_event(
             self.run_id,
             self.release_id,
-            "stage_completed" if result.success else "stage_failed",
+            event_type,
             stage_name,
-            severity="info" if result.success else "error",
+            severity="info" if result.success or result.stopped else "error",
             message=result.message,
-            payload=result.metadata,
+            payload={
+                **result.metadata,
+                "checkpoint": result.checkpoint or {},
+            },
         )
         return result
 
@@ -237,6 +298,10 @@ class OrchestrationRunner:
                 state.stage_name = stage
                 state.status = status
                 state.checkpoint = checkpoint
+            if status in {"completed", "failed", "stopped"}:
+                state.finished_at = datetime.now(timezone.utc).isoformat()
+            elif status == "running":
+                state.finished_at = None
             save_run_state(conn, state)
             return state
         finally:
@@ -253,6 +318,7 @@ class OrchestrationRunner:
         dry_run: bool,
         force: bool,
         batched_model_order: bool | None,
+        stop_token: StopToken | None,
     ) -> StageResult:
         if stage_name == "preprocess-glossary":
             from resemantica.glossary.pipeline import (
@@ -267,16 +333,19 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                stop_token=stop_token,
             )
             translate_glossary_candidates(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
+                stop_token=stop_token,
             )
             promote_glossary_candidates(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
+                stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Glossary preprocess completed")
 
@@ -289,6 +358,7 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Summaries preprocess completed")
 
@@ -301,6 +371,7 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Idioms preprocess completed")
 
@@ -313,6 +384,7 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Graph preprocess completed")
 
@@ -326,6 +398,7 @@ class OrchestrationRunner:
                 chapter_number=chapter_number,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                stop_token=stop_token,
             )
             failed_value = packet_result.get("chapters_failed", 0)
             failed = int(failed_value) if isinstance(failed_value, (int, str)) else 0
@@ -339,7 +412,11 @@ class OrchestrationRunner:
         if stage_name == "translate-chapter":
             if chapter_number is None:
                 return StageResult(False, stage_name, "translate-chapter requires chapter_number")
-            return self._translate_chapter(chapter_number=chapter_number, force=force)
+            return self._translate_chapter(
+                chapter_number=chapter_number,
+                force=force,
+                stop_token=stop_token,
+            )
 
         if stage_name == "translate-range":
             try:
@@ -359,6 +436,7 @@ class OrchestrationRunner:
                 chapter_end=chapter_end,
                 force=force,
                 batched_model_order=use_batched,
+                stop_token=stop_token,
             )
 
         if stage_name == "epub-rebuild":
@@ -392,7 +470,13 @@ class OrchestrationRunner:
 
         return StageResult(False, stage_name, f"Unknown stage: {stage_name}")
 
-    def _translate_chapter(self, *, chapter_number: int, force: bool = False) -> StageResult:
+    def _translate_chapter(
+        self,
+        *,
+        chapter_number: int,
+        force: bool = False,
+        stop_token: StopToken | None = None,
+    ) -> StageResult:
         from resemantica.translation.pipeline import (
             translate_chapter_pass1,
             translate_chapter_pass2,
@@ -404,6 +488,11 @@ class OrchestrationRunner:
             max_retries=self.config.llm.max_retries,
         )
 
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"chapter_number": chapter_number},
+            message=f"Stopped before chapter {chapter_number}",
+        )
         emit_event(
             self.run_id,
             self.release_id,
@@ -478,6 +567,11 @@ class OrchestrationRunner:
             message=f"Chapter {chapter_number} translation completed",
             payload=checkpoint,
         )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint=checkpoint,
+            message=f"Stopped after chapter {chapter_number}",
+        )
         return StageResult(
             True,
             "translate-chapter",
@@ -493,23 +587,39 @@ class OrchestrationRunner:
         chapter_end: int,
         force: bool = False,
         batched_model_order: bool = False,
+        stop_token: StopToken | None = None,
     ) -> StageResult:
         if batched_model_order:
             return self._translate_range_batched(
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
                 force=force,
+                stop_token=stop_token,
             )
         completed: list[int] = []
         failures: dict[int, str] = {}
         for chapter_number in range(chapter_start, chapter_end + 1):
-            result = self._translate_chapter(chapter_number=chapter_number, force=force)
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"completed_chapters": completed, "failures": failures},
+                message="Translation stopped before launching next chapter",
+            )
+            result = self._translate_chapter(
+                chapter_number=chapter_number,
+                force=force,
+                stop_token=stop_token,
+            )
             if result.success:
                 completed.append(chapter_number)
                 self._update_run_state(
                     "translate-range",
                     "running",
                     {"completed_chapters": completed, "failures": failures},
+                )
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"completed_chapters": completed, "failures": failures},
+                    message=f"Translation stopped after chapter {chapter_number}",
                 )
                 continue
             failures[chapter_number] = result.message
@@ -528,6 +638,7 @@ class OrchestrationRunner:
         chapter_start: int,
         chapter_end: int,
         force: bool = False,
+        stop_token: StopToken | None = None,
     ) -> StageResult:
         from resemantica.translation.pipeline import (
             translate_chapter_pass1,
@@ -547,6 +658,17 @@ class OrchestrationRunner:
         )
 
         for chapter_number in chapters:
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+                message="Batched translation stopped before next pass1 chapter",
+            )
             emit_event(
                 self.run_id,
                 self.release_id,
@@ -588,10 +710,32 @@ class OrchestrationRunner:
                     "failures": failures,
                 },
             )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+                message=f"Batched translation stopped after pass1 chapter {chapter_number}",
+            )
 
         for chapter_number in pass1_completed:
             if failures:
                 break
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+                message="Batched translation stopped before next pass2 chapter",
+            )
             try:
                 result = translate_chapter_pass2(
                     release_id=self.release_id,
@@ -625,10 +769,32 @@ class OrchestrationRunner:
                     "failures": failures,
                 },
             )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+                message=f"Batched translation stopped after pass2 chapter {chapter_number}",
+            )
 
         for chapter_number in pass2_completed:
             if failures:
                 break
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+                message="Batched translation stopped before next pass3 chapter",
+            )
             try:
                 result = translate_chapter_pass3(
                     release_id=self.release_id,
@@ -670,6 +836,17 @@ class OrchestrationRunner:
                     "failures": failures,
                 },
             )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "batched_model_order": True,
+                    "pass1_completed": pass1_completed,
+                    "pass2_completed": pass2_completed,
+                    "pass3_completed": pass3_completed,
+                    "failures": failures,
+                },
+                message=f"Batched translation stopped after pass3 chapter {chapter_number}",
+            )
 
         checkpoint = {
             "batched_model_order": True,
@@ -704,8 +881,9 @@ def run_stage(
     dry_run: bool = False,
     force: bool = False,
     batched_model_order: bool | None = None,
+    stop_token: StopToken | None = None,
 ) -> StageResult:
-    runner = OrchestrationRunner(release_id=release_id, run_id=run_id)
+    runner = OrchestrationRunner(release_id=release_id, run_id=run_id, stop_token=stop_token)
     return runner.run_stage(
         stage_name,
         checkpoint=checkpoint,
@@ -716,4 +894,5 @@ def run_stage(
         dry_run=dry_run,
         force=force,
         batched_model_order=batched_model_order,
+        stop_token=stop_token,
     )

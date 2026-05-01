@@ -126,6 +126,24 @@ HeaderBar {
     height: 1fr;
 }
 
+#dashboard-main {
+    layout: horizontal;
+    width: 1fr;
+    height: 1fr;
+}
+
+#dashboard-left {
+    width: 3fr;
+    height: 1fr;
+    padding-right: 1;
+}
+
+#dashboard-event-panel {
+    width: 2fr;
+    height: 1fr;
+    padding-left: 1;
+}
+
 #dashboard-session-info,
 #dashboard-stage-list,
 #dashboard-event-tail,
@@ -150,6 +168,11 @@ HeaderBar {
     border: solid #34324A;
     padding: 0 1;
     margin: 0 0 1 0;
+}
+
+#dashboard-event-tail {
+    height: 1fr;
+    margin: 0;
 }
 
 #dashboard-action-list {

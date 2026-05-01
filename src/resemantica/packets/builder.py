@@ -31,6 +31,7 @@ from resemantica.graph.models import GraphRelationship
 from resemantica.idioms.models import IdiomPolicy
 from resemantica.llm.tokens import count_tokens
 from resemantica.orchestration.events import emit_event
+from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.packets.bundler import build_paragraph_bundle
 from resemantica.packets.models import ParagraphBundle
 from resemantica.packets.invalidation import detect_stale_packet
@@ -765,6 +766,7 @@ def build_packets(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     graph_client: GraphClient | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, object]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -794,6 +796,14 @@ def build_packets(
     results: list[PacketBuildOutput] = []
     failures: list[str] = []
     for number in targets:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "completed_chapters": [row.chapter_number for row in results],
+                "failures": failures,
+            },
+            message="Packet build stopped before next chapter",
+        )
         _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_started", chapter_number=number)
         try:
             result = build_chapter_packet(
@@ -835,6 +845,14 @@ def build_packets(
                 chapter_number=number,
                 reason="failed",
             )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "completed_chapters": [row.chapter_number for row in results],
+                "failures": failures,
+            },
+            message=f"Packet build stopped after chapter {number}",
+        )
     built_count = len([row for row in results if row.status == "rebuilt_stale" or row.status == "built"])
     skipped_count = len([row for row in results if row.status == "skipped"])
     _emit(

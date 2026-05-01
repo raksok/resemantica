@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -18,6 +20,17 @@ PREPRO_STAGE_KEYS = [
     "preprocess-graph",
     "packets-build",
 ]
+
+
+@dataclass(frozen=True)
+class _ProgressModel:
+    total: int | None = None
+    completed: int = 0
+    active_chapter: int | None = None
+
+    @property
+    def has_progress(self) -> bool:
+        return self.total is not None
 
 
 class PreprocessingScreen(BaseScreen):
@@ -44,26 +57,38 @@ class PreprocessingScreen(BaseScreen):
         super()._refresh_all()
         self._refresh_preprocessing()
 
+    def _refresh_live_progress(self) -> None:
+        super()._refresh_live_progress()
+        self._update_status()
+        self._update_event_tail()
+
     def _refresh_preprocessing(self) -> None:
-        state = self._get_run_state()
+        state = self._run_state_for_refresh()
         stage_list = self.query_one("#preprocessing-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
         self._update_status()
         self._update_event_tail()
 
     def _build_stage_progress(self, state: dict | None = None) -> str:
-        if state is None:
+        if state is None and not self._fast_refresh_active():
             state = self._get_run_state()
         try:
+            events = self._recent_events_for_refresh()
             snapshot = self._snapshot(state)
-            return self._render_stages_from_snapshot(snapshot)
+            return self._render_stages_from_snapshot(snapshot, events=events)
         except Exception:
             return self._fallback_stage_progress(state)
 
     def _snapshot(self, state: dict | None = None) -> LaunchSnapshot:
         return self._build_snapshot(run_state=state)
 
-    def _render_stages_from_snapshot(self, snapshot: LaunchSnapshot) -> str:
+    def _render_stages_from_snapshot(
+        self,
+        snapshot: LaunchSnapshot,
+        *,
+        events: list[Any] | None = None,
+    ) -> str:
+        progress = self._derive_progress_models(events or [])
         lines: list[str] = ["[bold]Pipeline[/bold]"]
         for stage in snapshot.stages:
             if stage.key not in PREPRO_STAGE_KEYS:
@@ -88,18 +113,141 @@ class PreprocessingScreen(BaseScreen):
                 "stale": "\u25c9",
                 "disabled": "\u25cb",
             }.get(stage.status, "\u25cb")
-            if stage.status == "done":
+            stage_progress = progress.get(stage.key)
+            if stage_progress and stage_progress.has_progress:
+                bar = self._render_scoped_bar(stage_progress, stage.status)
+                numeric = f" {stage_progress.completed}/{stage_progress.total}"
+            elif stage.status == "done":
                 bar = "[green]\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501[/]"
+                numeric = ""
             elif stage.status == "running":
                 bar = "[cyan]\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u257a\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/]"
+                numeric = ""
             else:
                 bar = "[comment]\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/]"
+                numeric = ""
             lines.append(
-                f"  [{color}]{glyph}[/] {stage.label:<14} {bar}  [{color}]{stage.status.upper():<7}[/]"
+                f"  [{color}]{glyph}[/] {stage.label:<14} {bar}{numeric:<6}  [{color}]{stage.status.upper():<7}[/]"
             )
+            if stage.key == "preprocess-glossary":
+                for phase_key, phase_label in (
+                    ("preprocess-glossary.discover", "discover"),
+                    ("preprocess-glossary.translate", "translate"),
+                    ("preprocess-glossary.promote", "promote"),
+                ):
+                    phase_progress = progress.get(phase_key)
+                    if phase_progress is None or not phase_progress.has_progress:
+                        continue
+                    phase_status = "done" if phase_progress.completed >= (phase_progress.total or 0) else stage.status
+                    phase_bar = self._render_scoped_bar(phase_progress, phase_status)
+                    lines.append(
+                        f"      [comment]{phase_label:<10}[/] {phase_bar} "
+                        f"{phase_progress.completed}/{phase_progress.total}"
+                    )
         lines.append("")
         lines.append("[dim]g[/]=Glossary  [dim]s[/]=Summaries  [dim]i[/]=Idioms  [dim]r[/]=Graph  [dim]b[/]=Packets")
         return "\n".join(lines)
+
+    @classmethod
+    def _derive_progress_models(cls, events: list[Any]) -> dict[str, _ProgressModel]:
+        deduped: dict[str, Any] = {}
+        for event in events:
+            event_id = str(getattr(event, "event_id", ""))
+            if not event_id:
+                event_id = repr(
+                    (
+                        getattr(event, "event_time", ""),
+                        getattr(event, "event_type", ""),
+                        getattr(event, "chapter_number", None),
+                    )
+                )
+            deduped[event_id] = event
+
+        ordered = sorted(
+            deduped.values(),
+            key=lambda event: (str(getattr(event, "event_time", "")), str(getattr(event, "event_id", ""))),
+        )
+        totals: dict[str, int] = {}
+        completed: dict[str, set[int]] = {}
+        active: dict[str, int] = {}
+
+        for event in ordered:
+            event_type = str(getattr(event, "event_type", "") or "")
+            payload = getattr(event, "payload", {}) or {}
+            total = payload.get("total_chapters") if isinstance(payload, dict) else None
+            if event_type.endswith(".started"):
+                stage_key = event_type.removesuffix(".started")
+                if isinstance(total, int):
+                    totals[stage_key] = total
+                elif stage_key.endswith(".promote"):
+                    totals[stage_key] = 1
+                continue
+
+            if event_type.endswith(".chapter_started"):
+                stage_key = event_type.removesuffix(".chapter_started")
+                chapter_number = getattr(event, "chapter_number", None)
+                if isinstance(chapter_number, int):
+                    active[stage_key] = chapter_number
+                continue
+
+            if event_type.endswith(".chapter_completed") or event_type.endswith(".chapter_skipped"):
+                stage_key = event_type.rsplit(".", 1)[0]
+                chapter_number = getattr(event, "chapter_number", None)
+                if isinstance(chapter_number, int):
+                    completed.setdefault(stage_key, set()).add(chapter_number)
+                    if active.get(stage_key) == chapter_number:
+                        active.pop(stage_key, None)
+                continue
+
+            if event_type.endswith(".promote.completed"):
+                completed.setdefault(event_type.removesuffix(".completed"), set()).add(1)
+
+        models: dict[str, _ProgressModel] = {}
+        for stage_key, total in totals.items():
+            done = completed.get(stage_key, set())
+            models[stage_key] = _ProgressModel(
+                total=total,
+                completed=min(len(done), total),
+                active_chapter=active.get(stage_key),
+            )
+
+        glossary_phase = next(
+            (
+                models[key]
+                for key in (
+                    "preprocess-glossary.promote",
+                    "preprocess-glossary.translate",
+                    "preprocess-glossary.discover",
+                )
+                if key in models
+                and (
+                    models[key].completed < (models[key].total or 0)
+                    or key == "preprocess-glossary.promote"
+                )
+            ),
+            models.get("preprocess-glossary.discover"),
+        )
+        if glossary_phase is not None:
+            models["preprocess-glossary"] = glossary_phase
+
+        return models
+
+    @staticmethod
+    def _render_scoped_bar(model: _ProgressModel, status: str) -> str:
+        width = 20
+        total = max(1, model.total or 0)
+        completed = min(max(0, model.completed), total)
+        if completed >= total:
+            return "[green]\u2501" + "\u2501" * (width - 1) + "[/]"
+        filled = int((completed / total) * width)
+        has_active = model.active_chapter is not None or status == "running"
+        marker = "\u257a" if has_active else "\u2500"
+        empty = max(0, width - filled - (1 if has_active else 0))
+        color = "cyan" if status == "running" or has_active else "comment"
+        filled_text = "\u2501" * filled
+        marker_text = marker if has_active else ""
+        empty_text = "\u2500" * empty
+        return f"[{color}]{filled_text}{marker_text}{empty_text}[/]"
 
     def _fallback_stage_progress(self, state: dict | None) -> str:
         stages = [
@@ -157,7 +305,10 @@ class PreprocessingScreen(BaseScreen):
                 None,
             )
             lbl = sdef["label"] if sdef else snapshot.active_action
-            parts.append(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
+            if getattr(self.app, "active_stop_requested", False):
+                parts.append(f"[cyan]{self._spinner_frame()} Stopping after current chapter...[/]")
+            else:
+                parts.append(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
         if snapshot.latest_failure:
             parts.append(f"[red]Failure: {snapshot.latest_failure}[/]")
         widget.update("\n".join(parts) if parts else "")
@@ -175,20 +326,30 @@ class PreprocessingScreen(BaseScreen):
                 self.notify("No EPUB path selected", severity="error", timeout=3)
                 return
             resolved = Path(input_path).expanduser().resolve()
-            self.start_worker(stage_key, lambda: adapter.extract_epub(resolved))
+            self.start_worker(stage_key, lambda stop_token=None: adapter.extract_epub(resolved))
         else:
             options = self._chapter_scope_options()
-            self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key, **options))
+            self.start_worker(
+                stage_key,
+                lambda stop_token=None: adapter.launch_stage(
+                    stage_key,
+                    **({"stop_token": stop_token} if stop_token is not None else {}),
+                    **options,
+                ),
+            )
 
     def _update_event_tail(self) -> None:
         events = [
             event
-            for event in self._load_recent_run_events()
+            for event in self._recent_events_for_refresh()
             if self._event_matches_stage_prefix(event, ("preprocess-", "packets-build"))
         ]
         self.query_one("#preprocessing-event-tail", Static).update(
-            self._render_event_tail(events, title="Preprocessing Events")
+            self._render_cached_event_tail(events, title="Preprocessing Events")
         )
+
+    def _render_cached_event_tail(self, events: list, *, title: str) -> str:
+        return self._render_event_tail(events, title=title)
 
     def action_launch_glossary(self) -> None:
         self._launch_stage("preprocess-glossary")

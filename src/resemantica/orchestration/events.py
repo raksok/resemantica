@@ -15,6 +15,7 @@ _STANDARD_TYPE_ALIASES: dict[str, str] = {
     "stage_started": "orchestration.stage_started",
     "stage_completed": "orchestration.stage_completed",
     "stage_failed": "orchestration.stage_failed",
+    "stage_stopped": "orchestration.stage_stopped",
     "run_finalized": "orchestration.run_finalized",
     "paragraph_started": "translate.paragraph_started",
     "paragraph_completed": "translate.paragraph_completed",
@@ -98,6 +99,8 @@ def _is_critical_event(event: Event) -> bool:
     if event_type in {"validation_failed", "risk_detected"}:
         return True
     if event_type.endswith("_failed") or event_type.endswith(".failed"):
+        return True
+    if event_type.endswith("_stopped") or event_type.endswith(".stopped"):
         return True
     if event_type.endswith("_skipped") or event_type.endswith(".chapter_skipped"):
         return True

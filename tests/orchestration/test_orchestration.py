@@ -8,6 +8,7 @@ from resemantica.orchestration.models import (
     next_stage,
     STAGE_ORDER,
 )
+from resemantica.orchestration.stop import StopToken
 from resemantica.orchestration import OrchestrationRunner, emit_event, run_stage, resume_run, plan_cleanup, apply_cleanup
 from resemantica.tracking.models import Event, RunState
 from resemantica.tracking.repo import (
@@ -197,7 +198,13 @@ class TestRunStage:
 
         translated = []
 
-        def fake_translate_chapter(self, *, chapter_number: int, force: bool = False):
+        def fake_translate_chapter(
+            self,
+            *,
+            chapter_number: int,
+            force: bool = False,
+            stop_token=None,
+        ):
             translated.append(chapter_number)
             return StageResult(True, "translate-chapter", "ok")
 
@@ -207,6 +214,69 @@ class TestRunStage:
 
         assert result.success is True
         assert translated == [2, 3]
+
+    def test_run_stage_requested_stop_marks_state_stopped(self):
+        import uuid
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+        token = StopToken()
+        token.request_stop()
+
+        result = OrchestrationRunner(release_id, run_id).run_stage(
+            "reset",
+            dry_run=True,
+            stop_token=token,
+        )
+
+        assert result.success is True
+        assert result.stopped is True
+
+        conn = ensure_tracking_db(release_id)
+        try:
+            from resemantica.tracking.repo import load_run_state
+
+            state = load_run_state(conn, run_id)
+            events = load_events(conn, run_id=run_id, release_id=release_id)
+        finally:
+            conn.close()
+
+        assert state is not None
+        assert state.status == "stopped"
+        assert [event.event_type for event in events].count("stage_stopped") == 1
+
+    def test_translate_range_stop_after_chapter_does_not_start_next(self, monkeypatch):
+        import uuid
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+        token = StopToken()
+        translated: list[int] = []
+
+        monkeypatch.setattr(
+            OrchestrationRunner,
+            "_resolve_chapter_range",
+            lambda self, chapter_start, chapter_end: (1, 3),
+        )
+
+        def fake_translate_chapter(self, *, chapter_number: int, force: bool = False, stop_token=None):
+            translated.append(chapter_number)
+            if chapter_number == 1:
+                token.request_stop()
+            return StageResult(True, "translate-chapter", "ok")
+
+        monkeypatch.setattr(OrchestrationRunner, "_translate_chapter", fake_translate_chapter)
+
+        result = OrchestrationRunner(release_id, run_id).run_stage(
+            "translate-range",
+            chapter_start=1,
+            chapter_end=3,
+            stop_token=token,
+        )
+
+        assert result.stopped is True
+        assert translated == [1]
 
 
 class TestM11CleanupScopes:

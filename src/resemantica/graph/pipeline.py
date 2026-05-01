@@ -25,6 +25,7 @@ from resemantica.db.glossary_repo import ensure_glossary_schema, find_exact_lock
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.events import emit_event
+from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 _STAGE_NAME = "preprocess-graph"
@@ -140,6 +141,7 @@ def preprocess_graph(
     llm_client: LLMClient | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -198,8 +200,17 @@ def preprocess_graph(
                 chapter_number=chapter_number,
                 **payload,
             ),
+            stop_token=stop_token,
         )
         warnings.extend(extraction.warnings)
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "extract_completed": True,
+                "provisional_entities": len(extraction.provisional_entities),
+            },
+            message="Graph preprocess stopped after extraction",
+        )
 
         upsert_deferred_entities(conn, deferred_entities=extraction.deferred_entities)
 
@@ -278,6 +289,11 @@ def preprocess_graph(
         )
         if not validation.is_valid:
             raise RuntimeError("graph_validation_failed: " + " | ".join(validation.errors))
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"validation_completed": True},
+            message="Graph preprocess stopped after validation",
+        )
 
         confirmed_entities = [replace(row, status="confirmed") for row in provisional_entities]
         confirmed_aliases = [replace(row, status="confirmed") for row in provisional_aliases]
@@ -324,6 +340,14 @@ def preprocess_graph(
                 "schema_version": 1,
                 "warnings": warnings,
             },
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "snapshot_artifact": str(paths.graph_snapshot_path),
+                "warnings_artifact": str(paths.graph_warnings_path),
+            },
+            message="Graph preprocess stopped after snapshot",
         )
     finally:
         conn.close()

@@ -20,6 +20,7 @@ from resemantica.db.summary_repo import (
 from resemantica.llm.client import LLMClient
 from resemantica.llm.budget import PromptBudgetError
 from resemantica.llm.prompts import load_prompt
+from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
@@ -110,6 +111,7 @@ def preprocess_summaries(
     llm_client: LLMClient | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -143,6 +145,11 @@ def preprocess_summaries(
             chapter_payload = _read_json(chapter_file)
             chapter_number = int(chapter_payload["chapter_number"])
             chapter_source_hash = str(chapter_payload["chapter_source_hash"])
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"chapter_artifacts": chapter_results},
+                message="Summaries preprocess stopped before next chapter",
+            )
             _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_started", chapter_number=chapter_number)
 
             source_doc = str(chapter_payload.get("source_document_path", ""))
@@ -161,6 +168,11 @@ def preprocess_summaries(
                         "chapter_source_hash": chapter_source_hash,
                         "status": "skipped",
                     }
+                )
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"chapter_artifacts": chapter_results},
+                    message=f"Summaries preprocess stopped after chapter {chapter_number}",
                 )
                 continue
 
@@ -216,6 +228,11 @@ def preprocess_summaries(
                             "status": "skipped",
                         }
                     )
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"chapter_artifacts": chapter_results},
+                    message=f"Summaries preprocess stopped after chapter {chapter_number}",
+                )
                 continue
             _emit(run_id, release_id, f"{_STAGE_NAME}.draft_generated", chapter_number=chapter_number)
             _emit(
@@ -251,6 +268,11 @@ def preprocess_summaries(
                         "status": "skipped",
                         "reason": "prompt_budget_exceeded",
                     }
+                )
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"chapter_artifacts": chapter_results},
+                    message=f"Summaries preprocess stopped after chapter {chapter_number}",
                 )
                 continue
 
@@ -370,6 +392,11 @@ def preprocess_summaries(
                 }
             )
             _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_completed", chapter_number=chapter_number)
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"chapter_artifacts": chapter_results},
+                message=f"Summaries preprocess stopped after chapter {chapter_number}",
+            )
     finally:
         conn.close()
 

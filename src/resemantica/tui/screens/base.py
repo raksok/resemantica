@@ -18,9 +18,12 @@ from resemantica.tui.launch_control import (
     build_snapshot,
 )
 from resemantica.tui.navigation import format_footer_keys, format_location, screen_info_for_class_name
+from resemantica.orchestration.stop import StopToken
 
 if TYPE_CHECKING:
     from resemantica.tracking.models import Event
+
+_UNSET = object()
 
 
 @dataclass
@@ -72,17 +75,123 @@ class BaseScreen(Screen):
 
     def on_mount(self) -> None:
         self._header_pass_indicator = HeaderPassIndicator()
+        self._cached_run_state: dict[str, Any] | None = None
+        self._cached_recent_events: list[Event] = []
+        self._cached_chapter_count = 0
+        self._cached_extraction_manifest_exists = False
         self._refresh_all()
         self.set_interval(self._REFRESH_INTERVAL_SECONDS, self._refresh_all)
         self.set_interval(self._SPINNER_INTERVAL_SECONDS, self._refresh_header_pass)
 
     def _refresh_all(self) -> None:
+        if self._fast_refresh_active():
+            fast_state = self._cached_run_state_for_refresh() or {}
+            events = self._cached_recent_events_for_refresh()
+            chapter_count = self._cached_chapter_count_for_refresh()
+            self._update_header(state=fast_state, events=events, chapter_count=chapter_count)
+            self._update_footer(state=fast_state, events=events)
+            return
+
         state = self._get_run_state()
         events = self._load_recent_run_events()
         chapter_count = self._load_chapter_count()
+        self._store_refresh_cache(
+            state=state,
+            events=events,
+            chapter_count=chapter_count,
+        )
         self._update_header(state=state, events=events, chapter_count=chapter_count)
         self._update_spine()
         self._update_footer(state=state, events=events)
+
+    def _fast_refresh_active(self) -> bool:
+        try:
+            return getattr(self.app, "active_action", None) is not None
+        except Exception:
+            return False
+
+    def _store_refresh_cache(
+        self,
+        *,
+        state: dict[str, Any] | None | object = _UNSET,
+        events: list[Event] | object = _UNSET,
+        chapter_count: int | object = _UNSET,
+        extraction_manifest_exists: bool | object = _UNSET,
+    ) -> None:
+        if state is not _UNSET:
+            self._cached_run_state = state if isinstance(state, dict) else None
+        if isinstance(events, list):
+            self._cached_recent_events = events
+        if isinstance(chapter_count, int):
+            self._cached_chapter_count = chapter_count
+        if isinstance(extraction_manifest_exists, bool):
+            self._cached_extraction_manifest_exists = extraction_manifest_exists
+
+    def _cached_run_state_for_refresh(self) -> dict[str, Any] | None:
+        return getattr(self, "_cached_run_state", None)
+
+    def _cached_recent_events_for_refresh(self, *, limit: int = 5000) -> list[Event]:
+        events = getattr(self, "_cached_recent_events", [])
+        return events[:limit]
+
+    def _recent_live_events_for_refresh(self, *, limit: int = 500) -> list[Event]:
+        try:
+            recent_live_events = getattr(self.app, "recent_live_events", None)
+        except Exception:
+            return []
+        if not callable(recent_live_events):
+            return []
+        return recent_live_events(limit=limit)
+
+    def _combined_recent_events_for_refresh(
+        self,
+        persisted_events: list[Event],
+        *,
+        limit: int = 5000,
+    ) -> list[Event]:
+        live_events = self._recent_live_events_for_refresh()
+        if not live_events:
+            return persisted_events[:limit]
+
+        events_by_id: dict[str, Event] = {}
+        for event in [*persisted_events, *live_events]:
+            events_by_id[event.event_id] = event
+
+        def sort_key(event: Event) -> tuple[datetime, str]:
+            parsed = self._parse_timestamp(event.event_time)
+            return (parsed or datetime.min.replace(tzinfo=timezone.utc), event.event_id)
+
+        return sorted(events_by_id.values(), key=sort_key, reverse=True)[:limit]
+
+    def _cached_chapter_count_for_refresh(self) -> int:
+        return getattr(self, "_cached_chapter_count", 0)
+
+    def _cached_extraction_manifest_for_refresh(self) -> bool:
+        return getattr(self, "_cached_extraction_manifest_exists", False)
+
+    def _run_state_for_refresh(self) -> dict[str, Any] | None:
+        if self._fast_refresh_active():
+            return self._cached_run_state_for_refresh()
+        state = self._get_run_state()
+        self._store_refresh_cache(state=state)
+        return state
+
+    def _recent_events_for_refresh(self, *, limit: int = 5000) -> list[Event]:
+        if self._fast_refresh_active():
+            return self._combined_recent_events_for_refresh(
+                self._cached_recent_events_for_refresh(limit=limit),
+                limit=limit,
+            )
+        events = self._load_recent_run_events(limit=limit)
+        self._store_refresh_cache(events=events)
+        return events
+
+    def _extraction_manifest_for_refresh(self) -> bool:
+        if self._fast_refresh_active():
+            return self._cached_extraction_manifest_for_refresh()
+        exists = self._check_extraction_manifest()
+        self._store_refresh_cache(extraction_manifest_exists=exists)
+        return exists
 
     def _get_release_id(self) -> str | None:
         try:
@@ -129,14 +238,34 @@ class BaseScreen(Screen):
             )
         )
 
-        pass_label, pass_color = self._derive_pass_indicator(state, events)
+        state_for_indicator = state
+        active_action = getattr(self.app, "active_action", None)
+        if active_action is not None and (
+            not state_for_indicator or state_for_indicator.get("status") != "running"
+        ):
+            state_for_indicator = {
+                **(state_for_indicator or {}),
+                "stage_name": active_action,
+                "status": "running",
+            }
+
+        pass_label, pass_color = self._derive_pass_indicator(state_for_indicator, events)
         self._header_pass_indicator = HeaderPassIndicator(
             label=pass_label,
             color=pass_color,
-            running=bool(state and state.get("status") == "running"),
-            stale=self._is_run_stale(state, events),
+            running=bool(state_for_indicator and state_for_indicator.get("status") == "running"),
+            stale=self._is_run_stale(state_for_indicator, events),
         )
         self._refresh_header_pass()
+
+    def _refresh_live_progress(self) -> None:
+        if not self._fast_refresh_active():
+            return
+        events = self._recent_events_for_refresh()
+        state = self._cached_run_state_for_refresh() or {}
+        chapter_count = self._cached_chapter_count_for_refresh()
+        self._update_header(state=state, events=events, chapter_count=chapter_count)
+        self._update_footer(state=state, events=events)
 
     def _refresh_header_pass(self) -> None:
         indicator = getattr(self, "_header_pass_indicator", HeaderPassIndicator())
@@ -240,7 +369,13 @@ class BaseScreen(Screen):
         footer_elapsed.update(metrics["elapsed"])
 
         footer_keys = self.query_one("#footer-keys", Static)
-        footer_keys.update(format_footer_keys(screen_info_for_class_name(self.__class__.__name__)))
+        keys = format_footer_keys(screen_info_for_class_name(self.__class__.__name__))
+        if getattr(self.app, "active_action", None) is not None:
+            if getattr(self.app, "active_stop_requested", False):
+                keys = f"{keys}  [cyan]Stopping[/]"
+            else:
+                keys = f"{keys}  x Stop"
+        footer_keys.update(keys)
 
     def _get_run_state(self) -> dict[str, Any] | None:
         run_id = self._get_run_id()
@@ -355,6 +490,7 @@ class BaseScreen(Screen):
         title: str,
         limit: int = 5,
     ) -> str:
+        events = cls._dedupe_event_tail_events(events)
         lines = [f"[bold]{title}[/bold]"]
         if not events:
             lines.append("  [dim]No recent events.[/]")
@@ -364,6 +500,36 @@ class BaseScreen(Screen):
         if len(events) > limit:
             lines.append(f"  [dim]+{len(events) - limit} more[/]")
         return "\n".join(lines)
+
+    @classmethod
+    def _dedupe_event_tail_events(cls, events: list[Event]) -> list[Event]:
+        deduped: list[Event] = []
+        seen_ids: set[str] = set()
+        seen_signatures: set[tuple[object, ...]] = set()
+        for event in events:
+            if event.event_id in seen_ids:
+                continue
+            signature = cls._event_tail_signature(event)
+            if signature in seen_signatures:
+                continue
+            seen_ids.add(event.event_id)
+            seen_signatures.add(signature)
+            deduped.append(event)
+        return deduped
+
+    @staticmethod
+    def _event_tail_signature(event: Event) -> tuple[object, ...]:
+        return (
+            event.run_id,
+            event.release_id,
+            event.event_type,
+            event.stage_name,
+            event.chapter_number,
+            event.block_id,
+            event.severity,
+            event.message,
+            repr(sorted(event.payload.items())),
+        )
 
     @staticmethod
     def _coerce_int(value: Any) -> int | None:
@@ -428,6 +594,8 @@ class BaseScreen(Screen):
             return ("IDLE", "comment")
 
         stage_name = str(state.get("stage_name") or "").lower()
+        if stage_name == "epub-extract":
+            return ("EXTRACT", "cyan")
         if stage_name == "epub-rebuild":
             return ("REBUILD", "green")
         if stage_name.startswith("preprocess-") or stage_name == "packets-build":
@@ -452,7 +620,7 @@ class BaseScreen(Screen):
                 return ("PASS 2", "cyan")
             return ("PASS 1", "cyan")
 
-        return ("IDLE", "comment")
+        return ("RUNNING", "cyan")
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime | None:
@@ -524,38 +692,53 @@ class BaseScreen(Screen):
         run_state: dict | None = None,
     ) -> LaunchSnapshot:
         if events is None:
-            events = self._load_recent_run_events()
+            events = self._recent_events_for_refresh()
         if run_state is None:
-            run_state = self._get_run_state()
+            run_state = self._run_state_for_refresh()
         return build_snapshot(
             context=self._build_launch_context(),
             active_action=getattr(self.app, "active_action", None),
             run_state=run_state,
             events=events,
-            extraction_manifest_exists=self._check_extraction_manifest(),
+            extraction_manifest_exists=self._extraction_manifest_for_refresh(),
         )
 
-    def start_worker(self, action_key: str, adapter_method: Callable[[], Any]) -> None:
+    def start_worker(self, action_key: str, adapter_method: Callable[..., Any]) -> None:
         if getattr(self.app, "active_action", None) is not None:
             self.notify("Another action is already running", severity="warning", timeout=3)
             return
+        clear_live_events = getattr(self.app, "clear_live_events", None)
+        if callable(clear_live_events):
+            clear_live_events()
+        stop_token = StopToken()
         self.app.active_action = action_key  # type: ignore[attr-defined]
-        self._run_worker(action_key, adapter_method)
+        self.app.active_stop_token = stop_token  # type: ignore[attr-defined]
+        self.app.active_stop_requested = False  # type: ignore[attr-defined]
+        self._run_worker(action_key, adapter_method, stop_token)
 
     @work(thread=True)
-    async def _run_worker(self, action_key: str, adapter_method: Callable[[], Any]) -> None:
+    async def _run_worker(
+        self,
+        action_key: str,
+        adapter_method: Callable[..., Any],
+        stop_token: StopToken,
+    ) -> None:
         try:
-            result = adapter_method()
+            result = adapter_method(stop_token)
             self.app.call_from_thread(self._on_worker_success, action_key, result)
         except Exception as exc:
             self.app.call_from_thread(self._on_worker_failure, action_key, str(exc))
 
     def _on_worker_success(self, action_key: str, result: Any) -> None:
         self.app.active_action = None  # type: ignore[attr-defined]
+        self.app.active_stop_token = None  # type: ignore[attr-defined]
+        self.app.active_stop_requested = False  # type: ignore[attr-defined]
         self._refresh_all()
 
     def _on_worker_failure(self, action_key: str, error: str) -> None:
         self.app.active_action = None  # type: ignore[attr-defined]
+        self.app.active_stop_token = None  # type: ignore[attr-defined]
+        self.app.active_stop_requested = False  # type: ignore[attr-defined]
         self.notify(f"Launch failed: {error}", severity="error", timeout=5)
         self._refresh_all()
 

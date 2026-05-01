@@ -26,6 +26,7 @@ from resemantica.glossary.validators import normalize_term, validate_candidates_
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.events import emit_event
+from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 _STAGE_NAME = "preprocess-glossary"
@@ -125,6 +126,7 @@ def discover_glossary_candidates(
     llm_client: LLMClient | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -167,6 +169,7 @@ def discover_glossary_candidates(
             chapter_number=chapter_number,
             **payload,
         ),
+        stop_token=stop_token,
     )
 
     conn = open_connection(paths.db_path)
@@ -187,6 +190,11 @@ def discover_glossary_candidates(
         f"{_STAGE_NAME}.discover.completed",
         discovered_count=len(discovered),
     )
+    raise_if_stop_requested(
+        stop_token,
+        checkpoint={"discover_completed": True, "candidates_written": len(discovered)},
+        message="Glossary preprocess stopped after discovery",
+    )
 
     return {
         "status": "success",
@@ -204,6 +212,7 @@ def translate_glossary_candidates(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -222,6 +231,7 @@ def translate_glossary_candidates(
             total_chapters=len(chapters_with_pending),
         )
         active_chapter: int | None = None
+        completed_chapters: list[int] = []
         for candidate in pending:
             chapter = candidate.first_seen_chapter
             if active_chapter != chapter:
@@ -232,6 +242,17 @@ def translate_glossary_candidates(
                         f"{_STAGE_NAME}.translate.chapter_completed",
                         chapter_number=active_chapter,
                     )
+                    completed_chapters.append(active_chapter)
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint={"translate_completed_chapters": completed_chapters},
+                        message=f"Glossary translation stopped after chapter {active_chapter}",
+                    )
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"translate_completed_chapters": completed_chapters},
+                    message="Glossary translation stopped before next chapter",
+                )
                 active_chapter = chapter
                 _emit(
                     run_id,
@@ -262,6 +283,12 @@ def translate_glossary_candidates(
                 release_id,
                 f"{_STAGE_NAME}.translate.chapter_completed",
                 chapter_number=active_chapter,
+            )
+            completed_chapters.append(active_chapter)
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"translate_completed_chapters": completed_chapters},
+                message=f"Glossary translation stopped after chapter {active_chapter}",
             )
 
         _write_candidate_snapshot(
@@ -294,6 +321,7 @@ def promote_glossary_candidates(
     run_id: str,
     config: AppConfig | None = None,
     project_root: Path | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -301,6 +329,11 @@ def promote_glossary_candidates(
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
     try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"promote_completed": False},
+            message="Glossary promotion stopped before starting",
+        )
         _emit(run_id, release_id, f"{_STAGE_NAME}.promote.started")
         promotable_candidates = list_candidates_for_promotion(conn, release_id=release_id)
         existing_entries = list_locked_entries(conn, release_id=release_id)
@@ -342,6 +375,14 @@ def promote_glossary_candidates(
             release_id,
             f"{_STAGE_NAME}.promote.completed",
             promoted_count=len(promotable_without_conflicts),
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "promote_completed": True,
+                "promoted_count": len(promotable_without_conflicts),
+            },
+            message="Glossary preprocess stopped after promotion",
         )
         _emit(
             run_id,

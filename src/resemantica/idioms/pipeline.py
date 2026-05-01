@@ -28,6 +28,7 @@ from resemantica.idioms.validators import normalize_idiom_source, validate_idiom
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import load_prompt, render_named_sections
 from resemantica.orchestration.events import emit_event
+from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 _STAGE_NAME = "preprocess-idioms"
@@ -139,10 +140,28 @@ def translate_idiom_candidates(
     translator_model_name: str,
     prompt_template: str,
     prompt_version: str,
+    stop_token: StopToken | None = None,
 ) -> int:
     """Phase 2: Translate discovered idiom candidates using the Translator model."""
     pending = list_candidates_for_translation(conn, release_id=release_id)
+    active_chapter: int | None = None
+    completed_chapters: list[int] = []
     for candidate in pending:
+        chapter = candidate.first_seen_chapter
+        if active_chapter != chapter:
+            if active_chapter is not None:
+                completed_chapters.append(active_chapter)
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"idiom_translate_completed_chapters": completed_chapters},
+                    message=f"Idiom translation stopped after chapter {active_chapter}",
+                )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"idiom_translate_completed_chapters": completed_chapters},
+                message="Idiom translation stopped before next chapter",
+            )
+            active_chapter = chapter
         prompt = render_named_sections(
             prompt_template,
             sections={
@@ -163,6 +182,13 @@ def translate_idiom_candidates(
             translator_model_name=translator_model_name,
             translator_prompt_version=prompt_version,
         )
+    if active_chapter is not None:
+        completed_chapters.append(active_chapter)
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"idiom_translate_completed_chapters": completed_chapters},
+            message=f"Idiom translation stopped after chapter {active_chapter}",
+        )
     return len(pending)
 
 
@@ -176,6 +202,7 @@ def preprocess_idioms(
     translator_llm_client: LLMClient | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -230,8 +257,17 @@ def preprocess_idioms(
                 chapter_number=chapter_number,
                 **payload,
             ),
+            stop_token=stop_token,
         )
         insert_detected_candidates(conn, candidates=detected_candidates)
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "detect_completed": True,
+                "detected_candidates": len(detected_candidates),
+            },
+            message="Idiom preprocess stopped after detection",
+        )
 
         # Phase 2: Translate (Translator)
         translated_count = translate_idiom_candidates(
@@ -242,9 +278,23 @@ def preprocess_idioms(
             translator_model_name=config_obj.models.translator_name,
             prompt_template=translate_prompt.template,
             prompt_version=translate_prompt.version,
+            stop_token=stop_token,
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "detect_completed": True,
+                "translated_count": translated_count,
+            },
+            message="Idiom preprocess stopped after translation",
         )
 
         # Phase 3: Promote (no LLM)
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"promote_completed": False},
+            message="Idiom promotion stopped before starting",
+        )
         pending_candidates = list_candidates_for_promotion(conn, release_id=release_id)
         existing_policies = list_policies(conn, release_id=release_id)
         validation = validate_idiom_policy(
@@ -279,6 +329,14 @@ def preprocess_idioms(
             conn,
             release_id=release_id,
             output_path=paths.idiom_conflicts_path,
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "promote_completed": True,
+                "promoted_count": len(validation.promotion_entries),
+            },
+            message="Idiom preprocess stopped after promotion",
         )
     finally:
         conn.close()

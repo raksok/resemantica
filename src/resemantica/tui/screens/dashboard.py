@@ -4,7 +4,7 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Button, Static
 
 from resemantica.tui.launch_control import STAGE_DEFINITIONS, next_available_stage
@@ -61,16 +61,19 @@ class DashboardScreen(BaseScreen):
 
     def _content_widgets(self) -> ComposeResult:
         with Container(id="dashboard-content"):
-            yield Static("Dashboard", classes="app-title")
-            yield Static("", id="dashboard-session-info")
-            with Horizontal(id="dashboard-action-list"):
-                yield Button("[[ NEW FILE ]]", id="btn-new-file")
-                yield Button("[[ RESUME RUN ]]", id="btn-resume-run")
-            yield Static("", id="dashboard-stage-list")
-            yield Static("", id="dashboard-active-worker")
-            yield Static("", id="dashboard-latest-failure")
-            yield Static("", id="dashboard-event-tail", classes="event-tail")
-            yield Static("", id="dashboard-key-hints")
+            with Horizontal(id="dashboard-main"):
+                with Vertical(id="dashboard-left"):
+                    yield Static("Dashboard", classes="app-title")
+                    yield Static("", id="dashboard-session-info")
+                    with Horizontal(id="dashboard-action-list"):
+                        yield Button("[[ NEW FILE ]]", id="btn-new-file")
+                        yield Button("[[ RESUME RUN ]]", id="btn-resume-run")
+                    yield Static("", id="dashboard-stage-list")
+                    yield Static("", id="dashboard-active-worker")
+                    yield Static("", id="dashboard-latest-failure")
+                    yield Static("", id="dashboard-key-hints")
+                with Vertical(id="dashboard-event-panel"):
+                    yield Static("", id="dashboard-event-tail", classes="event-tail")
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -79,8 +82,23 @@ class DashboardScreen(BaseScreen):
         super()._refresh_all()
         self._refresh_dashboard()
 
+    def _refresh_live_progress(self) -> None:
+        super()._refresh_live_progress()
+        events = self._recent_events_for_refresh()
+
+        worker_widget = self.query_one("#dashboard-active-worker", Static)
+        active_action = getattr(self.app, "active_action", None)
+        if active_action:
+            sdef = next((d for d in STAGE_DEFINITIONS if d["key"] == active_action), None)
+            lbl = sdef["label"] if sdef else active_action
+            worker_widget.update(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
+
+        self.query_one("#dashboard-event-tail", Static).update(
+            self._render_cached_event_tail(events, title="Recent Events")
+        )
+
     def _refresh_dashboard(self) -> None:
-        events = self._load_recent_run_events()
+        events = self._recent_events_for_refresh()
         snapshot = self._build_snapshot(events)
 
         session = getattr(self.app, "session", None)
@@ -92,11 +110,13 @@ class DashboardScreen(BaseScreen):
             rng = f"Ch {snapshot.context.chapter_start or 1}\u2013{snapshot.context.chapter_end or 'end'}"
             info_lines.append(f"  Chapters: {rng}")
 
-        if session and session.input_path:
+        if session and session.input_path and not self._fast_refresh_active():
             resolved = Path(session.input_path).expanduser().resolve()
             info_lines.append(f"  Resolved: {resolved}")
             info_lines.append(f"  Exists:   {'[green]yes[/]' if resolved.exists() else '[red]no[/]'}")
             info_lines.append(f"  Is .epub: {'[green]yes[/]' if resolved.suffix == '.epub' else '[red]no[/]'}")
+        elif session and session.input_path:
+            info_lines.append("  Path checks: [dim]paused while action runs[/]")
 
         self.query_one("#dashboard-session-info", Static).update("\n".join(info_lines))
 
@@ -126,7 +146,7 @@ class DashboardScreen(BaseScreen):
             failure_widget.update("")
 
         self.query_one("#dashboard-event-tail", Static).update(
-            self._render_event_tail(events, title="Recent Events")
+            self._render_cached_event_tail(events, title="Recent Events")
         )
 
         hints = self.query_one("#dashboard-key-hints", Static)
@@ -134,6 +154,9 @@ class DashboardScreen(BaseScreen):
             "[dim]p[/]=Production  "
             "[dim]n[/]=Next Stage"
         )
+
+    def _render_cached_event_tail(self, events: list, *, title: str) -> str:
+        return self._render_event_tail(events, title=title)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-new-file":
@@ -207,7 +230,13 @@ class DashboardScreen(BaseScreen):
             self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
             return
         options = self._chapter_scope_options()
-        self.start_worker("production", lambda: adapter.launch_production(**options))
+        self.start_worker(
+            "production",
+            lambda stop_token=None: adapter.launch_production(
+                **({"stop_token": stop_token} if stop_token is not None else {}),
+                **options,
+            ),
+        )
 
     def action_launch_next(self) -> None:
         snapshot = self._build_snapshot()
@@ -226,15 +255,34 @@ class DashboardScreen(BaseScreen):
                 self.notify("No EPUB path selected", severity="error", timeout=3)
                 return
             resolved = Path(input_path).expanduser().resolve()
-            self.start_worker(next_stage.key, lambda: adapter.extract_epub(resolved))
+            self.start_worker(next_stage.key, lambda stop_token=None: adapter.extract_epub(resolved))
         elif next_stage.key == "production":
             options = self._chapter_scope_options()
-            self.start_worker(next_stage.key, lambda: adapter.launch_production(**options))
+            self.start_worker(
+                next_stage.key,
+                lambda stop_token=None: adapter.launch_production(
+                    **({"stop_token": stop_token} if stop_token is not None else {}),
+                    **options,
+                ),
+            )
         elif next_stage.key == "epub-rebuild":
-            self.start_worker(next_stage.key, lambda: adapter.launch_stage(next_stage.key))
+            self.start_worker(
+                next_stage.key,
+                lambda stop_token=None: adapter.launch_stage(
+                    next_stage.key,
+                    **({"stop_token": stop_token} if stop_token is not None else {}),
+                ),
+            )
         else:
             options = self._chapter_scope_options()
-            self.start_worker(next_stage.key, lambda: adapter.launch_stage(next_stage.key, **options))
+            self.start_worker(
+                next_stage.key,
+                lambda stop_token=None: adapter.launch_stage(
+                    next_stage.key,
+                    **({"stop_token": stop_token} if stop_token is not None else {}),
+                    **options,
+                ),
+            )
 
     def _build_phase_progress(self, state: dict | None = None) -> str:
         return type(self)._build_phase_progress_static(state)

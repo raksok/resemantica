@@ -31,6 +31,22 @@ class IngestionScreen(BaseScreen):
         super()._refresh_all()
         self._refresh_ingestion()
 
+    def _refresh_live_progress(self) -> None:
+        super()._refresh_live_progress()
+        if getattr(self.app, "active_action", None) == "epub-extract":
+            status_widget = self.query_one("#ingestion-status", Static)
+            status_widget.update(
+                "\n".join(
+                    [
+                        "[bold]Extraction:[/] [cyan]RUNNING[/]",
+                        f"[cyan]{self._spinner_frame()} Extracting...[/]",
+                        "",
+                        "[dim]e[/]=Extract",
+                    ]
+                )
+            )
+        self._update_event_tail()
+
     def _refresh_ingestion(self) -> None:
         session = getattr(self.app, "session", None)
         input_path = session.input_path if session else None
@@ -75,8 +91,12 @@ class IngestionScreen(BaseScreen):
         parts.append("[dim]e[/]=Extract")
         status_widget.update("\n".join(parts))
 
+        if snapshot.active_action == "epub-extract":
+            self._update_event_tail()
+            return
+
         chapter_widget = self.query_one("#ingestion-chapter-list", Static)
-        if self._check_extraction_manifest():
+        if self._extraction_manifest_for_refresh():
             try:
                 from resemantica.chapters.manifest import list_extracted_chapters
                 from resemantica.settings import derive_paths, load_config
@@ -104,7 +124,7 @@ class IngestionScreen(BaseScreen):
     def _update_event_tail(self) -> None:
         events = [
             event
-            for event in self._load_recent_run_events()
+            for event in self._recent_events_for_refresh()
             if self._event_matches_stage_prefix(event, ("epub-extract",))
         ]
         self.query_one("#ingestion-event-tail", Static).update(
@@ -124,4 +144,4 @@ class IngestionScreen(BaseScreen):
             return
 
         resolved = Path(input_path).expanduser().resolve()
-        self.start_worker("epub-extract", lambda: adapter.extract_epub(resolved))
+        self.start_worker("epub-extract", lambda stop_token=None: adapter.extract_epub(resolved))

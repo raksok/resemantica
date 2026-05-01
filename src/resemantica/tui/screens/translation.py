@@ -30,8 +30,13 @@ class TranslationScreen(BaseScreen):
         super()._refresh_all()
         self._refresh_translation()
 
+    def _refresh_live_progress(self) -> None:
+        super()._refresh_live_progress()
+        self._update_status()
+        self._update_event_tail()
+
     def _refresh_translation(self) -> None:
-        state = self._get_run_state()
+        state = self._run_state_for_refresh()
 
         header = self.query_one("#translation-header", Static)
         if state:
@@ -43,11 +48,14 @@ class TranslationScreen(BaseScreen):
             header.update("[dim]No translation run active.[/]")
 
         block_list = self.query_one("#translation-block-list", Static)
-        block_data = self._load_block_progress()
-        if block_data:
-            block_list.update(self._render_block_progress(block_data))
+        if self._fast_refresh_active():
+            block_list.update("[dim]Block progress updates resume when action completes.[/]")
         else:
-            block_list.update("[dim]No translation run active.[/]")
+            block_data = self._load_block_progress()
+            if block_data:
+                block_list.update(self._render_block_progress(block_data))
+            else:
+                block_list.update("[dim]No translation run active.[/]")
 
         self._update_status()
         self._update_event_tail()
@@ -57,7 +65,10 @@ class TranslationScreen(BaseScreen):
         widget = self.query_one("#translation-status", Static)
         parts: list[str] = []
         if snapshot.active_action:
-            parts.append(f"[cyan]{self._spinner_frame()} {snapshot.active_action} in progress...[/]")
+            if getattr(self.app, "active_stop_requested", False):
+                parts.append(f"[cyan]{self._spinner_frame()} Stopping after current chapter...[/]")
+            else:
+                parts.append(f"[cyan]{self._spinner_frame()} {snapshot.active_action} in progress...[/]")
         if snapshot.latest_failure:
             parts.append(f"[red]Failure: {snapshot.latest_failure}[/]")
         if parts:
@@ -73,9 +84,22 @@ class TranslationScreen(BaseScreen):
 
         if stage_key == "translate-range":
             kwargs = self._chapter_scope_options()
-            self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key, **kwargs))
+            self.start_worker(
+                stage_key,
+                lambda stop_token=None: adapter.launch_stage(
+                    stage_key,
+                    **({"stop_token": stop_token} if stop_token is not None else {}),
+                    **kwargs,
+                ),
+            )
         else:
-            self.start_worker(stage_key, lambda: adapter.launch_stage(stage_key))
+            self.start_worker(
+                stage_key,
+                lambda stop_token=None: adapter.launch_stage(
+                    stage_key,
+                    **({"stop_token": stop_token} if stop_token is not None else {}),
+                ),
+            )
 
     def action_launch_translate(self) -> None:
         self._launch_stage("translate-range")
@@ -86,12 +110,15 @@ class TranslationScreen(BaseScreen):
     def _update_event_tail(self) -> None:
         events = [
             event
-            for event in self._load_recent_run_events()
+            for event in self._recent_events_for_refresh()
             if self._is_translation_event(event)
         ]
         self.query_one("#translation-event-tail", Static).update(
-            self._render_event_tail(events, title="Translation Events")
+            self._render_cached_event_tail(events, title="Translation Events")
         )
+
+    def _render_cached_event_tail(self, events: list, *, title: str) -> str:
+        return self._render_event_tail(events, title=title)
 
     @staticmethod
     def _is_translation_event(event: object) -> bool:

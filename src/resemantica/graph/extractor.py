@@ -29,6 +29,7 @@ from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_tex
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
+from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, load_config
 
 
@@ -381,6 +382,7 @@ def extract_entities(
     chapter_refs: list[ChapterRef] | None = None,
     cache_root: Path | None = None,
     event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
+    stop_token: StopToken | None = None,
 ) -> GraphExtractionResult:
     config_obj = config or load_config()
     tracked_entries = [
@@ -430,6 +432,14 @@ def extract_entities(
         chapter_file = chapter_ref.chapter_path
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", chapter_ref.chapter_number))
+        completed_chapters = sorted(
+            {appearance.chapter_number for appearance in appearances_by_id.values()}
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"completed_chapters": completed_chapters},
+            message="Graph extraction stopped before next chapter",
+        )
         if event_callback is not None:
             event_callback("chapter_started", chapter_number, {})
 
@@ -711,6 +721,14 @@ def extract_entities(
             )
         if event_callback is not None:
             event_callback("chapter_completed", chapter_number, {})
+        completed_chapters = sorted(
+            {appearance.chapter_number for appearance in appearances_by_id.values()}
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"completed_chapters": completed_chapters},
+            message=f"Graph extraction stopped after chapter {chapter_number}",
+        )
 
     deferred_entities = [
         DeferredEntityRecord(

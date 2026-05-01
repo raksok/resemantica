@@ -24,6 +24,7 @@ class StageResult:
     message: str = ""
     checkpoint: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+    stopped: bool = False
 
 
 def legal_transition(current: Optional[str], target: str) -> bool:

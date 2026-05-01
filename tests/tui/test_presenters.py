@@ -369,6 +369,29 @@ def test_screen_event_tails_render_filtered_events():
     )
 
 
+def test_screen_event_tails_collapse_duplicate_progress_rows():
+    from resemantica.tui.screens.base import BaseScreen
+
+    first = _make_event(
+        event_type="epub-extract.chapter_started",
+        event_time=_iso(12, 1),
+        message="Extracting chapter 96",
+        chapter_number=96,
+    )
+    first.stage_name = "epub-extract"
+    duplicate = _make_event(
+        event_type=first.event_type,
+        event_time=_iso(12, 2),
+        message=first.message,
+        chapter_number=first.chapter_number,
+    )
+    duplicate.stage_name = first.stage_name
+
+    tail = BaseScreen._render_event_tail([first, duplicate], title="Recent Events")
+
+    assert tail.count("Extracting chapter 96") == 1
+
+
 def test_tui_screen_event_tail_widgets_render(monkeypatch):
     from textual.widgets import Static
 
@@ -504,6 +527,107 @@ def test_preprocessing_presenter_builds_stages():
     assert "◉[/] Glossary" in result
     assert "━━━━━━━━╺─────────" in result
     assert "█" not in result
+
+
+def test_preprocessing_progress_models_use_scoped_started_totals():
+    from resemantica.tui.screens.preprocessing import PreprocessingScreen
+
+    events = [
+        _make_event(
+            event_type="preprocess-glossary.discover.started",
+            event_time=_iso(12, 0),
+            payload={"total_chapters": 12},
+        ),
+        _make_event(
+            event_type="preprocess-glossary.discover.chapter_completed",
+            event_time=_iso(12, 1),
+            chapter_number=1,
+        ),
+        _make_event(
+            event_type="preprocess-glossary.discover.chapter_completed",
+            event_time=_iso(12, 2),
+            chapter_number=2,
+        ),
+        _make_event(
+            event_type="preprocess-glossary.discover.chapter_skipped",
+            event_time=_iso(12, 3),
+            chapter_number=3,
+        ),
+        _make_event(
+            event_type="preprocess-glossary.discover.chapter_started",
+            event_time=_iso(12, 4),
+            chapter_number=4,
+        ),
+    ]
+
+    model = PreprocessingScreen._derive_progress_models(events)[
+        "preprocess-glossary.discover"
+    ]
+
+    assert model.total == 12
+    assert model.completed == 3
+    assert model.active_chapter == 4
+
+
+def test_preprocessing_render_shows_glossary_parent_and_active_subphase():
+    from resemantica.tui.launch_control import (
+        LaunchAction,
+        LaunchContext,
+        LaunchSnapshot,
+        LaunchStageStatus,
+    )
+    from resemantica.tui.screens.preprocessing import PreprocessingScreen
+
+    events = [
+        _make_event(
+            event_type="preprocess-glossary.discover.started",
+            event_time=_iso(12, 0),
+            payload={"total_chapters": 12},
+        ),
+        _make_event(
+            event_type="preprocess-glossary.discover.chapter_completed",
+            event_time=_iso(12, 1),
+            chapter_number=1,
+        ),
+        _make_event(
+            event_type="preprocess-glossary.discover.chapter_skipped",
+            event_time=_iso(12, 2),
+            chapter_number=2,
+        ),
+        _make_event(
+            event_type="preprocess-glossary.discover.chapter_completed",
+            event_time=_iso(12, 3),
+            chapter_number=3,
+        ),
+    ]
+    snapshot = LaunchSnapshot(
+        context=LaunchContext(release_id="rel-1", run_id="run-1"),
+        active_action="preprocess-glossary",
+        stages=[
+            LaunchStageStatus(
+                key="preprocess-glossary",
+                label="Glossary",
+                status="running",
+                action=LaunchAction(
+                    key="preprocess-glossary",
+                    label="Glossary",
+                    enabled=False,
+                    reason="",
+                    shortcut="g",
+                ),
+                latest_event=None,
+                latest_failure=None,
+            )
+        ],
+        latest_failure=None,
+    )
+
+    rendered = PreprocessingScreen()._render_stages_from_snapshot(snapshot, events=events)
+
+    assert "Glossary" in rendered
+    assert "discover" in rendered
+    assert "3/12" in rendered
+    assert "96" not in rendered
 
 
 def test_preprocessing_launch_workflow_chains_stages():
@@ -648,6 +772,9 @@ def test_base_screen_formats_chapter_progress_from_checkpoint_shapes():
 def test_base_screen_maps_pass_labels_for_supported_stages():
     from resemantica.tui.screens.base import BaseScreen
 
+    extract_state = {"stage_name": "epub-extract", "status": "running", "checkpoint": {}}
+    assert BaseScreen._derive_pass_indicator(extract_state, []) == ("EXTRACT", "cyan")
+
     preprocess_state = {"stage_name": "preprocess-glossary", "status": "running", "checkpoint": {}}
     assert BaseScreen._derive_pass_indicator(preprocess_state, []) == ("PREPROCESS", "comment")
 
@@ -673,6 +800,9 @@ def test_base_screen_maps_pass_labels_for_supported_stages():
 
     rebuild_state = {"stage_name": "epub-rebuild", "status": "running", "checkpoint": {}}
     assert BaseScreen._derive_pass_indicator(rebuild_state, pass3_events) == ("REBUILD", "green")
+
+    unknown_state = {"stage_name": "custom-stage", "status": "running", "checkpoint": {}}
+    assert BaseScreen._derive_pass_indicator(unknown_state, []) == ("RUNNING", "cyan")
 
     idle_state = {"stage_name": "translate-range", "status": "completed", "checkpoint": {}}
     assert BaseScreen._derive_pass_indicator(idle_state, pass3_events) == ("IDLE", "comment")
@@ -805,6 +935,265 @@ def test_tui_spinner_refresh_does_not_reload_run_data():
     screen.query_one = lambda selector, widget_type=None: Static(id="header-pass")  # type: ignore[method-assign]
 
     screen._refresh_header_pass()
+
+
+def test_tui_fast_refresh_skips_heavy_loaders_during_active_action(monkeypatch):
+    from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.base import BaseScreen
+
+    def fail_load(*args, **kwargs):
+        raise AssertionError("active action refresh should use cached data")
+
+    monkeypatch.setattr(BaseScreen, "_get_run_state", fail_load)
+    monkeypatch.setattr(BaseScreen, "_load_recent_run_events", fail_load)
+    monkeypatch.setattr(BaseScreen, "_load_chapter_count", fail_load)
+    monkeypatch.setattr(BaseScreen, "_check_extraction_manifest", fail_load)
+    monkeypatch.setattr(BaseScreen, "_update_spine", fail_load)
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "epub-extract"
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.pause()
+            pilot.app.screen._refresh_all()
+
+    asyncio.run(run())
+
+
+def test_ingestion_fast_refresh_renders_extracting_without_manifest_loads(monkeypatch):
+    from pathlib import Path
+
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.base import BaseScreen
+
+    def fail_load(*args, **kwargs):
+        raise AssertionError("ingestion extraction refresh should not load artifacts")
+
+    monkeypatch.setattr(BaseScreen, "_load_recent_run_events", fail_load)
+    monkeypatch.setattr(BaseScreen, "_get_run_state", fail_load)
+    monkeypatch.setattr(BaseScreen, "_load_chapter_count", fail_load)
+    monkeypatch.setattr(BaseScreen, "_check_extraction_manifest", fail_load)
+    monkeypatch.setattr(BaseScreen, "_update_spine", fail_load)
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "epub-extract"
+        app.session.input_path = Path("book.epub")
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.press("2")
+            await pilot.pause()
+
+            status = pilot.app.screen.query_one("#ingestion-status", Static)
+            assert "Extracting" in _static_text(status)
+
+    asyncio.run(run())
+
+
+def test_tui_preprocessing_event_tail_shows_live_events_without_heavy_loaders(monkeypatch):
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.base import BaseScreen
+
+    def fail_load(*args, **kwargs):
+        raise AssertionError("live progress refresh should not load persisted artifacts")
+
+    monkeypatch.setattr(BaseScreen, "_load_recent_run_events", fail_load)
+    monkeypatch.setattr(BaseScreen, "_get_run_state", fail_load)
+    monkeypatch.setattr(BaseScreen, "_load_chapter_count", fail_load)
+    monkeypatch.setattr(BaseScreen, "_check_extraction_manifest", fail_load)
+    monkeypatch.setattr(BaseScreen, "_update_spine", fail_load)
+
+    event = _make_event(
+        event_type="preprocess-glossary.chapter_completed",
+        event_time=_iso(12, 1),
+        message="live glossary chapter",
+        chapter_number=3,
+    )
+    event.stage_name = "preprocess-glossary"
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "preprocess-glossary"
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.press("3")
+            await pilot.pause()
+
+            pilot.app._on_live_event(event)
+            pilot.app._drain_live_events()
+            await pilot.pause()
+
+            tail = pilot.app.screen.query_one("#preprocessing-event-tail", Static)
+            assert "live glossary chapter" in _static_text(tail)
+            assert "Updates resume when action completes" not in _static_text(tail)
+
+    asyncio.run(run())
+
+
+def test_tui_dashboard_event_tail_shows_live_active_action_events(monkeypatch):
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.base import BaseScreen
+
+    def fail_load(*args, **kwargs):
+        raise AssertionError("live dashboard refresh should not load persisted artifacts")
+
+    monkeypatch.setattr(BaseScreen, "_load_recent_run_events", fail_load)
+    monkeypatch.setattr(BaseScreen, "_get_run_state", fail_load)
+    monkeypatch.setattr(BaseScreen, "_load_chapter_count", fail_load)
+    monkeypatch.setattr(BaseScreen, "_check_extraction_manifest", fail_load)
+    monkeypatch.setattr(BaseScreen, "_update_spine", fail_load)
+
+    event = _make_event(
+        event_type="preprocess-summaries.chapter_completed",
+        event_time=_iso(12, 2),
+        message="live dashboard progress",
+        chapter_number=4,
+    )
+    event.stage_name = "preprocess-summaries"
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "preprocess-summaries"
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.pause()
+
+            pilot.app._on_live_event(event)
+            pilot.app._drain_live_events()
+            await pilot.pause()
+
+            tail = pilot.app.screen.query_one("#dashboard-event-tail", Static)
+            assert "live dashboard progress" in _static_text(tail)
+
+    asyncio.run(run())
+
+
+def test_tui_live_events_refresh_only_on_tick():
+    from resemantica.tui.app import ResemanticaApp
+
+    event = _make_event(
+        event_type="preprocess-glossary.chapter_completed",
+        event_time=_iso(12, 3),
+        message="batched progress",
+    )
+    event.stage_name = "preprocess-glossary"
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "preprocess-glossary"
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.pause()
+            calls = 0
+
+            def record_refresh() -> None:
+                nonlocal calls
+                calls += 1
+
+            pilot.app.screen._refresh_live_progress = record_refresh  # type: ignore[method-assign]
+
+            for _ in range(25):
+                pilot.app._on_live_event(event)
+
+            assert calls == 0
+            pilot.app._drain_live_events()
+            assert calls == 1
+
+    asyncio.run(run())
+
+
+def test_tui_cached_and_live_duplicate_events_render_once():
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+
+    event = _make_event(
+        event_type="preprocess-glossary.chapter_completed",
+        event_time=_iso(12, 4),
+        message="deduped live event",
+    )
+    event.stage_name = "preprocess-glossary"
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "preprocess-glossary"
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.pause()
+            pilot.app.screen._store_refresh_cache(events=[event])
+
+            pilot.app._on_live_event(event)
+            pilot.app._drain_live_events()
+            await pilot.pause()
+
+            tail = pilot.app.screen.query_one("#dashboard-event-tail", Static)
+            assert _static_text(tail).count("deduped live event") == 1
+
+    asyncio.run(run())
+
+
+def test_tui_header_pass_prefers_active_action_when_run_state_empty():
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "translate-range"
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.pause()
+
+            header_pass = pilot.app.screen.query_one("#header-pass", Static)
+            assert "PASS 1" in _static_text(header_pass)
+            assert "IDLE" not in _static_text(header_pass)
+
+    asyncio.run(run())
+
+
+def test_worker_success_clears_active_action_before_full_refresh(monkeypatch):
+    from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.base import BaseScreen
+
+    calls: list[str] = []
+
+    def record(name: str):
+        def inner(self, *args, **kwargs):
+            assert getattr(self.app, "active_action", None) is None
+            calls.append(name)
+            if name == "events":
+                return []
+            if name == "chapter_count":
+                return 0
+            if name == "manifest":
+                return False
+            return None
+
+        return inner
+
+    def record_spine(self):
+        assert getattr(self.app, "active_action", None) is None
+        calls.append("spine")
+
+    monkeypatch.setattr(BaseScreen, "_get_run_state", record("state"))
+    monkeypatch.setattr(BaseScreen, "_load_recent_run_events", record("events"))
+    monkeypatch.setattr(BaseScreen, "_load_chapter_count", record("chapter_count"))
+    monkeypatch.setattr(BaseScreen, "_check_extraction_manifest", record("manifest"))
+    monkeypatch.setattr(BaseScreen, "_update_spine", record_spine)
+
+    async def run() -> None:
+        app = ResemanticaApp(release_id="rel-1", run_id="run-1")
+        app.active_action = "epub-extract"
+        async with app.run_test(size=(140, 48)) as pilot:
+            await pilot.pause()
+            calls.clear()
+
+            pilot.app.screen._on_worker_success("epub-extract", {})
+
+            assert pilot.app.active_action is None
+            assert {"state", "events", "chapter_count", "spine", "manifest"}.issubset(calls)
+
+    asyncio.run(run())
 
 
 def test_base_screen_derives_footer_metrics_from_events():
@@ -995,6 +1384,24 @@ def test_tui_shell_places_main_content_beside_spine():
 
             assert main.region.x >= spine.region.x + spine.region.width
             assert main.region.y <= spine.region.y + 1
+
+    asyncio.run(run())
+
+
+def test_tui_dashboard_event_tail_uses_right_split_panel():
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(160, 48)) as pilot:
+            await pilot.pause()
+            left = pilot.app.screen.query_one("#dashboard-left")
+            event_panel = pilot.app.screen.query_one("#dashboard-event-panel")
+            event_tail = pilot.app.screen.query_one("#dashboard-event-tail")
+
+            assert event_panel.region.x >= left.region.x + left.region.width
+            assert event_tail.region.y <= left.region.y + 1
+            assert abs((left.region.width / event_panel.region.width) - 1.5) < 0.2
 
     asyncio.run(run())
 
