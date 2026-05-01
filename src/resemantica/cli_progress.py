@@ -57,7 +57,7 @@ class CliProgressSubscriber:
                 BarColumn(),
                 TaskProgressColumn(show_speed=False),
             )
-            self._live = Live(self._render_layout, console=Console(stderr=True), refresh_per_second=4, auto_clear=False)
+            self._live = Live(self._render_layout, console=Console(stderr=True), refresh_per_second=4)
             self._live.__enter__()
             replace_stderr_sink(self._log_sink, fmt="{message}")
 
