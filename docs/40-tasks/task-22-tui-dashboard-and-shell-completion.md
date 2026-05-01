@@ -20,6 +20,8 @@ In:
 - Color the sparkline `comment` when idle, `cyan` when active, `red` on retry spikes.
 - Populate footer block progress, warning count, failure count, and elapsed time from run state and events.
 - Replace dashboard `_build_quick_stats()` placeholder with event-derived aggregate counts (glossary, idioms, entities, retries, avg risk).
+- Keep shared shell widgets stable across refreshes; refresh logic must update existing mounted widgets instead of removing and remounting duplicate-ID children on the polling cadence.
+- Add at least one mounted-screen smoke test that exercises `ResemanticaApp` / `DashboardScreen` initial load and first shared-shell refresh without `DuplicateIds` or other lifecycle errors.
 - Add tests for all replaced widgets.
 - Update `lld-22-tui-dashboard-and-shell-completion.md` to stay in sync.
 
@@ -35,6 +37,7 @@ Out:
 
 - `src/resemantica/tui/screens/base.py`
 - `src/resemantica/tui/screens/dashboard.py`
+- `src/resemantica/tui/app.py`
 - `tests/tui/`
 
 ## Interfaces To Satisfy
@@ -42,6 +45,7 @@ Out:
 - Header `#header-chapter-progress` shows `Ch N/M` derived from `list_extracted_chapters()` and run checkpoint.
 - Header `#header-pass` shows pass indicator derived from `state.stage_name`.
 - Header `#pulse-bar` shows 30-char ASCII sparkline derived from `paragraph_completed` events.
+- Shared shell refreshes are idempotent and do not recreate fixed-ID children such as `#spine-title`.
 - Footer `#footer-block-progress` shows `N/M blocks` from run checkpoint.
 - Footer `#footer-warnings` shows warning count from events.
 - Footer `#footer-failures` shows failure count from events.
@@ -57,6 +61,7 @@ Out:
 - Unit test footer block count, warnings, failures, elapsed rendering.
 - Unit test quick stats renders counts from fixture events.
 - Unit test quick stats empty-state when no events exist.
+- Mounted-app smoke test launches the dashboard screen through Textual lifecycle and proves the first shell refresh does not raise `DuplicateIds`.
 - Run `uv run --with pytest pytest tests/tui -q`.
 - Run `uv run --with ruff ruff check src tests`.
 - Run `uv run --with mypy mypy src/resemantica`.
@@ -66,5 +71,12 @@ Out:
 - Header chapter progress, pass indicator, and pulse bar show run-derived data instead of static strings.
 - Footer shows block count, warning/failure counts, and elapsed time instead of only key hints.
 - Dashboard quick stats shows event-derived aggregates instead of placeholder text.
-- Tests cover all replaced widgets with fixture data.
+- Shared shell refresh is stable under initial mount and periodic polling.
+- Tests cover all replaced widgets with fixture data and at least one real mounted-screen lifecycle path.
 - `docs/20-lld/lld-22-tui-dashboard-and-shell-completion.md` is implemented and kept in sync.
+
+## Deep-Dive Notes
+
+- The current TUI boot failure came from `_update_spine()` removing children and immediately remounting a new `Static(id="spine-title")` on every refresh. Task 22 must treat fixed shell widgets as persistent nodes, not ephemeral render output.
+- Existing presenter-heavy tests passed while the real app still crashed on startup. This task is not complete unless a mounted Textual lifecycle test closes that gap.
+- Additional TUI drift found outside this slice: warnings screen event scoping, config-path consistency in non-shell screens, and dead CSS selectors. Those are follow-on items unless required to unblock the mounted shell fix.

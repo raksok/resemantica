@@ -4,6 +4,8 @@
 
 Task 22 completes the shared shell widgets and dashboard screen that Task 21 left as placeholders. The header bar, footer bar, pulse bar sparkline, and dashboard quick-stats panel all consume run state and persisted events to render live data instead of static or empty content.
 
+This slice also hardens the shared shell lifecycle. The shell is a persistent part of the screen tree, so refreshes must mutate existing widgets in place rather than rebuilding duplicate-ID children on a polling loop.
+
 ## Public Interfaces
 
 Shell (BaseScreen):
@@ -11,6 +13,7 @@ Shell (BaseScreen):
 - Header chapter progress: `Ch N/M` derived from run checkpoint and chapter manifest
 - Header pass indicator: `PASS 1`, `PASS 2`, `PASS 3`, `IDLE`, `PREPROCESS` derived from run state `stage_name`
 - Header pulse bar: 30-char Unicode sparkline of persisted paragraph throughput for the active run
+- Chapter spine title and item container: stable mounted widgets refreshed in place; no duplicate-ID remounting during polling
 - Footer block progress: `N/M blocks` derived from distinct persisted block IDs
 - Footer warning count: count of events with `severity = "warning"`
 - Footer failure count: count of events with `severity = "error"`
@@ -38,6 +41,13 @@ All data comes from the tracking DB or the chapter manifest. No new repo functio
 | Quick stats entities | Count of `preprocess-graph.entity_extracted` events |
 | Quick stats retries | Events with `event_type` containing `retry` |
 | Quick stats avg risk | Events whose type contains `risk_detected`, average of numeric `payload.risk_score` |
+
+## Shared Shell Lifecycle Constraints
+
+- `BaseScreen.compose()` owns creation of fixed shell widgets and fixed shell IDs.
+- Polling refreshes must update widget content or replace anonymous child rows only after the prior tree state is safe to mutate.
+- Refresh code must be idempotent: calling the shared refresh repeatedly from `on_mount()` and the interval timer must not create duplicate IDs or grow the widget tree.
+- A fixed shell element such as the chapter spine title should be mounted once and then updated or left untouched on subsequent refreshes.
 
 ## Pulse Bar Sparkline
 
@@ -87,6 +97,7 @@ All counts come from `load_events()` for the active run, using the actual curren
 - Footer empty run state falls back to a conservative zero elapsed string.
 - Quick stats renders counts from fixture events.
 - Quick stats renders empty-state message when no events exist.
+- Mounted-app smoke test starts `ResemanticaApp`, pushes the dashboard screen, and verifies the first shared-shell refresh completes without `DuplicateIds`.
 
 Run:
 
@@ -99,3 +110,9 @@ Run:
 - Task 22 does not add new tracking DB tables or columns. All data comes from existing event and run_state tables.
 - The pulse bar uses persisted events only (no live subscriber), matching the polling refresh model in BaseScreen.
 - Event-based counting may undercount if event persistence throttling (M20E) drops some progress events. This is acceptable for dashboard display.
+
+## Follow-On Drift Not Solved Here
+
+- Warnings screen filtering and scoping still need a separate TUI correction pass; this slice only specifies shell/dashboard behavior.
+- Some non-shell screens currently bypass `app.config_path` and reload default config directly. That consistency issue is outside the shell/dashboard scope unless it blocks shared-shell validation.
+- The stylesheet contains selectors that do not match the current concrete widget classes. That is cleanup work, not a dependency for the shared-shell fix.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -598,3 +599,24 @@ def test_dashboard_recent_warnings_scopes_events_to_active_run(monkeypatch):
         "limit": 5,
     }
     assert "scoped warning" in result
+
+
+def test_tui_dashboard_mount_refresh_is_idempotent():
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            dashboard = pilot.app.screen
+
+            assert len(list(dashboard.query("#spine-title"))) == 1
+            assert len(list(dashboard.query("#spine-items > .spine-item"))) == 1
+
+            dashboard._refresh_all()
+            await pilot.pause()
+
+            assert len(list(dashboard.query("#spine-title"))) == 1
+            assert len(list(dashboard.query("#spine-items > .spine-item"))) == 1
+
+    asyncio.run(run())

@@ -26,7 +26,12 @@ class BaseScreen(Screen):
             id="header-container",
             classes="header-bar",
         )
-        yield Vertical(id="spine-container", classes="spine")
+        yield Vertical(
+            Static("Chapter Spine", id="spine-title"),
+            Vertical(id="spine-items"),
+            id="spine-container",
+            classes="spine",
+        )
         with Container(id="main-content"):
             yield from self._content_widgets()
         yield Horizontal(
@@ -100,18 +105,15 @@ class BaseScreen(Screen):
         pass_widget.update(f"[{pass_color}]{pass_label}[/]")
 
     def _update_spine(self) -> None:
-        spine = self.query_one("#spine-container", Vertical)
-        spine.remove_children()
-
-        title = Static("Chapter Spine", id="spine-title")
-        spine.mount(title)
+        spine_items = self.query_one("#spine-items", Vertical)
+        spine_items.remove_children()
 
         chapter_data = self._get_chapter_spine_data()
         if chapter_data:
             for label, css in self._render_spine_items(chapter_data):
-                spine.mount(Static(label, classes=css))
+                spine_items.mount(Static(label, classes=css))
         else:
-            spine.mount(Static("[dim]No chapter data.[/]", classes="spine-item"))
+            spine_items.mount(Static("[dim]No chapter data.[/]", classes="spine-item"))
 
     def _get_chapter_spine_data(self) -> list[tuple[int, str]]:
         release_id = self._get_release_id()
