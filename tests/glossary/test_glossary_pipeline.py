@@ -25,7 +25,7 @@ from resemantica.glossary.pipeline import (
     translate_glossary_candidates,
 )
 from resemantica.glossary.validators import normalize_term
-from resemantica.settings import derive_paths, load_config
+from resemantica.settings import AppConfig, LLMConfig, derive_paths, load_config
 
 
 class ScriptedGlossaryLLM:
@@ -163,6 +163,80 @@ def test_discovery_writes_candidates_only(tmp_path: Path, monkeypatch) -> None:
         assert locked_count is not None and int(locked_count["count"]) == 0
     finally:
         conn.close()
+
+
+def test_discovery_builds_llm_client_from_config(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _extract_one_chapter(
+        tmp_path,
+        release_id="m3-configured-llm",
+        source_text="青云门弟子张三来到青云山。",
+    )
+
+    built: dict[str, object] = {}
+
+    class _FakeCompletions:
+        def create(self, **kwargs: object) -> object:
+            built["request"] = kwargs
+            message = type(
+                "Message",
+                (),
+                {
+                    "content": json.dumps(
+                        {
+                            "glossary_terms": [
+                                {
+                                    "source_term": "青云门",
+                                    "category": "faction",
+                                    "evidence_snippet": "青云门弟子张三来到青云山",
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+            )()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _FakeChat:
+        def __init__(self) -> None:
+            self.completions = _FakeCompletions()
+
+    class _FakeOpenAIClient:
+        def __init__(self) -> None:
+            self.chat = _FakeChat()
+
+    def fake_build_openai_client(self):
+        built["base_url"] = self.base_url
+        built["timeout_seconds"] = self.timeout_seconds
+        built["max_retries"] = self.max_retries
+        return _FakeOpenAIClient()
+
+    monkeypatch.setattr(
+        "resemantica.llm.client.LLMClient._build_openai_client",
+        fake_build_openai_client,
+    )
+
+    config = AppConfig()
+    config.llm = LLMConfig(
+        base_url="http://127.0.0.1:9999",
+        timeout_seconds=123,
+        max_retries=7,
+        context_window=config.llm.context_window,
+    )
+
+    result = discover_glossary_candidates(
+        release_id="m3-configured-llm",
+        run_id="discover-configured-llm",
+        config=config,
+    )
+
+    assert result["status"] == "success"
+    assert result["candidates_written"] == 1
+    assert built["base_url"] == "http://127.0.0.1:9999"
+    assert built["timeout_seconds"] == 123
+    assert built["max_retries"] == 7
 
 
 def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> None:

@@ -128,7 +128,11 @@ class IngestionScreen(BaseScreen):
             if self._event_matches_stage_prefix(event, ("epub-extract",))
         ]
         self.query_one("#ingestion-event-tail", Static).update(
-            self._render_event_tail(events, title="Extraction Events")
+            self._render_event_tail(
+                events,
+                title="Extraction Events",
+                limit=self._event_tail_limit("#ingestion-event-tail"),
+            )
         )
 
     def action_launch_extract(self) -> None:

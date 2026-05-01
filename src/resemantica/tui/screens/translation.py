@@ -114,11 +114,15 @@ class TranslationScreen(BaseScreen):
             if self._is_translation_event(event)
         ]
         self.query_one("#translation-event-tail", Static).update(
-            self._render_cached_event_tail(events, title="Translation Events")
+            self._render_cached_event_tail(
+                events,
+                title="Translation Events",
+                limit=self._event_tail_limit("#translation-event-tail"),
+            )
         )
 
-    def _render_cached_event_tail(self, events: list, *, title: str) -> str:
-        return self._render_event_tail(events, title=title)
+    def _render_cached_event_tail(self, events: list, *, title: str, limit: int = 5) -> str:
+        return self._render_event_tail(events, title=title, limit=limit)
 
     @staticmethod
     def _is_translation_event(event: object) -> bool:

@@ -2,7 +2,7 @@
 base_url = "http://127.0.0.1:8033"
 timeout_seconds = 600
 max_retries = 3
-context_window = 32768
+context_window = 65000
 
 [models]
 translator_name = "HY-MT1.5-7B"

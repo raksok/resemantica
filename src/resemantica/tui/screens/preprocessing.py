@@ -345,11 +345,15 @@ class PreprocessingScreen(BaseScreen):
             if self._event_matches_stage_prefix(event, ("preprocess-", "packets-build"))
         ]
         self.query_one("#preprocessing-event-tail", Static).update(
-            self._render_cached_event_tail(events, title="Preprocessing Events")
+            self._render_cached_event_tail(
+                events,
+                title="Preprocessing Events",
+                limit=self._event_tail_limit("#preprocessing-event-tail"),
+            )
         )
 
-    def _render_cached_event_tail(self, events: list, *, title: str) -> str:
-        return self._render_event_tail(events, title=title)
+    def _render_cached_event_tail(self, events: list, *, title: str, limit: int = 5) -> str:
+        return self._render_event_tail(events, title=title, limit=limit)
 
     def action_launch_glossary(self) -> None:
         self._launch_stage("preprocess-glossary")

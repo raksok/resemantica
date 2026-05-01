@@ -242,9 +242,34 @@ class ObservabilityScreen(BaseScreen):
         if not filtered:
             return f"[bold]{title}[/bold]\n{empty_text}"
 
-        limit = {"normal": 8, "verbose": 12, "debug": 20}[self._verbosity]
+        limit = self._section_limit()
         formatted = [format_record(record, verbosity=self._verbosity) for record in filtered[:limit]]
         return f"[bold]{title}[/bold]\n" + "\n".join(formatted)
+
+    def _section_limit(self) -> int:
+        base = {"normal": 8, "verbose": 12, "debug": 20}[self._verbosity]
+        top = self.query_one_optional("#observability-top", VerticalScroll)
+        if top is None:
+            return base
+
+        height = 0
+        try:
+            height = int(top.region.height)
+        except Exception:
+            height = 0
+        if height <= 0:
+            try:
+                height = int(top.size.height)
+            except Exception:
+                height = 0
+
+        if height <= 0:
+            return base
+
+        extra = max(0, height - 18) // 2
+        if self._source_filter != "all":
+            extra += max(0, height - 12) // 2
+        return min(100, base + extra)
 
     def _render_warnings(self) -> None:
         table = self.query_one("#observability-warnings-table", DataTable)

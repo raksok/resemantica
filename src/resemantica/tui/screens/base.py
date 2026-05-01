@@ -500,6 +500,28 @@ class BaseScreen(Screen):
             lines.append(f"  [dim]+{len(events) - limit} more[/]")
         return "\n".join(lines)
 
+    def _event_tail_limit(self, widget_id: str, *, minimum: int = 5) -> int:
+        widget = self.query_one_optional(widget_id, Static)
+        if widget is None:
+            return minimum
+
+        height = 0
+        try:
+            height = int(widget.region.height)
+        except Exception:
+            height = 0
+        if height <= 0:
+            try:
+                height = int(widget.size.height)
+            except Exception:
+                height = 0
+
+        if height <= 0:
+            return minimum
+
+        # Reserve a small amount of space for the title line and the border chrome.
+        return max(minimum, height - 3)
+
     @classmethod
     def _dedupe_event_tail_events(cls, events: list[Event]) -> list[Event]:
         deduped: list[Event] = []

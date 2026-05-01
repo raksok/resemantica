@@ -94,7 +94,11 @@ class DashboardScreen(BaseScreen):
             worker_widget.update(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
 
         self.query_one("#dashboard-event-tail", Static).update(
-            self._render_cached_event_tail(events, title="Recent Events")
+            self._render_cached_event_tail(
+                events,
+                title="Recent Events",
+                limit=self._event_tail_limit("#dashboard-event-tail"),
+            )
         )
 
     def _refresh_dashboard(self) -> None:
@@ -146,7 +150,11 @@ class DashboardScreen(BaseScreen):
             failure_widget.update("")
 
         self.query_one("#dashboard-event-tail", Static).update(
-            self._render_cached_event_tail(events, title="Recent Events")
+            self._render_cached_event_tail(
+                events,
+                title="Recent Events",
+                limit=self._event_tail_limit("#dashboard-event-tail"),
+            )
         )
 
         hints = self.query_one("#dashboard-key-hints", Static)
@@ -155,8 +163,8 @@ class DashboardScreen(BaseScreen):
             "[dim]n[/]=Next Stage"
         )
 
-    def _render_cached_event_tail(self, events: list, *, title: str) -> str:
-        return self._render_event_tail(events, title=title)
+    def _render_cached_event_tail(self, events: list, *, title: str, limit: int = 5) -> str:
+        return self._render_event_tail(events, title=title, limit=limit)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-new-file":

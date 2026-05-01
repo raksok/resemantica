@@ -107,7 +107,7 @@ HeaderBar {
 #translation-content,
 #ingestion-content,
 #settings-content {
-    max-width: 118;
+    width: 1fr;
 }
 
 #observability-content,
@@ -163,8 +163,8 @@ HeaderBar {
 }
 
 .event-tail {
-    height: 7;
-    overflow-y: hidden;
+    min-height: 7;
+    overflow-y: auto;
     border: solid #34324A;
     padding: 0 1;
     margin: 0 0 1 0;
@@ -173,6 +173,12 @@ HeaderBar {
 #dashboard-event-tail {
     height: 1fr;
     margin: 0;
+}
+
+#ingestion-event-tail,
+#preprocessing-event-tail,
+#translation-event-tail {
+    height: 1fr;
 }
 
 #dashboard-action-list {

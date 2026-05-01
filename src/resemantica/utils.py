@@ -6,7 +6,6 @@ from pathlib import Path
 from loguru import logger
 
 from resemantica.llm.client import LLMClient
-from resemantica.orchestration.events import emit_event
 from resemantica.settings import AppConfig
 
 
@@ -32,7 +31,11 @@ def _canonical_json(payload: object) -> str:
 def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMClient:
     if llm_client is not None:
         return llm_client
-    return LLMClient(config)
+    return LLMClient(
+        base_url=config.llm.base_url,
+        timeout_seconds=config.llm.timeout_seconds,
+        max_retries=config.llm.max_retries,
+    )
 
 
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
@@ -41,6 +44,8 @@ def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> No
     severity = str(kwargs.pop("severity", "info"))
     stage_name = str(kwargs.pop("stage_name", ""))
     try:
+        from resemantica.orchestration.events import emit_event
+
         emit_event(
             run_id,
             release_id,

@@ -1406,6 +1406,59 @@ def test_tui_dashboard_event_tail_uses_right_split_panel():
     asyncio.run(run())
 
 
+def test_tui_large_viewport_expands_primary_content_width():
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(220, 60)) as pilot:
+            await pilot.pause()
+
+            for key, selector in (
+                ("1", "#dashboard-content"),
+                ("2", "#ingestion-content"),
+                ("3", "#preprocessing-content"),
+                ("4", "#translation-content"),
+                ("7", "#settings-content"),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+
+                main = pilot.app.screen.query_one("#main-content")
+                content = pilot.app.screen.query_one(selector)
+                assert content.region.width >= main.region.width - 4
+
+    asyncio.run(run())
+
+
+def test_tui_large_viewport_expands_event_tails_and_observability_limits():
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(220, 60)) as pilot:
+            await pilot.pause()
+
+            for key, selector in (
+                ("2", "#ingestion-event-tail"),
+                ("3", "#preprocessing-event-tail"),
+                ("4", "#translation-event-tail"),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+
+                tail = pilot.app.screen.query_one(selector)
+                assert tail.region.height > 7
+
+            await pilot.press("5")
+            await pilot.pause()
+
+            screen = pilot.app.screen
+            assert screen._section_limit() > 8
+
+    asyncio.run(run())
+
+
 def test_tui_observability_warnings_bottom_pane():
     from textual.widgets import DataTable
 
