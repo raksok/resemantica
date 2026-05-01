@@ -2,6 +2,10 @@ Screen {
     background: #292D3E;
 }
 
+HelpScreen {
+    background: transparent;
+}
+
 HeaderBar {
     dock: top;
     height: 1;
@@ -20,7 +24,7 @@ HeaderBar {
 }
 
 #header-screen-location {
-    width: 24;
+    width: 32;
     color: #C792EA;
     text-style: bold;
 }
@@ -40,11 +44,13 @@ HeaderBar {
     color: #89DDFF;
 }
 
-ChapterSpine {
+#spine-container {
     dock: left;
-    width: 18;
+    width: 24;
+    height: 1fr;
     background: #1E1F2B;
     overflow-y: auto;
+    border-right: solid #34324A;
 }
 
 #spine-title {
@@ -86,7 +92,55 @@ ChapterSpine {
 #main-content {
     width: 1fr;
     height: 1fr;
-    padding: 1;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#dashboard-content,
+#preprocessing-content,
+#translation-content,
+#warnings-content,
+#artifacts-content,
+#cleanup-content,
+#reset-preview-content,
+#settings-content,
+#event-log-content {
+    width: 1fr;
+    height: 1fr;
+}
+
+#dashboard-content,
+#preprocessing-content,
+#translation-content,
+#cleanup-content,
+#reset-preview-content,
+#settings-content {
+    max-width: 118;
+}
+
+#dashboard-run-info,
+#dashboard-phase-progress,
+#dashboard-recent-warnings,
+#dashboard-quick-stats,
+#preprocessing-stage-list,
+#translation-header,
+#translation-block-list,
+#settings-config-display,
+#cleanup-preview,
+#reset-preview {
+    padding: 0 0 1 0;
+}
+
+#warnings-table,
+#artifacts-tree {
+    height: 1fr;
+    width: 1fr;
+}
+
+#cleanup-buttons,
+#reset-buttons {
+    height: auto;
+    width: 44;
 }
 
 FooterBar {
@@ -128,10 +182,11 @@ FooterBar {
 }
 
 #help-dialog {
-    width: 64;
+    dock: right;
+    width: 52;
     height: auto;
-    margin: 2 4;
-    padding: 1 2;
+    margin: 1 2 0 0;
+    padding: 1;
     background: #1E1F2B;
     border: round #82AAFF;
 }
@@ -139,7 +194,7 @@ FooterBar {
 #help-title {
     color: #C792EA;
     text-style: bold;
-    padding: 0 0 1 0;
+    padding: 0 0 0 0;
 }
 
 #help-content {

@@ -29,31 +29,20 @@ class HelpScreen(ModalScreen[None]):
 
     def _build_help_text(self) -> str:
         lines = [
-            "[b]Where You Are[/]",
-            format_location(self._current_screen_info),
+            f"[b]{format_location(self._current_screen_info)}[/]",
             "",
             "[b]Screens[/]",
         ]
         for info in SCREEN_INFOS:
             current = " *" if info == self._current_screen_info else ""
-            lines.append(
-                f"{info.number}  {info.title:<14} {info.purpose}{current}"
-            )
+            lines.append(f"{info.number} {info.title:<13} {info.purpose}{current}")
         lines.extend(
             [
                 "",
                 "[b]Keys[/]",
-                "1-9     Switch screen",
-                "?       Toggle help",
-                "7       Observability screen",
-                "v       Screen 7 verbosity",
-                "s       Screen 7 source filter",
-                "e       Screen 7 severity filter",
-                "t       Screen 7 stage filter",
-                "c       Screen 7 chapter filter",
-                "r       Screen 7 refresh",
-                "escape  Close help",
-                "q       Quit",
+                "1-9 Switch   ? Help   esc Close   q Quit",
+                "7 Observe   v Verbose   s Source   e Severity",
+                "t Stage     c Chapter   r Refresh",
             ]
         )
         return "\n".join(lines)

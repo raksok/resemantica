@@ -76,7 +76,7 @@ class PreprocessingScreen(BaseScreen):
             "preprocess-graph",
             "packets-build",
         ]
-        lines: list[str] = []
+        lines: list[str] = ["[bold]Pipeline[/bold]"]
         for label, stage_key in stages:
             if stage_key == "preprocess-epub":
                 status = "DONE"
@@ -105,8 +105,17 @@ class PreprocessingScreen(BaseScreen):
                         status, color = "PENDING", "comment"
                 else:
                     status, color = "PENDING", "comment"
-            bar_len = 20
-            filled = bar_len if status == "DONE" else bar_len // 2 if status == "RUNNING" else 0
-            bar = "█" * filled + "░" * (bar_len - filled)
-            lines.append(f"  {label:20s} [{color}]{bar}[/]  [{color}]{status}[/]")
+            marker = {"DONE": "●", "RUNNING": "◉", "PENDING": "○"}[status]
+            bar = self._render_stage_bar(status)
+            lines.append(
+                f"  [{color}]{marker}[/] {label:<14} {bar}  [{color}]{status:<7}[/]"
+            )
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_stage_bar(status: str) -> str:
+        if status == "DONE":
+            return "[green]━━━━━━━━━━━━━━━━━━━━[/]"
+        if status == "RUNNING":
+            return "[cyan]━━━━━━━━━━╺─────────[/]"
+        return "[comment]────────────────────[/]"

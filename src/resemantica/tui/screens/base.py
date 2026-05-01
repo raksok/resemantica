@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
 from typing import TYPE_CHECKING, Any
@@ -15,9 +16,21 @@ if TYPE_CHECKING:
     from resemantica.tracking.models import Event
 
 
+@dataclass
+class HeaderPassIndicator:
+    label: str = "IDLE"
+    color: str = "comment"
+    running: bool = False
+    stale: bool = False
+
+
 class BaseScreen(Screen):
     _PULSE_WIDTH = 30
     _PULSE_GLYPHS = "▁▂▃▄▅▆▇█"
+    _SPINNER_GLYPHS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _REFRESH_INTERVAL_SECONDS = 2.0
+    _SPINNER_INTERVAL_SECONDS = 0.25
+    _STALE_AFTER_SECONDS = 300
 
     def compose(self) -> ComposeResult:
         yield Horizontal(
@@ -51,8 +64,10 @@ class BaseScreen(Screen):
         yield Static("")
 
     def on_mount(self) -> None:
+        self._header_pass_indicator = HeaderPassIndicator()
         self._refresh_all()
-        self.set_interval(3, self._refresh_all)
+        self.set_interval(self._REFRESH_INTERVAL_SECONDS, self._refresh_all)
+        self.set_interval(self._SPINNER_INTERVAL_SECONDS, self._refresh_header_pass)
 
     def _refresh_all(self) -> None:
         state = self._get_run_state()
@@ -108,8 +123,25 @@ class BaseScreen(Screen):
         )
 
         pass_label, pass_color = self._derive_pass_indicator(state, events)
+        self._header_pass_indicator = HeaderPassIndicator(
+            label=pass_label,
+            color=pass_color,
+            running=bool(state and state.get("status") == "running"),
+            stale=self._is_run_stale(state, events),
+        )
+        self._refresh_header_pass()
+
+    def _refresh_header_pass(self) -> None:
+        indicator = getattr(self, "_header_pass_indicator", HeaderPassIndicator())
         pass_widget = self.query_one("#header-pass", Static)
-        pass_widget.update(f"[{pass_color}]{pass_label}[/]")
+        if indicator.stale:
+            pass_widget.update("[orange]STALE[/]")
+        elif indicator.running:
+            pass_widget.update(
+                f"[{indicator.color}]{self._spinner_frame()} {indicator.label}[/]"
+            )
+        else:
+            pass_widget.update(f"[{indicator.color}]{indicator.label}[/]")
 
     def _update_spine(self) -> None:
         spine_items = self.query_one("#spine-items", Vertical)
@@ -373,6 +405,89 @@ class BaseScreen(Screen):
         return parsed.astimezone(timezone.utc)
 
     @classmethod
+    def _latest_event_time(cls, events: list[Event]) -> datetime | None:
+        parsed_events = [
+            parsed
+            for event in events
+            if (parsed := cls._parse_timestamp(event.event_time)) is not None
+        ]
+        return max(parsed_events) if parsed_events else None
+
+    @classmethod
+    def _is_run_stale(
+        cls,
+        state: dict[str, Any] | None,
+        events: list[Event],
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        if not state or state.get("status") != "running":
+            return False
+
+        latest_event_time = cls._latest_event_time(events)
+        if latest_event_time is None:
+            latest_event_time = cls._parse_timestamp(state.get("started_at"))
+        if latest_event_time is None:
+            return False
+
+        current_time = now or datetime.now(timezone.utc)
+        age_seconds = (current_time - latest_event_time).total_seconds()
+        return age_seconds >= cls._STALE_AFTER_SECONDS
+
+    @classmethod
+    def _format_activity_age(
+        cls,
+        state: dict[str, Any] | None,
+        events: list[Event],
+        *,
+        now: datetime | None = None,
+    ) -> str:
+        latest_event_time = cls._latest_event_time(events)
+        if latest_event_time is None and state:
+            latest_event_time = cls._parse_timestamp(state.get("started_at"))
+        if latest_event_time is None:
+            return "no events yet"
+
+        current_time = now or datetime.now(timezone.utc)
+        total_seconds = max(0, int((current_time - latest_event_time).total_seconds()))
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}h {minutes}m ago"
+        if minutes:
+            return f"{minutes}m {seconds}s ago"
+        return f"{seconds}s ago"
+
+    @classmethod
+    def _format_status_label(
+        cls,
+        state: dict[str, Any] | None,
+        events: list[Event],
+        *,
+        now: datetime | None = None,
+    ) -> str:
+        if not state:
+            return "[dim]NO ACTIVE RUN[/]"
+
+        status = str(state.get("status") or "unknown").upper()
+        if cls._is_run_stale(state, events, now=now):
+            age = cls._format_activity_age(state, events, now=now)
+            return f"[orange]STALE[/] ([dim]last event {age}[/])"
+        if status == "RUNNING":
+            return f"[cyan]{cls._spinner_frame(now=now)} RUNNING[/]"
+        if status == "FAILED":
+            return "[red]FAILED[/]"
+        if status == "COMPLETED":
+            return "[green]COMPLETED[/]"
+        return f"[comment]{status}[/]"
+
+    @classmethod
+    def _spinner_frame(cls, *, now: datetime | None = None) -> str:
+        current_time = now or datetime.now(timezone.utc)
+        index = int(current_time.timestamp() * 4) % len(cls._SPINNER_GLYPHS)
+        return cls._SPINNER_GLYPHS[index]
+
+    @classmethod
     def _bucket_index(
         cls,
         event_time: datetime,
@@ -396,6 +511,8 @@ class BaseScreen(Screen):
         idle = cls._PULSE_GLYPHS[0] * cls._PULSE_WIDTH
         if not state or state.get("status") != "running":
             return f"[comment]{idle}[/]"
+        if cls._is_run_stale(state, events, now=now):
+            return f"[orange]{idle}[/]"
 
         current_time = now or datetime.now(timezone.utc)
         started_at = cls._parse_timestamp(state.get("started_at")) or current_time

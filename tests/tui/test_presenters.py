@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -231,6 +231,9 @@ def test_preprocessing_presenter_builds_stages():
     assert "Idioms" in result
     assert "Graph MVP" in result
     assert "Packets" in result
+    assert "◉[/] Glossary" in result
+    assert "━━━━━━━━━━╺─────────" in result
+    assert "█" not in result
 
 
 def test_preprocessing_launch_workflow_chains_stages():
@@ -426,7 +429,7 @@ def test_base_screen_renders_30_char_pulse_bar_with_expected_glyphs():
     pulse = BaseScreen._render_pulse_bar(
         state,
         events,
-        now=datetime(2026, 4, 24, 12, 30, tzinfo=timezone.utc),
+        now=datetime(2026, 4, 24, 12, 24, 30, tzinfo=timezone.utc),
     )
     rendered = _strip_markup(pulse)
 
@@ -457,16 +460,81 @@ def test_base_screen_renders_idle_active_and_retry_pulse_states():
     active = BaseScreen._render_pulse_bar(
         state,
         active_events,
-        now=datetime(2026, 4, 24, 12, 30, tzinfo=timezone.utc),
+        now=datetime(2026, 4, 24, 12, 5, 30, tzinfo=timezone.utc),
     )
     retry = BaseScreen._render_pulse_bar(
         state,
         retry_events,
-        now=datetime(2026, 4, 24, 12, 30, tzinfo=timezone.utc),
+        now=datetime(2026, 4, 24, 12, 6, 30, tzinfo=timezone.utc),
     )
 
     assert active.startswith("[cyan]")
     assert retry.startswith("[red]")
+
+
+def test_base_screen_marks_stale_running_state_from_event_age():
+    from resemantica.tui.screens.base import BaseScreen
+
+    state = {
+        "stage_name": "preprocess-graph",
+        "status": "running",
+        "started_at": _iso(12, 0),
+        "finished_at": None,
+        "checkpoint": {},
+    }
+    events = [
+        _make_event(
+            event_type="preprocess-graph.chapter_started",
+            event_time=_iso(12, 1),
+        )
+    ]
+    now = datetime.fromisoformat(_iso(12, 1)) + timedelta(seconds=301)
+
+    assert BaseScreen._is_run_stale(state, events, now=now)
+    assert "STALE" in BaseScreen._format_status_label(state, events, now=now)
+    assert BaseScreen._render_pulse_bar(state, events, now=now).startswith("[orange]")
+
+
+def test_base_screen_formats_running_status_with_spinner():
+    from resemantica.tui.screens.base import BaseScreen
+
+    state = {
+        "stage_name": "preprocess-graph",
+        "status": "running",
+        "started_at": _iso(12, 0),
+        "finished_at": None,
+        "checkpoint": {},
+    }
+    events = [_make_event(event_type="preprocess-graph.started", event_time=_iso(12, 0))]
+    now = datetime.fromisoformat(_iso(12, 0)) + timedelta(seconds=5)
+
+    rendered = BaseScreen._format_status_label(state, events, now=now)
+
+    assert "RUNNING" in rendered
+    assert any(glyph in rendered for glyph in BaseScreen._SPINNER_GLYPHS)
+
+
+def test_tui_spinner_refresh_does_not_reload_run_data():
+    from textual.widgets import Static
+
+    from resemantica.tui.screens.base import HeaderPassIndicator
+    from resemantica.tui.screens.dashboard import DashboardScreen
+
+    screen = DashboardScreen()
+    screen._header_pass_indicator = HeaderPassIndicator(
+        label="PREPROCESS",
+        color="cyan",
+        running=True,
+    )
+
+    def fail_load(*args, **kwargs):
+        raise AssertionError("spinner refresh should not load run data")
+
+    screen._get_run_state = fail_load  # type: ignore[method-assign]
+    screen._load_recent_run_events = fail_load  # type: ignore[method-assign]
+    screen.query_one = lambda selector, widget_type=None: Static(id="header-pass")  # type: ignore[method-assign]
+
+    screen._refresh_header_pass()
 
 
 def test_base_screen_derives_footer_metrics_from_events():
@@ -561,6 +629,24 @@ def test_dashboard_recent_warnings_requires_active_run():
     assert result == "[dim]No warnings.[/]"
 
 
+def test_dashboard_event_summary_uses_event_type_when_message_empty():
+    from resemantica.tui.screens.dashboard import DashboardScreen
+
+    event = _make_event(
+        event_type="preprocess-graph.chapter_skipped",
+        event_time=_iso(12, 1),
+        message="",
+        chapter_number=20,
+        payload={"reason": "non_story_chapter"},
+    )
+
+    rendered = DashboardScreen._format_event_summary(event)
+
+    assert "preprocess-graph.chapter_skipped" in rendered
+    assert "ch=20" in rendered
+    assert "reason=non_story_chapter" in rendered
+
+
 def test_dashboard_recent_warnings_scopes_events_to_active_run(monkeypatch):
     from resemantica.tui.screens.dashboard import DashboardScreen
 
@@ -622,6 +708,23 @@ def test_tui_dashboard_mount_refresh_is_idempotent():
 
             assert len(list(dashboard.query("#spine-title"))) == 1
             assert len(list(dashboard.query("#spine-items > .spine-item"))) == 1
+
+    asyncio.run(run())
+
+
+def test_tui_shell_places_main_content_beside_spine():
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test(size=(160, 48)) as pilot:
+            await pilot.pause()
+            screen = pilot.app.screen
+            spine = screen.query_one("#spine-container")
+            main = screen.query_one("#main-content")
+
+            assert main.region.x >= spine.region.x + spine.region.width
+            assert main.region.y <= spine.region.y + 1
 
     asyncio.run(run())
 
@@ -689,6 +792,10 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
             await pilot.press("?")
             await pilot.pause()
 
+            assert pilot.app.screen.styles.background.a == 0
+            help_dialog = pilot.app.screen.query_one("#help-dialog")
+            assert help_dialog.region.x + help_dialog.region.width >= pilot.app.size.width - 2
+
             help_content = pilot.app.screen.query_one("#help-content", Static)
             rendered = _static_text(help_content)
 
@@ -705,10 +812,10 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
                 "Settings",
             ):
                 assert label in rendered
-            assert "1-9     Switch screen" in rendered
-            assert "?       Toggle help" in rendered
-            assert "v       Screen 7 verbosity" in rendered
-            assert "r       Screen 7 refresh" in rendered
+            assert "1-9 Switch" in rendered
+            assert "? Help" in rendered
+            assert "v Verbose" in rendered
+            assert "r Refresh" in rendered
 
             await pilot.press("escape")
             await pilot.pause()

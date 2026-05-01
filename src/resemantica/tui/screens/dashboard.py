@@ -29,9 +29,10 @@ class DashboardScreen(BaseScreen):
         run_info = self.query_one("#dashboard-run-info", Static)
         if state:
             run_info.update(
-                f"Status: [bold]{state['status'].upper()}[/bold]\n"
+                f"Status: {self._format_status_label(state, events)}\n"
                 f"Stage:  {state['stage_name']}\n"
-                f"Started: {state['started_at']}"
+                f"Started: {state['started_at']}\n"
+                f"Last event: {self._format_activity_age(state, events)}"
             )
         else:
             run_info.update("No active run.")
@@ -86,12 +87,40 @@ class DashboardScreen(BaseScreen):
                 lines = ["[bold]Recent Events[/bold]"]
                 for ev in events[:5]:
                     sev_color = "orange" if ev.severity == "warning" else "red" if ev.severity == "error" else "comment"
-                    lines.append(f"  [{sev_color}]{ev.severity.upper()}[/] {ev.message[:60]}")
+                    lines.append(
+                        f"  [{sev_color}]{ev.severity.upper():<7}[/] "
+                        f"{self._format_event_summary(ev)}"
+                    )
                 return "\n".join(lines)
             finally:
                 conn.close()
         except Exception:
             return "[dim]Could not load events.[/]"
+
+    @staticmethod
+    def _format_event_summary(event: Any) -> str:
+        message = str(getattr(event, "message", "") or "").strip()
+        event_type = str(getattr(event, "event_type", "") or "").strip()
+        stage_name = str(getattr(event, "stage_name", "") or "").strip()
+        parts = [message or event_type or "(event)"]
+
+        chapter_number = getattr(event, "chapter_number", None)
+        if chapter_number is not None:
+            parts.append(f"ch={chapter_number}")
+
+        block_id = getattr(event, "block_id", None)
+        if block_id:
+            parts.append(f"block={block_id}")
+
+        payload = getattr(event, "payload", None)
+        if isinstance(payload, dict):
+            reason = payload.get("reason")
+            if isinstance(reason, str) and reason:
+                parts.append(f"reason={reason}")
+
+        if stage_name and stage_name not in parts[0]:
+            parts.append(f"stage={stage_name}")
+        return "  ".join(parts)[:100]
 
     def _build_quick_stats(
         self,
