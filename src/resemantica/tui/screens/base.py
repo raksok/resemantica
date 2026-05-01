@@ -9,6 +9,8 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
+from resemantica.tui.navigation import format_footer_keys, format_location, screen_info_for_class_name
+
 if TYPE_CHECKING:
     from resemantica.tracking.models import Event
 
@@ -20,6 +22,7 @@ class BaseScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Horizontal(
             Static(id="pulse-bar"),
+            Static(id="header-screen-location"),
             Static(id="header-run-info"),
             Static(id="header-chapter-progress"),
             Static(id="header-pass"),
@@ -86,6 +89,10 @@ class BaseScreen(Screen):
 
         pulse = self.query_one("#pulse-bar", Static)
         pulse.update(self._render_pulse_bar(state, events))
+
+        screen_info = screen_info_for_class_name(self.__class__.__name__)
+        screen_location = self.query_one("#header-screen-location", Static)
+        screen_location.update(format_location(screen_info))
 
         run_id = self._get_run_id() or "--"
         release_id = self._get_release_id() or "--"
@@ -192,7 +199,7 @@ class BaseScreen(Screen):
         footer_elapsed.update(metrics["elapsed"])
 
         footer_keys = self.query_one("#footer-keys", Static)
-        footer_keys.update("[1-9] Screen  [q] Quit")
+        footer_keys.update(format_footer_keys(screen_info_for_class_name(self.__class__.__name__)))
 
     def _get_run_state(self) -> dict[str, Any] | None:
         run_id = self._get_run_id()

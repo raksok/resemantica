@@ -15,7 +15,9 @@ from resemantica.tui.screens import (
     EventLogScreen,
     ResetPreviewScreen,
     SettingsScreen,
+    HelpScreen,
 )
+from resemantica.tui.navigation import SCREEN_INFOS, screen_info_for_class_name
 
 
 class ResemanticaApp(App):
@@ -33,18 +35,15 @@ class ResemanticaApp(App):
         "event-log": EventLogScreen,
         "reset-preview": ResetPreviewScreen,
         "settings": SettingsScreen,
+        "help": HelpScreen,
     }
 
     BINDINGS = [
-        Binding("1", "switch_screen('dashboard')", "Dashboard", priority=True),
-        Binding("2", "switch_screen('preprocessing')", "Preprocess", priority=True),
-        Binding("3", "switch_screen('translation')", "Translate", priority=True),
-        Binding("4", "switch_screen('warnings')", "Warnings", priority=True),
-        Binding("5", "switch_screen('artifacts')", "Artifacts", priority=True),
-        Binding("6", "switch_screen('cleanup')", "Cleanup", priority=True),
-        Binding("7", "switch_screen('event-log')", "Events", priority=True),
-        Binding("8", "switch_screen('reset-preview')", "Reset", priority=True),
-        Binding("9", "switch_screen('settings')", "Settings", priority=True),
+        *[
+            Binding(str(info.number), f"switch_screen('{info.screen_id}')", info.label, priority=True)
+            for info in SCREEN_INFOS
+        ],
+        Binding("?", "show_help", "Help", priority=True),
         Binding("q", "quit", "Quit", priority=True),
     ]
 
@@ -61,6 +60,10 @@ class ResemanticaApp(App):
 
     def on_mount(self) -> None:
         self.push_screen("dashboard")
+
+    def action_show_help(self) -> None:
+        screen_info = screen_info_for_class_name(self.screen.__class__.__name__)
+        self.push_screen(HelpScreen(current_screen_info=screen_info))
 
     @property
     def release_id(self) -> str | None:

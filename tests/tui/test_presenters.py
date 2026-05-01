@@ -42,6 +42,10 @@ def _strip_markup(text: str) -> str:
     return text
 
 
+def _static_text(widget) -> str:
+    return str(widget.content)
+
+
 def test_event_bus_subscribe_unsubscribe():
     from resemantica.orchestration.events import subscribe, unsubscribe, emit_event
 
@@ -637,5 +641,76 @@ def test_tui_warnings_screen_mounts_without_release():
 
             assert table.row_count == 1
             assert len(table.ordered_columns) == 3
+
+    asyncio.run(run())
+
+
+def test_tui_header_and_footer_show_current_screen_location():
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            header = pilot.app.screen.query_one("#header-screen-location", Static)
+            footer = pilot.app.screen.query_one("#footer-keys", Static)
+            assert _static_text(header) == "Screen 1/9 Dashboard"
+            assert "Active: 1 Dashboard" in _static_text(footer)
+            assert "? Help" in _static_text(footer)
+
+            await pilot.press("4")
+            await pilot.pause()
+            header = pilot.app.screen.query_one("#header-screen-location", Static)
+            assert _static_text(header) == "Screen 4/9 Warnings"
+
+            await pilot.press("9")
+            await pilot.pause()
+            header = pilot.app.screen.query_one("#header-screen-location", Static)
+            assert _static_text(header) == "Screen 9/9 Settings"
+
+    asyncio.run(run())
+
+
+def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
+    from textual.widgets import Static
+
+    from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.settings import SettingsScreen
+
+    async def run() -> None:
+        app = ResemanticaApp()
+        async with app.run_test() as pilot:
+            await pilot.press("9")
+            await pilot.pause()
+
+            await pilot.press("?")
+            await pilot.pause()
+
+            help_content = pilot.app.screen.query_one("#help-content", Static)
+            rendered = _static_text(help_content)
+
+            assert "Screen 9/9 Settings" in rendered
+            for label in (
+                "Dashboard",
+                "Preprocessing",
+                "Translation",
+                "Warnings",
+                "Artifacts",
+                "Cleanup",
+                "Events",
+                "Reset",
+                "Settings",
+            ):
+                assert label in rendered
+            assert "1-9     Switch screen" in rendered
+            assert "?       Toggle help" in rendered
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert isinstance(pilot.app.screen, SettingsScreen)
 
     asyncio.run(run())

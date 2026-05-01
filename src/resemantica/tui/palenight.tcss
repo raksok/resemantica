@@ -19,6 +19,12 @@ HeaderBar {
     color: #89DDFF;
 }
 
+#header-screen-location {
+    width: 24;
+    color: #C792EA;
+    text-style: bold;
+}
+
 #header-run-info {
     width: 1fr;
     color: #EEFFFF;
@@ -119,6 +125,25 @@ FooterBar {
     width: 1fr;
     color: #676E95;
     text-align: right;
+}
+
+#help-dialog {
+    width: 64;
+    height: auto;
+    margin: 2 4;
+    padding: 1 2;
+    background: #1E1F2B;
+    border: round #82AAFF;
+}
+
+#help-title {
+    color: #C792EA;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+#help-content {
+    color: #D4D5F0;
 }
 
 .status-complete {

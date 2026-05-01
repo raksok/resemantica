@@ -7,6 +7,7 @@ from resemantica.tui.screens.cleanup import CleanupScreen
 from resemantica.tui.screens.event_log import EventLogScreen
 from resemantica.tui.screens.reset_preview import ResetPreviewScreen
 from resemantica.tui.screens.settings import SettingsScreen
+from resemantica.tui.screens.help import HelpScreen
 
 __all__ = [
     "DashboardScreen",
@@ -18,4 +19,5 @@ __all__ = [
     "EventLogScreen",
     "ResetPreviewScreen",
     "SettingsScreen",
+    "HelpScreen",
 ]
