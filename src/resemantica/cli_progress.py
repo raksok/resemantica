@@ -4,6 +4,7 @@ from collections import deque
 from threading import Lock
 from typing import Any
 
+from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -56,7 +57,7 @@ class CliProgressSubscriber:
                 BarColumn(),
                 TaskProgressColumn(show_speed=False),
             )
-            self._live = Live(self._render_layout, refresh_per_second=4, stderr=True, auto_clear=False)
+            self._live = Live(self._render_layout, console=Console(stderr=True), refresh_per_second=4, auto_clear=False)
             self._live.__enter__()
             replace_stderr_sink(self._log_sink, fmt="{message}")
 
