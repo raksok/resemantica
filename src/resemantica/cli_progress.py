@@ -4,8 +4,7 @@ from collections import deque
 from threading import Lock
 from typing import Any
 
-from rich.console import Console
-from rich.layout import Layout
+from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
@@ -103,24 +102,18 @@ class CliProgressSubscriber:
             return Text("")
         return Panel("\n".join(lines), title="Log", border_style="dim")
 
-    def _render_layout(self) -> Layout:
-        layout = Layout()
-        log_renderable = self._render_log_panel()
-        has_log = not (isinstance(log_renderable, Text) and log_renderable.plain == "")
-
-        children: list[Layout] = [
-            Layout(name="progress", renderable=self.progress),
-            Layout(name="divider1", size=1, renderable=Rule(style="dim")),
-            Layout(name="status", size=1, renderable=self._render_status()),
+    def _render_layout(self) -> Group:
+        components: list[object] = [
+            self.progress,
+            Rule(style="dim"),
+            self._render_status(),
         ]
+        log_panel = self._render_log_panel()
+        has_log = not (isinstance(log_panel, Text) and log_panel.plain == "")
         if has_log:
-            children.append(Layout(name="divider2", size=1, renderable=Rule(style="dim")))
-            children.append(
-                Layout(name="log", size=self._log_lines + 2, renderable=log_renderable)
-            )
-
-        layout.split_column(*children)
-        return layout
+            components.append(Rule(style="dim"))
+            components.append(log_panel)
+        return Group(*components)
 
     def _log_sink(self, msg: str) -> None:
         _, _, resolved = msg.partition(" | ")
