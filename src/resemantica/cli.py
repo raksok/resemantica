@@ -81,9 +81,9 @@ class _InterruptedStop:
 _INTERRUPTED_STOP = _InterruptedStop()
 
 
-def _with_cli_progress(fn, *, stop_token: StopToken | None = None):
+def _with_cli_progress(fn, *, stop_token: StopToken | None = None, verbosity: int = 0):
     if stop_token is None:
-        with CliProgressSubscriber():
+        with CliProgressSubscriber(verbosity=verbosity):
             return fn()
 
     previous_handler = signal.getsignal(signal.SIGINT)
@@ -97,7 +97,7 @@ def _with_cli_progress(fn, *, stop_token: StopToken | None = None):
 
     signal.signal(signal.SIGINT, request_stop)
     try:
-        with CliProgressSubscriber():
+        with CliProgressSubscriber(verbosity=verbosity):
             return fn()
     except StopRequested as exc:
         print(f"status=stopped\nmessage={exc.message}")
@@ -413,7 +413,8 @@ def main(argv: list[str] | None = None) -> int:
                 input_path=args.input,
                 release_id=args.release,
                 config=config,
-            )
+            ),
+            verbosity=int(getattr(args, "verbose", 0) or 0),
         )
         print(f"status={roundtrip_result.status}")
         print(f"release_root={roundtrip_result.release_root}")
@@ -433,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
                 stop_token=stop_token,
             ),
             stop_token=stop_token,
+            verbosity=int(getattr(args, "verbose", 0) or 0),
         )
         if result is _INTERRUPTED_STOP:
             return 130
@@ -454,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if result is _INTERRUPTED_STOP:
                 return 130
@@ -470,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if result is _INTERRUPTED_STOP:
                 return 130
@@ -487,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if result is _INTERRUPTED_STOP:
                 return 130
@@ -505,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
@@ -519,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
@@ -533,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
@@ -555,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
@@ -598,6 +607,7 @@ def main(argv: list[str] | None = None) -> int:
                     batched_model_order=bool(getattr(args, "batched_model_order", False)),
                 ),
                 stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if result is _INTERRUPTED_STOP:
                 return 130
@@ -676,6 +686,7 @@ def main(argv: list[str] | None = None) -> int:
                 batched_model_order=bool(getattr(args, "batched_model_order", False)),
             ),
             stop_token=stop_token,
+            verbosity=int(getattr(args, "verbose", 0) or 0),
         )
         if result is _INTERRUPTED_STOP:
             return 130
@@ -692,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
                 stop_token=stop_token,
             ),
             stop_token=stop_token,
+            verbosity=int(getattr(args, "verbose", 0) or 0),
         )
         if result is _INTERRUPTED_STOP:
             return 130
@@ -712,6 +724,7 @@ def main(argv: list[str] | None = None) -> int:
                 stop_token=stop_token,
             ),
             stop_token=stop_token,
+            verbosity=int(getattr(args, "verbose", 0) or 0),
         )
         if result is _INTERRUPTED_STOP:
             return 130

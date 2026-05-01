@@ -25,7 +25,7 @@ def test_cli_progress_subscribes_and_unsubscribes() -> None:
 
 
 def test_cli_progress_creates_and_advances_chapter_task() -> None:
-    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress())
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
 
     subscriber._on_event(
         Event(
@@ -53,7 +53,7 @@ def test_cli_progress_creates_and_advances_chapter_task() -> None:
 
 
 def test_cli_progress_counts_warnings_and_skips() -> None:
-    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress())
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
 
     subscriber._on_event(
         Event(
@@ -85,7 +85,7 @@ def test_cli_progress_counts_warnings_and_skips() -> None:
 
 
 def test_cli_progress_completes_indeterminate_task() -> None:
-    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress())
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
 
     subscriber._on_event(
         Event(
@@ -118,3 +118,19 @@ def test_cli_progress_counter_text_is_global() -> None:
     subscriber.artifact_count = 4
 
     assert subscriber._counter_text() == "run warn 1 run skip 2 run retry 3 run artifacts 4"
+
+
+def test_cli_progress_filters_events_by_cli_verbosity() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=0)
+
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-summaries.chapter_completed",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-summaries",
+            chapter_number=1,
+        )
+    )
+
+    assert subscriber.tasks_by_stage == {}

@@ -6,14 +6,15 @@ from resemantica.llm.client import LLMClient
 
 
 class _FakeCompletions:
-    def __init__(self) -> None:
+    def __init__(self, *, usage: Any | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.usage = usage
 
     def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         message = type("Message", (), {"content": "ok"})()
         choice = type("Choice", (), {"message": message})()
-        return type("Response", (), {"choices": [choice]})()
+        return type("Response", (), {"choices": [choice], "usage": self.usage})()
 
 
 class _FakeChat:
@@ -22,8 +23,8 @@ class _FakeChat:
 
 
 class _FakeOpenAIClient:
-    def __init__(self) -> None:
-        self.completions = _FakeCompletions()
+    def __init__(self, *, usage: Any | None = None) -> None:
+        self.completions = _FakeCompletions(usage=usage)
         self.chat = _FakeChat(self.completions)
 
 
@@ -62,3 +63,50 @@ def test_generation_hook_bypasses_openai_client(monkeypatch) -> None:
 
     assert client.generate_text(model_name="m", prompt="p") == "m:p"
     assert client.openai_request_count == 0
+
+
+def test_generate_text_tracks_provider_usage(monkeypatch) -> None:
+    usage = type(
+        "Usage",
+        (),
+        {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+    )()
+
+    def build_client(self: LLMClient) -> _FakeOpenAIClient:  # noqa: ARG001
+        return _FakeOpenAIClient(usage=usage)
+
+    monkeypatch.setattr(LLMClient, "_build_openai_client", build_client)
+    client = LLMClient(base_url="http://local", timeout_seconds=30)
+
+    client.generate_text(model_name="model-a", prompt="first")
+
+    snapshot = client.snapshot_usage().to_payload()
+    assert snapshot == {
+        "llm_request_count": 1,
+        "llm_usage_tracked_count": 1,
+        "llm_cache_hit_count": 0,
+        "llm_prompt_tokens": 11,
+        "llm_completion_tokens": 7,
+        "llm_total_tokens": 18,
+    }
+
+
+def test_cache_hits_and_missing_usage_are_tracked_without_tokens(monkeypatch) -> None:
+    def build_client(self: LLMClient) -> _FakeOpenAIClient:  # noqa: ARG001
+        return _FakeOpenAIClient()
+
+    monkeypatch.setattr(LLMClient, "_build_openai_client", build_client)
+    client = LLMClient(base_url="http://local", timeout_seconds=30)
+
+    client.record_cache_hit()
+    client.generate_text(model_name="model-a", prompt="first")
+
+    snapshot = client.snapshot_usage().to_payload()
+    assert snapshot == {
+        "llm_request_count": 1,
+        "llm_usage_tracked_count": 0,
+        "llm_cache_hit_count": 1,
+        "llm_prompt_tokens": 0,
+        "llm_completion_tokens": 0,
+        "llm_total_tokens": 0,
+    }

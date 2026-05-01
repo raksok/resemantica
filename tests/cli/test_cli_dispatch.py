@@ -192,3 +192,36 @@ class TestCliDispatch:
         assert calls[0]["verbosity"] == 2
         assert calls[0]["run_id"] == "production"
         assert "preprocess-glossary" in capsys.readouterr().out
+
+    def test_main_wires_verbose_to_cli_progress(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        class FakeSubscriber:
+            def __init__(self, *, verbosity=0, **kwargs):
+                captured["verbosity"] = verbosity
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+        class FakeResult:
+            success = True
+            stopped = False
+            message = "ok"
+
+        monkeypatch.setattr(cli_mod, "CliProgressSubscriber", FakeSubscriber)
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr(
+            "resemantica.orchestration.runner.OrchestrationRunner.run_stage",
+            lambda self, *args, **kwargs: FakeResult(),
+        )
+
+        result = cli_mod.main(
+            ["translate-range", "--release", "r1", "--run", "run-1", "--start", "1", "--end", "1", "-vvv"]
+        )
+
+        assert result == 0
+        assert captured["verbosity"] == 3

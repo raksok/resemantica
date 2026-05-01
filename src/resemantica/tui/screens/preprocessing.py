@@ -118,13 +118,13 @@ class PreprocessingScreen(BaseScreen):
                 bar = self._render_scoped_bar(stage_progress, stage.status)
                 numeric = f" {stage_progress.completed}/{stage_progress.total}"
             elif stage.status == "done":
-                bar = "[green]\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501[/]"
+                bar = self._static_bar(color="green", fill="\u2501")
                 numeric = ""
             elif stage.status == "running":
-                bar = "[cyan]\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u257a\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/]"
+                bar = self._running_bar(color="cyan")
                 numeric = ""
             else:
-                bar = "[comment]\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/]"
+                bar = self._static_bar(color="comment", fill="\u2500")
                 numeric = ""
             lines.append(
                 f"  [{color}]{glyph}[/] {stage.label:<14} {bar}{numeric:<6}  [{color}]{stage.status.upper():<7}[/]"
@@ -290,10 +290,21 @@ class PreprocessingScreen(BaseScreen):
     @staticmethod
     def _render_stage_bar(status: str) -> str:
         if status == "DONE":
-            return "[green]\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501[/]"
+            return PreprocessingScreen._static_bar(color="green", fill="\u2501")
         if status == "RUNNING":
-            return "[cyan]\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u257a\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/]"
-        return "[comment]\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/]"
+            return PreprocessingScreen._running_bar(color="cyan")
+        return PreprocessingScreen._static_bar(color="comment", fill="\u2500")
+
+    @staticmethod
+    def _static_bar(*, color: str, fill: str, width: int = 20) -> str:
+        return f"[{color}]{fill * width}[/]"
+
+    @staticmethod
+    def _running_bar(*, color: str, width: int = 20) -> str:
+        filled = "\u2501" * 8
+        marker = "\u257a"
+        remaining = "\u2500" * (width - len(filled) - 1)
+        return f"[{color}]{filled}{marker}{remaining}[/]"
 
     def _update_status(self) -> None:
         snapshot = self._snapshot()
@@ -339,11 +350,7 @@ class PreprocessingScreen(BaseScreen):
             )
 
     def _update_event_tail(self) -> None:
-        events = [
-            event
-            for event in self._recent_events_for_refresh()
-            if self._event_matches_stage_prefix(event, ("preprocess-", "packets-build"))
-        ]
+        events = self._screen_events_for_tail()
         self.query_one("#preprocessing-event-tail", Static).update(
             self._render_cached_event_tail(
                 events,
@@ -354,6 +361,12 @@ class PreprocessingScreen(BaseScreen):
 
     def _render_cached_event_tail(self, events: list, *, title: str, limit: int = 5) -> str:
         return self._render_event_tail(events, title=title, limit=limit)
+
+    def _event_source_mode(self) -> str:
+        return "observability_stream"
+
+    def _default_event_filter(self, event) -> bool:
+        return self._event_matches_stage_prefix(event, ("preprocess-", "packets-build"))
 
     def action_launch_glossary(self) -> None:
         self._launch_stage("preprocess-glossary")

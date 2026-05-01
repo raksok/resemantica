@@ -55,9 +55,9 @@ class ObservabilityScreen(BaseScreen):
     def on_mount(self) -> None:
         self._adapter: ObservabilityAdapter | None = None
         self._adapter_events: list[Event] = []
-        self._verbosity: ObservabilityVerbosity = "normal"
+        self._verbosity: ObservabilityVerbosity = getattr(self.app, "observability_verbosity", "debug")
         self._source_filter: ObservabilitySourceFilter = "all"
-        self._severity_filter: ObservabilitySeverityFilter = "warnings/errors"
+        self._severity_filter: ObservabilitySeverityFilter = "all"
         self._stage_filter: str | None = None
         self._chapter_filter: int | None = None
         self._obs_snapshot = ObservabilitySnapshot(
@@ -111,6 +111,7 @@ class ObservabilityScreen(BaseScreen):
 
     def action_cycle_verbosity(self) -> None:
         self._verbosity = self._cycle(("normal", "verbose", "debug"), self._verbosity)
+        self.app.observability_verbosity = self._verbosity
         self._refresh_observability()
 
     def action_cycle_source(self) -> None:

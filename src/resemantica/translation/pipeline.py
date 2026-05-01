@@ -9,7 +9,7 @@ from loguru import logger
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.translation.checkpoints import (
@@ -157,6 +157,7 @@ def translate_chapter_pass1(
     pass1_prompt = load_prompt("translate_pass1.txt")
     model_name = config_obj.models.translator_name
     client = _build_llm_client(config_obj, llm_client)
+    usage_before = capture_usage_snapshot(client)
 
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
@@ -412,6 +413,7 @@ def translate_chapter_pass1(
             "status": str(pass1_payload.get("status", "unknown")),
             "pass1_artifact": str(pass1_artifact_path),
             "blocks": pass1_payload.get("blocks", []),
+            **usage_payload_delta(client, usage_before),
         }
     finally:
         conn.close()
@@ -461,6 +463,7 @@ def translate_chapter_pass2(
     pass2_prompt = load_prompt("translate_pass2.txt")
     analyst_model = config_obj.models.analyst_name
     client = _build_llm_client(config_obj, llm_client)
+    usage_before = capture_usage_snapshot(client)
 
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
@@ -744,6 +747,7 @@ def translate_chapter_pass2(
             "status": "success",
             "pass2_artifact": str(pass2_artifact_path),
             "blocks": pass2_blocks,
+            **usage_payload_delta(client, usage_before),
         }
     finally:
         conn.close()
@@ -786,6 +790,7 @@ def translate_chapter_pass3(
     pass3_prompt = load_prompt("translate_pass3.txt")
     model_name = config_obj.models.analyst_name
     client = _build_llm_client(config_obj, llm_client)
+    usage_before = capture_usage_snapshot(client)
     source_hash = str(pass2_payload.get("source_hash", ""))
 
     conn = open_connection(paths.db_path)
@@ -811,6 +816,7 @@ def translate_chapter_pass3(
             return {
                 "status": "success",
                 "pass3_artifact": pass3_checkpoint.artifact_path,
+                **usage_payload_delta(client, usage_before),
             }
 
         threshold_high = config_obj.translation.risk_threshold_high
@@ -958,6 +964,7 @@ def translate_chapter_pass3(
         return {
             "status": "success",
             "pass3_artifact": str(pass3_artifact_path),
+            **usage_payload_delta(client, usage_before),
         }
     finally:
         conn.close()

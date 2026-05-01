@@ -12,6 +12,7 @@ from textual.binding import Binding
 from resemantica.orchestration.stop import StopToken
 from resemantica.tui.launch_control import TuiSession
 from resemantica.tui.navigation import SCREEN_INFOS, screen_info_for_class_name
+from resemantica.tui.observability import ObservabilityVerbosity
 from resemantica.tui.screens import (
     ArtifactScreen,
     DashboardScreen,
@@ -82,6 +83,7 @@ class ResemanticaApp(App):
         self._live_events: deque[Event] = deque(maxlen=self.LIVE_RETAINED_LIMIT)
         self._live_event_lock = Lock()
         self._live_events_subscribed = False
+        self.observability_verbosity: ObservabilityVerbosity = "debug"
 
     def on_mount(self) -> None:
         self._subscribe_live_events()

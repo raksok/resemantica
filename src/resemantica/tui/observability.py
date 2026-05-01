@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from resemantica.observability.granularity import classify_signal_level, tui_verbosity_to_level
 from resemantica.tracking.models import Event
 
 ObservabilitySource = Literal["live", "persisted", "log"]
@@ -205,11 +206,10 @@ def apply_record_filters(
     chapter_filter: int | None = None,
 ) -> list[ObservabilityRecord]:
     filtered: list[ObservabilityRecord] = []
+    max_level = tui_verbosity_to_level(verbosity)
     for record in records:
         severity = record.severity.lower()
-        if verbosity == "normal" and severity not in {"warning", "error"}:
-            continue
-        if verbosity == "verbose" and severity == "debug":
+        if classify_signal_level(record.event_type or "", severity=severity) > max_level:
             continue
         if severity_filter == "warnings/errors" and severity not in {"warning", "error"}:
             continue

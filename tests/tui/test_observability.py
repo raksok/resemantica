@@ -237,8 +237,8 @@ def test_record_filters_apply_verbosity_stage_and_chapter():
         chapter_filter=2,
     )
 
-    assert [record.message for record in normal] == ["Warning event"]
-    assert [record.message for record in verbose] == ["Info event", "Warning event"]
+    assert [record.message for record in normal] == ["Info event"]
+    assert [record.message for record in verbose] == ["Info event"]
     assert [record.message for record in debug] == ["Info event", "Warning event", "Debug log"]
 
 

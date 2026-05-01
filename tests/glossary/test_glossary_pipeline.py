@@ -291,6 +291,7 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.promote.started" in event_types
     assert "preprocess-glossary.promote.completed" in event_types
     assert event_types[-1] == "preprocess-glossary.completed"
+    assert all(event.message for event in received if event.event_type.startswith("preprocess-glossary"))
 
 
 def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch) -> None:

@@ -11,6 +11,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
+from resemantica.observability.granularity import classify_event_level, tui_verbosity_to_level
 from resemantica.orchestration.stop import StopToken
 from resemantica.tui.launch_control import (
     LaunchContext,
@@ -167,6 +168,24 @@ class BaseScreen(Screen):
 
     def _cached_extraction_manifest_for_refresh(self) -> bool:
         return getattr(self, "_cached_extraction_manifest_exists", False)
+
+    def _event_source_mode(self) -> str:
+        return "summary_cached"
+
+    def _default_event_filter(self, event: Event) -> bool:
+        return True
+
+    def _tui_event_level(self) -> int:
+        return tui_verbosity_to_level(getattr(self.app, "observability_verbosity", "debug"))
+
+    def _screen_events_for_tail(self, *, limit: int = 5000) -> list[Event]:
+        events = self._recent_events_for_refresh(limit=limit)
+        max_level = self._tui_event_level()
+        return [
+            event
+            for event in events
+            if classify_event_level(event) <= max_level and self._default_event_filter(event)
+        ]
 
     def _run_state_for_refresh(self) -> dict[str, Any] | None:
         if self._fast_refresh_active():

@@ -212,6 +212,7 @@ class TestRunStage:
             chapter_number: int,
             force: bool = False,
             stop_token=None,
+            llm_client=None,
         ):
             translated.append(chapter_number)
             return StageResult(True, "translate-chapter", "ok")
@@ -253,6 +254,37 @@ class TestRunStage:
         assert state.status == "stopped"
         assert [event.event_type for event in events].count("stage_stopped") == 1
 
+    def test_stage_completed_event_persists_llm_usage_payload(self, monkeypatch):
+        import uuid
+
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        def fake_execute_stage(self, stage_name, **kwargs):
+            return StageResult(
+                True,
+                stage_name,
+                "ok",
+                metadata={"llm_total_tokens": 33, "llm_request_count": 2},
+            )
+
+        monkeypatch.setattr(OrchestrationRunner, "_execute_stage", fake_execute_stage)
+
+        result = OrchestrationRunner(release_id, run_id).run_stage("reset", dry_run=True)
+
+        assert result.success is True
+        conn = ensure_tracking_db(release_id)
+        try:
+            events = load_events(conn, run_id=run_id, release_id=release_id, limit=10)
+        finally:
+            conn.close()
+
+        completed = next(event for event in events if event.event_type == "stage_completed")
+        assert completed.payload["llm_total_tokens"] == 33
+        assert completed.payload["llm_request_count"] == 2
+
     def test_translate_range_stop_after_chapter_does_not_start_next(self, monkeypatch):
         import uuid
 
@@ -269,7 +301,14 @@ class TestRunStage:
             lambda self, chapter_start, chapter_end: (1, 3),
         )
 
-        def fake_translate_chapter(self, *, chapter_number: int, force: bool = False, stop_token=None):
+        def fake_translate_chapter(
+            self,
+            *,
+            chapter_number: int,
+            force: bool = False,
+            stop_token=None,
+            llm_client=None,
+        ):
             translated.append(chapter_number)
             if chapter_number == 1:
                 token.request_stop()

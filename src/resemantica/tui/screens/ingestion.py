@@ -122,11 +122,7 @@ class IngestionScreen(BaseScreen):
         self._update_event_tail()
 
     def _update_event_tail(self) -> None:
-        events = [
-            event
-            for event in self._recent_events_for_refresh()
-            if self._event_matches_stage_prefix(event, ("epub-extract",))
-        ]
+        events = self._screen_events_for_tail()
         self.query_one("#ingestion-event-tail", Static).update(
             self._render_event_tail(
                 events,
@@ -134,6 +130,12 @@ class IngestionScreen(BaseScreen):
                 limit=self._event_tail_limit("#ingestion-event-tail"),
             )
         )
+
+    def _event_source_mode(self) -> str:
+        return "observability_stream"
+
+    def _default_event_filter(self, event) -> bool:
+        return self._event_matches_stage_prefix(event, ("epub-extract",))
 
     def action_launch_extract(self) -> None:
         session = getattr(self.app, "session", None)

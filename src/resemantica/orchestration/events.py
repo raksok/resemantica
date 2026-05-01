@@ -22,6 +22,33 @@ _STANDARD_TYPE_ALIASES: dict[str, str] = {
     "risk_detected": "translate.risk_detected",
 }
 
+_STAGE_LABELS: dict[str, str] = {
+    "epub-extract": "EPUB extraction",
+    "epub-rebuild": "EPUB rebuild",
+    "packets-build": "Packet build",
+    "preprocess-glossary": "Glossary preprocessing",
+    "preprocess-glossary.discover": "Glossary discovery",
+    "preprocess-glossary.translate": "Glossary translation",
+    "preprocess-glossary.promote": "Glossary promotion",
+    "preprocess-summaries": "Summaries preprocessing",
+    "preprocess-idioms": "Idiom preprocessing",
+    "preprocess-graph": "Graph extraction",
+    "translate-range": "Translation range",
+    "translate-chapter": "Chapter translation",
+    "production": "Production run",
+}
+
+_CHAPTER_ACTIONS: dict[str, str] = {
+    "epub-extract": "Extracting chapter",
+    "packets-build": "Building packets for chapter",
+    "preprocess-glossary.discover": "Discovering glossary candidates in chapter",
+    "preprocess-glossary.translate": "Translating glossary candidates in chapter",
+    "preprocess-summaries": "Generating summaries for chapter",
+    "preprocess-idioms": "Extracting idioms in chapter",
+    "preprocess-graph": "Extracting graph entities in chapter",
+    "translate-chapter": "Translating chapter",
+}
+
 
 class EventBus:
     def __init__(
@@ -148,13 +175,20 @@ def emit_event(
     block_id: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
 ) -> Event:
+    resolved_message = message or _default_message(
+        event_type=event_type,
+        stage_name=stage_name,
+        chapter_number=chapter_number,
+        block_id=block_id,
+        payload=payload or {},
+    )
     event = Event(
         event_type=event_type,
         run_id=run_id,
         release_id=release_id,
         stage_name=stage_name,
         severity=severity,
-        message=message,
+        message=resolved_message,
         chapter_number=chapter_number,
         block_id=block_id,
         payload=payload or {},
@@ -169,7 +203,7 @@ def emit_event(
             release_id=release_id,
             stage_name=stage_name,
             severity=severity,
-            message=message,
+            message=resolved_message,
             chapter_number=chapter_number,
             block_id=block_id,
             payload=payload or {},
@@ -182,7 +216,7 @@ def emit_event(
         "[{}] {} | {}",
         event_type,
         stage_name,
-        message,
+        resolved_message,
         event_type=event_type,
         stage_name=stage_name,
         chapter_number=chapter_number,
@@ -192,3 +226,115 @@ def emit_event(
     )
 
     return result
+
+
+def _default_message(
+    *,
+    event_type: str,
+    stage_name: str,
+    chapter_number: Optional[int],
+    block_id: Optional[str],
+    payload: dict[str, Any],
+) -> str:
+    if event_type.endswith(".started") or event_type.endswith("_started"):
+        return _started_message(event_type=event_type, payload=payload)
+    if event_type.endswith(".chapter_started") or event_type == "chapter_started":
+        if chapter_number is None:
+            return ""
+        return f"{_chapter_action(event_type)} {chapter_number}"
+    if event_type.endswith(".chapter_skipped") or event_type == "chapter_skipped":
+        if chapter_number is None:
+            return ""
+        reason = _humanize_reason(payload.get("reason"))
+        suffix = f": {reason}" if reason else ""
+        return f"Skipped {_stage_label(_stage_key_for_event(event_type)).lower()} for chapter {chapter_number}{suffix}"
+    if event_type.endswith(".chapter_completed") or event_type == "chapter_completed":
+        if chapter_number is None:
+            return ""
+        count_suffix = _count_suffix(payload)
+        label = _stage_label(_stage_key_for_event(event_type)).lower()
+        return f"Completed {label} for chapter {chapter_number}{count_suffix}"
+    if event_type.endswith(".completed") or event_type.endswith("_completed"):
+        count_suffix = _count_suffix(payload)
+        return f"{_stage_label(_stage_key_for_event(event_type))} completed{count_suffix}"
+    if event_type.endswith(".failed") or event_type.endswith("_failed"):
+        return f"{_stage_label(_stage_key_for_event(event_type))} failed"
+    if event_type.endswith(".stopped") or event_type.endswith("_stopped"):
+        return f"{_stage_label(_stage_key_for_event(event_type))} stopped"
+    if event_type.endswith(".term_found"):
+        term = payload.get("term")
+        if isinstance(term, str) and term:
+            return f"Found glossary term {term}"
+    if event_type.endswith(".entity_extracted"):
+        entity_name = payload.get("entity_name")
+        if isinstance(entity_name, str) and entity_name:
+            return f"Extracted graph entity {entity_name}"
+    if event_type.endswith(".artifact_written") or event_type == "artifact_written":
+        return "Artifact written"
+    if event_type.endswith(".retry") or event_type.endswith("_retry"):
+        if block_id:
+            return f"Retrying {block_id}"
+        return "Retrying step"
+    return ""
+
+
+def _stage_key_for_event(event_type: str) -> str:
+    if "." in event_type:
+        return event_type.rsplit(".", 1)[0]
+    if event_type.endswith("_started"):
+        return event_type.removesuffix("_started")
+    if event_type.endswith("_completed"):
+        return event_type.removesuffix("_completed")
+    if event_type.endswith("_failed"):
+        return event_type.removesuffix("_failed")
+    if event_type.endswith("_stopped"):
+        return event_type.removesuffix("_stopped")
+    return event_type
+
+
+def _stage_label(stage_key: str) -> str:
+    label = _STAGE_LABELS.get(stage_key)
+    if label is not None:
+        return label
+    return stage_key.replace(".", " ").replace("-", " ").title()
+
+
+def _chapter_action(event_type: str) -> str:
+    stage_key = _stage_key_for_event(event_type)
+    action = _CHAPTER_ACTIONS.get(stage_key)
+    if action is not None:
+        return action
+    return f"Processing {_stage_label(stage_key).lower()} in chapter"
+
+
+def _started_message(*, event_type: str, payload: dict[str, Any]) -> str:
+    stage_key = _stage_key_for_event(event_type)
+    label = _stage_label(stage_key)
+    total = payload.get("total_chapters")
+    if isinstance(total, int):
+        return f"{label} started for {total} chapters"
+    return f"{label} started"
+
+
+def _humanize_reason(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    return value.replace("_", " ").replace("-", " ")
+
+
+def _count_suffix(payload: dict[str, Any]) -> str:
+    count_fields = (
+        ("term_count", "terms found"),
+        ("discovered_count", "terms found"),
+        ("candidate_count", "candidates"),
+        ("summary_count", "summaries"),
+        ("translated_count", "translations"),
+        ("promoted_count", "promoted"),
+        ("entity_count", "entities"),
+        ("completed_blocks", "blocks completed"),
+    )
+    for key, label in count_fields:
+        value = payload.get(key)
+        if isinstance(value, int):
+            return f": {value} {label}"
+    return ""

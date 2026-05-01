@@ -20,7 +20,7 @@ from resemantica.llm.budget import (
     ensure_prompt_within_budget,
 )
 from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, record_cache_hit
 from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
 from resemantica.settings import AppConfig, load_config
@@ -155,6 +155,8 @@ def _generate_structured_summary(
             prompt_hash=hash_prompt(prompt),
         )
         cached = load_cached_text(cache_root, identity) if cache_root is not None else None
+        if cached is not None:
+            record_cache_hit(llm_client)
         raw_output = (
             cached
             if cached is not None

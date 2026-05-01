@@ -22,7 +22,7 @@ from resemantica.db.idiom_repo import (
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.idioms.extractor import extract_idioms
 from resemantica.idioms.validators import normalize_idiom_source, validate_idiom_policy
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt, render_named_sections
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -177,6 +177,10 @@ def preprocess_idioms(
     translate_prompt = load_prompt("idiom_translate.txt")
     analyst_client = _build_llm_client(config_obj, llm_client)
     translator_client = _build_llm_client(config_obj, translator_llm_client)
+    combined_usage_before = {
+        "analyst": capture_usage_snapshot(analyst_client),
+        "translator": capture_usage_snapshot(translator_client),
+    }
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "idioms")
@@ -191,7 +195,12 @@ def preprocess_idioms(
         # Phase 1: Detect (Analyst)
         skip_chapters: set[int] = set()
         cursor = conn.execute(
-            "SELECT chapter_number FROM summary_drafts WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured' AND is_story_chapter = 0",
+            (
+                "SELECT chapter_number FROM summary_drafts "
+                "WHERE release_id = ? "
+                "AND summary_type = 'chapter_summary_zh_structured' "
+                "AND is_story_chapter = 0"
+            ),
             (release_id,),
         )
         for row in cursor.fetchall():
@@ -316,6 +325,10 @@ def preprocess_idioms(
         extracted=len(detected_candidates),
         skipped=max(0, skipped_count),
         promoted_count=len(validation.promotion_entries),
+        **_merge_usage_payloads(
+            usage_payload_delta(analyst_client, combined_usage_before["analyst"]),
+            usage_payload_delta(translator_client, combined_usage_before["translator"]),
+        ),
     )
     return {
         "status": "success",
@@ -329,6 +342,10 @@ def preprocess_idioms(
         "candidates_artifact": str(paths.idiom_candidates_path),
         "policies_artifact": str(paths.idiom_policies_path),
         "conflicts_artifact": str(paths.idiom_conflicts_path),
+        **_merge_usage_payloads(
+            usage_payload_delta(analyst_client, combined_usage_before["analyst"]),
+            usage_payload_delta(translator_client, combined_usage_before["translator"]),
+        ),
     }
 
 
@@ -355,3 +372,11 @@ def resolve_idiom_policy(
         return fallback_rendering
     finally:
         conn.close()
+
+
+def _merge_usage_payloads(*payloads: dict[str, int]) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for payload in payloads:
+        for key, value in payload.items():
+            merged[key] = merged.get(key, 0) + value
+    return merged

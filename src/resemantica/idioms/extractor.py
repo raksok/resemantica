@@ -16,7 +16,7 @@ from resemantica.llm.budget import (
     ensure_prompt_within_budget,
 )
 from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, record_cache_hit, usage_payload_delta
 from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
@@ -167,6 +167,7 @@ def extract_idioms(
         chapter_file = chapter_ref.chapter_path
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", chapter_ref.chapter_number))
+        chapter_usage_before = capture_usage_snapshot(llm_client)
         raise_if_stop_requested(
             stop_token,
             checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},
@@ -243,6 +244,8 @@ def extract_idioms(
                 prompt_hash=hash_prompt(prompt),
             )
             cached = load_cached_text(cache_root, identity) if cache_root is not None else None
+            if cached is not None:
+                record_cache_hit(llm_client)
             raw = (
                 cached
                 if cached is not None
@@ -330,7 +333,15 @@ def extract_idioms(
                 )
             )
         if event_callback is not None:
-            event_callback("chapter_completed", chapter_number, {})
+            chapter_candidates = sum(1 for row in candidates if row.first_seen_chapter == chapter_number)
+            event_callback(
+                "chapter_completed",
+                chapter_number,
+                {
+                    "candidate_count": chapter_candidates,
+                    **usage_payload_delta(llm_client, chapter_usage_before),
+                },
+            )
         raise_if_stop_requested(
             stop_token,
             checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},

@@ -21,7 +21,7 @@ from resemantica.db.glossary_repo import (
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.glossary.discovery import discover_candidates_from_extracted
 from resemantica.glossary.validators import normalize_term, validate_candidates_for_promotion
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -99,6 +99,7 @@ def discover_glossary_candidates(
         chapter_start=chapter_start,
         chapter_end=chapter_end,
     )
+    usage_before = capture_usage_snapshot(client)
     _emit(
         run_id,
         release_id,
@@ -151,6 +152,7 @@ def discover_glossary_candidates(
         release_id,
         f"{_STAGE_NAME}.discover.completed",
         discovered_count=len(discovered),
+        **usage_payload_delta(client, usage_before),
     )
     raise_if_stop_requested(
         stop_token,
@@ -164,6 +166,7 @@ def discover_glossary_candidates(
         "run_id": run_id,
         "candidates_written": len(discovered),
         "candidates_artifact": str(paths.glossary_candidates_path),
+        **usage_payload_delta(client, usage_before),
     }
 
 
@@ -180,6 +183,7 @@ def translate_glossary_candidates(
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     prompt = load_prompt("glossary_translate.txt")
     client = _build_llm_client(config_obj, llm_client)
+    usage_before = capture_usage_snapshot(client)
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
@@ -193,6 +197,7 @@ def translate_glossary_candidates(
             total_chapters=len(chapters_with_pending),
         )
         active_chapter: int | None = None
+        chapter_usage_before = capture_usage_snapshot(client)
         completed_chapters: list[int] = []
         for candidate in pending:
             chapter = candidate.first_seen_chapter
@@ -203,6 +208,12 @@ def translate_glossary_candidates(
                         release_id,
                         f"{_STAGE_NAME}.translate.chapter_completed",
                         chapter_number=active_chapter,
+                        candidate_count=sum(
+                            1
+                            for row in pending
+                            if row.first_seen_chapter == active_chapter
+                        ),
+                        **usage_payload_delta(client, chapter_usage_before),
                     )
                     completed_chapters.append(active_chapter)
                     raise_if_stop_requested(
@@ -216,6 +227,7 @@ def translate_glossary_candidates(
                     message="Glossary translation stopped before next chapter",
                 )
                 active_chapter = chapter
+                chapter_usage_before = capture_usage_snapshot(client)
                 _emit(
                     run_id,
                     release_id,
@@ -245,6 +257,12 @@ def translate_glossary_candidates(
                 release_id,
                 f"{_STAGE_NAME}.translate.chapter_completed",
                 chapter_number=active_chapter,
+                candidate_count=sum(
+                    1
+                    for row in pending
+                    if row.first_seen_chapter == active_chapter
+                ),
+                **usage_payload_delta(client, chapter_usage_before),
             )
             completed_chapters.append(active_chapter)
             raise_if_stop_requested(
@@ -266,6 +284,7 @@ def translate_glossary_candidates(
         release_id,
         f"{_STAGE_NAME}.translate.completed",
         translated_count=len(pending),
+        **usage_payload_delta(client, usage_before),
     )
 
     return {
@@ -274,6 +293,7 @@ def translate_glossary_candidates(
         "run_id": run_id,
         "translated_count": len(pending),
         "candidates_artifact": str(paths.glossary_candidates_path),
+        **usage_payload_delta(client, usage_before),
     }
 
 
@@ -284,6 +304,7 @@ def promote_glossary_candidates(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     stop_token: StopToken | None = None,
+    llm_usage_payload: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -337,6 +358,7 @@ def promote_glossary_candidates(
             release_id,
             f"{_STAGE_NAME}.promote.completed",
             promoted_count=len(promotable_without_conflicts),
+            **(llm_usage_payload or {}),
         )
         raise_if_stop_requested(
             stop_token,
@@ -353,6 +375,7 @@ def promote_glossary_candidates(
             discovered=len(list_candidates(conn, release_id=release_id)),
             translated=len(promotable_candidates),
             promoted=len(promotable_without_conflicts),
+            **(llm_usage_payload or {}),
         )
     finally:
         conn.close()
@@ -366,6 +389,7 @@ def promote_glossary_candidates(
         "conflict_count": len(conflicts),
         "candidates_artifact": str(paths.glossary_candidates_path),
         "conflicts_artifact": str(paths.glossary_conflicts_path),
+        **(llm_usage_payload or {}),
     }
 
 

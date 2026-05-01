@@ -108,11 +108,7 @@ class TranslationScreen(BaseScreen):
         self._launch_stage("epub-rebuild")
 
     def _update_event_tail(self) -> None:
-        events = [
-            event
-            for event in self._recent_events_for_refresh()
-            if self._is_translation_event(event)
-        ]
+        events = self._screen_events_for_tail()
         self.query_one("#translation-event-tail", Static).update(
             self._render_cached_event_tail(
                 events,
@@ -123,6 +119,12 @@ class TranslationScreen(BaseScreen):
 
     def _render_cached_event_tail(self, events: list, *, title: str, limit: int = 5) -> str:
         return self._render_event_tail(events, title=title, limit=limit)
+
+    def _event_source_mode(self) -> str:
+        return "observability_stream"
+
+    def _default_event_filter(self, event) -> bool:
+        return self._is_translation_event(event)
 
     @staticmethod
     def _is_translation_event(event: object) -> bool:

@@ -26,7 +26,7 @@ from resemantica.llm.budget import (
     ensure_prompt_within_budget,
 )
 from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, record_cache_hit, usage_payload_delta
 from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
@@ -425,6 +425,7 @@ def extract_entities(
         chapter_file = chapter_ref.chapter_path
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", chapter_ref.chapter_number))
+        chapter_usage_before = capture_usage_snapshot(llm_client)
         completed_chapters = sorted(
             {appearance.chapter_number for appearance in appearances_by_id.values()}
         )
@@ -509,6 +510,8 @@ def extract_entities(
                 prompt_hash=hash_prompt(prompt),
             )
             cached = load_cached_text(cache_root, identity) if cache_root is not None else None
+            if cached is not None:
+                record_cache_hit(llm_client)
             raw = cached if cached is not None else llm_client.generate_text(model_name=model_name, prompt=prompt)
             if cache_root is not None and cached is None:
                 save_cached_text(cache_root, identity, raw)
@@ -599,7 +602,9 @@ def extract_entities(
                         appearance_count=1,
                     )
                     warnings.append(
-                        f"warning_emitted: deferred term {llm_ent.source_term!r} category={llm_ent.entity_type} chapter={chapter_number}"
+                        "warning_emitted: deferred term "
+                        f"{llm_ent.source_term!r} category={llm_ent.entity_type} "
+                        f"chapter={chapter_number}"
                     )
                 else:
                     current_deferred.last_seen_chapter = max(
@@ -713,7 +718,19 @@ def extract_entities(
                 confidence=llm_rel.confidence,
             )
         if event_callback is not None:
-            event_callback("chapter_completed", chapter_number, {})
+            chapter_entities = sum(
+                1
+                for appearance in appearances_by_id.values()
+                if appearance.chapter_number == chapter_number
+            )
+            event_callback(
+                "chapter_completed",
+                chapter_number,
+                {
+                    "entity_count": chapter_entities,
+                    **usage_payload_delta(llm_client, chapter_usage_before),
+                },
+            )
         completed_chapters = sorted(
             {appearance.chapter_number for appearance in appearances_by_id.values()}
         )

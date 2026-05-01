@@ -19,7 +19,7 @@ from resemantica.graph.client import GraphClient
 from resemantica.graph.extractor import extract_entities
 from resemantica.graph.models import GraphAppearance, GraphEntity
 from resemantica.graph.validators import validate_graph_state
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -115,6 +115,7 @@ def preprocess_graph(
 
     prompt = load_prompt("graph_extract.txt")
     llm_client_internal = _build_llm_client(config_obj, llm_client)
+    usage_before = capture_usage_snapshot(llm_client_internal)
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
@@ -134,7 +135,12 @@ def preprocess_graph(
 
         skip_chapters: set[int] = set()
         cursor = conn.execute(
-            "SELECT chapter_number FROM summary_drafts WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured' AND is_story_chapter = 0",
+            (
+                "SELECT chapter_number FROM summary_drafts "
+                "WHERE release_id = ? "
+                "AND summary_type = 'chapter_summary_zh_structured' "
+                "AND is_story_chapter = 0"
+            ),
             (release_id,),
         )
         for row in cursor.fetchall():
@@ -322,6 +328,7 @@ def preprocess_graph(
             0,
             len(chapter_refs) - len({appearance.chapter_number for appearance in provisional_appearances}),
         ),
+        **usage_payload_delta(llm_client_internal, usage_before),
     )
     return {
         "status": "success",
@@ -334,4 +341,5 @@ def preprocess_graph(
         "snapshot_hash": snapshot.snapshot_hash,
         "snapshot_artifact": str(paths.graph_snapshot_path),
         "warnings_artifact": str(paths.graph_warnings_path),
+        **usage_payload_delta(llm_client_internal, usage_before),
     }

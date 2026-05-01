@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from resemantica.chapters.manifest import list_extracted_chapters
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.tracking.models import RunState
 from resemantica.tracking.repo import ensure_tracking_db, load_run_state, save_run_state
@@ -326,33 +326,46 @@ class OrchestrationRunner:
                 promote_glossary_candidates,
                 translate_glossary_candidates,
             )
+            llm_client = LLMClient(
+                base_url=self.config.llm.base_url,
+                timeout_seconds=self.config.llm.timeout_seconds,
+                max_retries=self.config.llm.max_retries,
+            )
 
             discover_glossary_candidates(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
+                llm_client=llm_client,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
                 stop_token=stop_token,
             )
-            translate_glossary_candidates(
+            translate_result = translate_glossary_candidates(
+                release_id=self.release_id,
+                run_id=self.run_id,
+                config=self.config,
+                llm_client=llm_client,
+                stop_token=stop_token,
+            )
+            promote_result = promote_glossary_candidates(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
                 stop_token=stop_token,
+                llm_usage_payload=capture_usage_snapshot(llm_client).to_payload(),
             )
-            promote_glossary_candidates(
-                release_id=self.release_id,
-                run_id=self.run_id,
-                config=self.config,
-                stop_token=stop_token,
+            return StageResult(
+                True,
+                stage_name,
+                "Glossary preprocess completed",
+                metadata={**translate_result, **promote_result},
             )
-            return StageResult(True, stage_name, "Glossary preprocess completed")
 
         if stage_name == "preprocess-summaries":
             from resemantica.summaries.pipeline import preprocess_summaries
 
-            preprocess_summaries(
+            summary_result = preprocess_summaries(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
@@ -360,12 +373,12 @@ class OrchestrationRunner:
                 chapter_end=chapter_end,
                 stop_token=stop_token,
             )
-            return StageResult(True, stage_name, "Summaries preprocess completed")
+            return StageResult(True, stage_name, "Summaries preprocess completed", metadata=summary_result)
 
         if stage_name == "preprocess-idioms":
             from resemantica.idioms.pipeline import preprocess_idioms
 
-            preprocess_idioms(
+            idiom_result = preprocess_idioms(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
@@ -373,12 +386,12 @@ class OrchestrationRunner:
                 chapter_end=chapter_end,
                 stop_token=stop_token,
             )
-            return StageResult(True, stage_name, "Idioms preprocess completed")
+            return StageResult(True, stage_name, "Idioms preprocess completed", metadata=idiom_result)
 
         if stage_name == "preprocess-graph":
             from resemantica.graph.pipeline import preprocess_graph
 
-            preprocess_graph(
+            graph_result = preprocess_graph(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
@@ -386,7 +399,7 @@ class OrchestrationRunner:
                 chapter_end=chapter_end,
                 stop_token=stop_token,
             )
-            return StageResult(True, stage_name, "Graph preprocess completed")
+            return StageResult(True, stage_name, "Graph preprocess completed", metadata=graph_result)
 
         if stage_name == "packets-build":
             from resemantica.packets.builder import build_packets
@@ -476,17 +489,19 @@ class OrchestrationRunner:
         chapter_number: int,
         force: bool = False,
         stop_token: StopToken | None = None,
+        llm_client: LLMClient | None = None,
     ) -> StageResult:
         from resemantica.translation.pipeline import (
             translate_chapter_pass1,
             translate_chapter_pass2,
             translate_chapter_pass3,
         )
-        llm_client = LLMClient(
+        shared_client = llm_client or LLMClient(
             base_url=self.config.llm.base_url,
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
         )
+        usage_before = capture_usage_snapshot(shared_client)
 
         raise_if_stop_requested(
             stop_token,
@@ -506,7 +521,7 @@ class OrchestrationRunner:
             chapter_number=chapter_number,
             run_id=self.run_id,
             config=self.config,
-            llm_client=llm_client,
+            llm_client=shared_client,
             force=force,
         )
         emit_event(
@@ -523,7 +538,7 @@ class OrchestrationRunner:
             chapter_number=chapter_number,
             run_id=self.run_id,
             config=self.config,
-            llm_client=llm_client,
+            llm_client=shared_client,
             force=force,
         )
         emit_event(
@@ -540,7 +555,7 @@ class OrchestrationRunner:
             chapter_number=chapter_number,
             run_id=self.run_id,
             config=self.config,
-            llm_client=llm_client,
+            llm_client=shared_client,
         )
         if pass3_result.get("pass3_artifact"):
             emit_event(
@@ -558,6 +573,7 @@ class OrchestrationRunner:
             "pass2_status": pass2_result.get("status"),
             "pass3_status": pass3_result.get("status"),
         }
+        usage_payload = usage_payload_delta(shared_client, usage_before)
         emit_event(
             self.run_id,
             self.release_id,
@@ -565,7 +581,7 @@ class OrchestrationRunner:
             "translate-chapter",
             chapter_number=chapter_number,
             message=f"Chapter {chapter_number} translation completed",
-            payload=checkpoint,
+            payload={**checkpoint, **usage_payload},
         )
         raise_if_stop_requested(
             stop_token,
@@ -577,7 +593,7 @@ class OrchestrationRunner:
             "translate-chapter",
             f"Chapter {chapter_number} translated",
             checkpoint=checkpoint,
-            metadata=checkpoint,
+            metadata={**checkpoint, **usage_payload},
         )
 
     def _translate_range(
@@ -596,6 +612,12 @@ class OrchestrationRunner:
                 force=force,
                 stop_token=stop_token,
             )
+        client = LLMClient(
+            base_url=self.config.llm.base_url,
+            timeout_seconds=self.config.llm.timeout_seconds,
+            max_retries=self.config.llm.max_retries,
+        )
+        usage_before = capture_usage_snapshot(client)
         completed: list[int] = []
         failures: dict[int, str] = {}
         for chapter_number in range(chapter_start, chapter_end + 1):
@@ -608,6 +630,7 @@ class OrchestrationRunner:
                 chapter_number=chapter_number,
                 force=force,
                 stop_token=stop_token,
+                llm_client=client,
             )
             if result.success:
                 completed.append(chapter_number)
@@ -624,12 +647,13 @@ class OrchestrationRunner:
                 continue
             failures[chapter_number] = result.message
             break
+        usage_payload = usage_payload_delta(client, usage_before)
         return StageResult(
             success=not failures,
             stage_name="translate-range",
             message=f"Translated {len(completed)} chapters; {len(failures)} failed",
             checkpoint={"completed_chapters": completed, "failures": failures},
-            metadata={"completed_chapters": completed, "failures": failures},
+            metadata={"completed_chapters": completed, "failures": failures, **usage_payload},
         )
 
     def _translate_range_batched(
@@ -656,6 +680,11 @@ class OrchestrationRunner:
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
         )
+        usage_before = capture_usage_snapshot(client)
+        chapter_usage_before = {
+            chapter_number: capture_usage_snapshot(client)
+            for chapter_number in chapters
+        }
 
         for chapter_number in chapters:
             raise_if_stop_requested(
@@ -821,6 +850,7 @@ class OrchestrationRunner:
                     "translate-chapter",
                     chapter_number=chapter_number,
                     message=f"Chapter {chapter_number} translation completed",
+                    payload=usage_payload_delta(client, chapter_usage_before[chapter_number]),
                 )
             except Exception as exc:
                 failures[chapter_number] = str(exc)
@@ -855,6 +885,7 @@ class OrchestrationRunner:
             "pass3_completed": pass3_completed,
             "failures": failures,
         }
+        usage_payload = usage_payload_delta(client, usage_before)
         return StageResult(
             success=not failures,
             stage_name="translate-range",
@@ -864,7 +895,7 @@ class OrchestrationRunner:
                 f"failures={len(failures)}"
             ),
             checkpoint=checkpoint,
-            metadata=checkpoint,
+            metadata={**checkpoint, **usage_payload},
         )
 
 

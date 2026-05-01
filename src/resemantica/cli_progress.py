@@ -4,15 +4,21 @@ from typing import Any
 
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
 
-from resemantica.observability.granularity import classify_event_level
+from resemantica.observability.granularity import classify_event_level, cli_verbosity_to_level
 from resemantica.orchestration.events import default_event_bus
 from resemantica.tracking.models import Event
 
 
 class CliProgressSubscriber:
-    def __init__(self, *, event_bus: Any = default_event_bus, progress: Progress | None = None,         verbosity: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        event_bus: Any = default_event_bus,
+        progress: Progress | None = None,
+        verbosity: int = 0,
+    ) -> None:
         self.event_bus = event_bus
-        self._level = min(max(verbosity, 0), 4)
+        self._level = cli_verbosity_to_level(verbosity)
         self.progress = progress or Progress(
             SpinnerColumn(),
             TextColumn("{task.description}"),

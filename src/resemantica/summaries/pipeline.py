@@ -16,7 +16,7 @@ from resemantica.db.summary_repo import (
     save_validated_summary,
 )
 from resemantica.llm.budget import PromptBudgetError
-from resemantica.llm.client import LLMClient
+from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -97,6 +97,7 @@ def preprocess_summaries(
             chapter_payload = _read_json(chapter_file)
             chapter_number = int(chapter_payload["chapter_number"])
             chapter_source_hash = str(chapter_payload["chapter_source_hash"])
+            chapter_usage_before = capture_usage_snapshot(client)
             raise_if_stop_requested(
                 stop_token,
                 checkpoint={"chapter_artifacts": chapter_results},
@@ -113,6 +114,7 @@ def preprocess_summaries(
                     f"{_STAGE_NAME}.chapter_skipped",
                     chapter_number=chapter_number,
                     reason="exclude_pattern",
+                    **usage_payload_delta(client, chapter_usage_before),
                 )
                 chapter_results.append(
                     {
@@ -155,6 +157,7 @@ def preprocess_summaries(
                         f"{_STAGE_NAME}.chapter_skipped",
                         chapter_number=chapter_number,
                         reason="non_story_chapter",
+                        **usage_payload_delta(client, chapter_usage_before),
                     )
                     chapter_results.append(
                         {
@@ -172,6 +175,7 @@ def preprocess_summaries(
                         f"{_STAGE_NAME}.chapter_skipped",
                         chapter_number=chapter_number,
                         reason="generation_failed",
+                        **usage_payload_delta(client, chapter_usage_before),
                     )
                     chapter_results.append(
                         {
@@ -212,6 +216,7 @@ def preprocess_summaries(
                     f"{_STAGE_NAME}.chapter_skipped",
                     chapter_number=chapter_number,
                     reason="prompt_budget_exceeded",
+                    **usage_payload_delta(client, chapter_usage_before),
                 )
                 chapter_results.append(
                     {
@@ -247,7 +252,11 @@ def preprocess_summaries(
             )
             if previous_story is not None and short_summaries:
                 last_short = short_summaries[-1]
-                story_text = previous_story.content_zh.rstrip("\n") + "\n" + f"第{chapter_number}章：{last_short.content_zh.strip()}"
+                story_text = (
+                    previous_story.content_zh.rstrip("\n")
+                    + "\n"
+                    + f"第{chapter_number}章：{last_short.content_zh.strip()}"
+                )
             else:
                 story_text = build_story_so_far(short_summaries=short_summaries)
             story_record = save_validated_summary(
@@ -343,7 +352,14 @@ def preprocess_summaries(
                     "en_artifact": str(en_artifact),
                 }
             )
-            _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_completed", chapter_number=chapter_number)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.chapter_completed",
+                chapter_number=chapter_number,
+                summary_count=4,
+                **usage_payload_delta(client, chapter_usage_before),
+            )
             raise_if_stop_requested(
                 stop_token,
                 checkpoint={"chapter_artifacts": chapter_results},
@@ -363,6 +379,7 @@ def preprocess_summaries(
         done=processed_count,
         skipped=skipped_count,
         failed=0,
+        **capture_usage_snapshot(client).to_payload(),
     )
     return {
         "status": "success",
@@ -370,4 +387,5 @@ def preprocess_summaries(
         "run_id": run_id,
         "chapters_processed": processed_count,
         "chapter_artifacts": chapter_results,
+        **capture_usage_snapshot(client).to_payload(),
     }

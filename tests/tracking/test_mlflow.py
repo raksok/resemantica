@@ -127,7 +127,7 @@ def test_stage_event_handler_logs_completion(mock_mlflow):
         run_id="r1", release_id="rel1",
         stage_name="test-stage",
         message="done",
-        payload={"items": 5},
+        payload={"items": 5, "llm_total_tokens": 42},
     ))
 
     mock_mlflow.log_metric.assert_called()
@@ -137,6 +137,9 @@ def test_stage_event_handler_logs_completion(mock_mlflow):
     mock_mlflow.log_text.assert_called()
     mock_mlflow.log_metric.assert_any_call(
         "stage.test-stage.items", 5.0
+    )
+    mock_mlflow.log_metric.assert_any_call(
+        "stage.test-stage.llm_total_tokens", 42.0
     )
 
 
