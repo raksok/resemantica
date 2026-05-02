@@ -108,11 +108,14 @@ def validate_idiom_policy(
             continue
 
         merged_meaning = ""
+        merged_meaning_en = ""
         merged_rendering = ""
         merged_usage: str | None = None
         for candidate in group:
             if not merged_meaning and candidate.meaning_zh.strip():
                 merged_meaning = candidate.meaning_zh.strip()
+            if not merged_meaning_en and candidate.meaning_en.strip():
+                merged_meaning_en = candidate.meaning_en.strip()
             if not merged_rendering and candidate.preferred_rendering_en.strip():
                 merged_rendering = candidate.preferred_rendering_en.strip()
             if merged_usage is None and candidate.usage_notes and candidate.usage_notes.strip():
@@ -206,6 +209,7 @@ def validate_idiom_policy(
             source_text=existing.source_text if existing is not None else lead.source_text,
             normalized_source_text=normalized_source,
             meaning_zh=existing.meaning_zh if existing is not None else merged_meaning,
+            meaning_en=existing.meaning_en if existing is not None else merged_meaning_en,
             preferred_rendering_en=(
                 existing.preferred_rendering_en if existing is not None else merged_rendering
             ),

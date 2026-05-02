@@ -65,7 +65,8 @@ def validate_graph_state(
     for appearance in appearances:
         if appearance.entity_id not in entity_ids:
             errors.append(
-                f"dangling_reference: appearance {appearance.appearance_id} references missing entity {appearance.entity_id}"
+                f"dangling_reference: appearance {appearance.appearance_id}"
+                f" references missing entity {appearance.entity_id}"
             )
         if appearance.chapter_number <= 0:
             errors.append(
@@ -119,7 +120,8 @@ def validate_graph_state(
             lore_text = relationship.lore_text.strip()
             if not lore_text:
                 errors.append(
-                    f"schema_invalid: relationship {relationship.relationship_id} lore_text must be non-empty when provided"
+                    f"schema_invalid: relationship {relationship.relationship_id}"
+                f" lore_text must be non-empty when provided"
                 )
             else:
                 for match in _FUTURE_CHAPTER_ZH_RE.finditer(lore_text):
@@ -136,7 +138,8 @@ def validate_graph_state(
                         )
         if relationship.is_masked_identity and relationship.type not in WORLD_MODEL_EDGE_TYPES:
             errors.append(
-                f"schema_invalid: relationship {relationship.relationship_id} masked identity is only supported for world-model edges"
+                f"schema_invalid: relationship {relationship.relationship_id}"
+                f" masked identity is only supported for world-model edges"
             )
 
     return ValidationResult(

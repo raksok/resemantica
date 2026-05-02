@@ -316,8 +316,14 @@ def test_rebuild_chapter_xhtml_reassembles_segments() -> None:
         source_xhtml,
         records,
         [
-            {"block_id": "ch001_blk001_seg02", "parent_block_id": "ch001_blk001", "segment_order": 2, "restored_text_en": " two."},
-            {"block_id": "ch001_blk001_seg01", "parent_block_id": "ch001_blk001", "segment_order": 1, "restored_text_en": "Part"},
+            {
+                "block_id": "ch001_blk001_seg02", "parent_block_id": "ch001_blk001",
+                "segment_order": 2, "restored_text_en": " two.",
+            },
+            {
+                "block_id": "ch001_blk001_seg01", "parent_block_id": "ch001_blk001",
+                "segment_order": 1, "restored_text_en": "Part",
+            },
         ],
         {},
     )

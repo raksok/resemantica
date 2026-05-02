@@ -1,3 +1,4 @@
+# ruff: noqa: E501 — long fixture strings with Chinese text
 from __future__ import annotations
 
 import json

@@ -99,11 +99,15 @@ def translate_idiom_candidates(
     run_id: str,
     translator_client: LLMClient,
     translator_model_name: str,
-    prompt_template: str,
-    prompt_version: str,
+    rendering_prompt_template: str,
+    rendering_prompt_version: str,
+    meaning_prompt_template: str,
+    meaning_prompt_version: str,
     stop_token: StopToken | None = None,
 ) -> int:
-    """Phase 2: Translate discovered idiom candidates using the Translator model."""
+    """Phase 2: Translate discovered idiom candidates using the Translator model.
+    Two calls per candidate: idiom rendering + meaning translation.
+    """
     pending = list_candidates_for_translation(conn, release_id=release_id)
     active_chapter: int | None = None
     completed_chapters: list[int] = []
@@ -123,25 +127,40 @@ def translate_idiom_candidates(
                 message="Idiom translation stopped before next chapter",
             )
             active_chapter = chapter
-        prompt = render_named_sections(
-            prompt_template,
+
+        # Call 1: idiom rendering
+        rendering_prompt = render_named_sections(
+            rendering_prompt_template,
             sections={
                 "SOURCE_TEXT": candidate.source_text,
-                "MEANING_ZH": candidate.meaning_zh,
                 "EVIDENCE_SNIPPET": candidate.evidence_snippet,
             },
         )
         rendered = translator_client.generate_text(
             model_name=translator_model_name,
-            prompt=prompt,
+            prompt=rendering_prompt,
         ).strip()
+
+        # Call 2: meaning translation
+        meaning_prompt = render_named_sections(
+            meaning_prompt_template,
+            sections={
+                "MEANING_ZH": candidate.meaning_zh,
+            },
+        )
+        meaning = translator_client.generate_text(
+            model_name=translator_model_name,
+            prompt=meaning_prompt,
+        ).strip()
+
         save_idiom_translation(
             conn,
             candidate_id=candidate.candidate_id,
             translation_run_id=run_id,
             target_term=rendered,
+            meaning_en=meaning,
             translator_model_name=translator_model_name,
-            translator_prompt_version=prompt_version,
+            translator_prompt_version=rendering_prompt_version,
         )
     if active_chapter is not None:
         completed_chapters.append(active_chapter)
@@ -175,6 +194,7 @@ def preprocess_idioms(
 
     detect_prompt = load_prompt("idiom_detect.txt")
     translate_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
     analyst_client = _build_llm_client(config_obj, llm_client)
     translator_client = _build_llm_client(config_obj, translator_llm_client)
     combined_usage_before = {
@@ -239,15 +259,17 @@ def preprocess_idioms(
             message="Idiom preprocess stopped after detection",
         )
 
-        # Phase 2: Translate (Translator)
+        # Phase 2: Translate (Translator) — rendering + meaning
         translated_count = translate_idiom_candidates(
             conn=conn,
             release_id=release_id,
             run_id=run_id,
             translator_client=translator_client,
             translator_model_name=config_obj.models.translator_name,
-            prompt_template=translate_prompt.template,
-            prompt_version=translate_prompt.version,
+            rendering_prompt_template=translate_prompt.template,
+            rendering_prompt_version=translate_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
             stop_token=stop_token,
         )
         raise_if_stop_requested(

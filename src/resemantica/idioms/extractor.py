@@ -322,6 +322,7 @@ def extract_idioms(
                     source_text=detected.source_text,
                     normalized_source_text=normalized_source,
                     meaning_zh=detected.meaning_zh,
+                    meaning_en="",
                     preferred_rendering_en="",
                     usage_notes=detected.usage_notes,
                     first_seen_chapter=chapter_number,

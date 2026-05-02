@@ -110,7 +110,7 @@ class CliProgressSubscriber:
             lines = list(self._log_buffer)
         if not lines:
             return Text("")
-        
+
         highlighter = ReprHighlighter()
         text = highlighter(Text("\n".join(lines)))
         return Panel(text, title="Log", border_style="dim")

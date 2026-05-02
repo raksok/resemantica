@@ -213,12 +213,14 @@ def test_save_idiom_translation_fills_candidate_rendering(
             candidate_id=pending_translation[0].candidate_id,
             translation_run_id="idioms-001",
             target_term="kill two birds with one stone",
+            meaning_en="achieve two things at once",
             translator_model_name=config.models.translator_name,
             translator_prompt_version="1.0",
         )
 
         saved = list_candidates(conn, release_id=release_id)[0]
         assert saved.preferred_rendering_en == "kill two birds with one stone"
+        assert saved.meaning_en == "achieve two things at once"
         assert saved.translation_run_id == "idioms-001"
         assert saved.translator_model_name == config.models.translator_name
         assert saved.translator_prompt_version == "1.0"

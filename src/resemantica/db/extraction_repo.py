@@ -5,50 +5,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-
-def ensure_extraction_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS extracted_chapters (
-            chapter_id TEXT PRIMARY KEY,
-            release_id TEXT NOT NULL,
-            run_id TEXT NOT NULL,
-            chapter_number INTEGER NOT NULL,
-            source_document_path TEXT NOT NULL,
-            chapter_source_hash TEXT NOT NULL,
-            placeholder_map_ref TEXT NOT NULL,
-            created_by_stage TEXT NOT NULL,
-            validation_status TEXT NOT NULL,
-            schema_version TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS extracted_blocks (
-            block_id TEXT PRIMARY KEY,
-            chapter_id TEXT NOT NULL,
-            release_id TEXT NOT NULL,
-            run_id TEXT NOT NULL,
-            chapter_number INTEGER NOT NULL,
-            segment_id TEXT,
-            parent_block_id TEXT NOT NULL,
-            block_order INTEGER NOT NULL,
-            segment_order INTEGER,
-            source_text_zh TEXT NOT NULL,
-            placeholder_map_ref TEXT NOT NULL,
-            chapter_source_hash TEXT NOT NULL,
-            schema_version TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_extracted_blocks_release_chapter
-            ON extracted_blocks(release_id, chapter_number);
-        CREATE INDEX IF NOT EXISTS idx_extracted_chapters_release_run
-            ON extracted_chapters(release_id, run_id);
-        """
-    )
-    conn.commit()
+from resemantica.db.sqlite import ensure_schema
 
 
 def record_extraction_metadata(
@@ -58,7 +15,7 @@ def record_extraction_metadata(
     run_id: str,
     chapter_result: Any,
 ) -> None:
-    ensure_extraction_schema(conn)
+    ensure_schema(conn, "extraction")
     now = datetime.now(timezone.utc).isoformat()
     records = list(chapter_result.records)
     placeholder_map_ref = records[0].placeholder_map_ref if records else ""

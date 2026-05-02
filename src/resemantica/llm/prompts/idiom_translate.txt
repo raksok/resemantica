@@ -1,8 +1,7 @@
-# version: 1.0
+# version: 1.1
 
-MEANING (ZH): {MEANING_ZH}
 EVIDENCE: {EVIDENCE_SNIPPET}
 
-Translate the following Chinese idiom into natural English with no extra commentary.
+Use above as context, Translate the following Chinese idiom into natural English with no extra commentary.
 
 {SOURCE_TEXT}

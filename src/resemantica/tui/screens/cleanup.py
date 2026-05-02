@@ -11,7 +11,10 @@ class CleanupScreen(BaseScreen):
     def _content_widgets(self) -> ComposeResult:
         with Container(id="cleanup-content"):
             yield Static("Cleanup Workflow", classes="app-title")
-            yield Static("Scope: run | [dim]translation[/] | [dim]preprocess[/] | [dim]cache[/] | [dim]all[/]", id="cleanup-scope-info")
+            yield Static(
+                "Scope: run | [dim]translation[/] | [dim]preprocess[/] | [dim]cache[/] | [dim]all[/]",
+                id="cleanup-scope-info",
+            )
             yield Static("", id="cleanup-scope-selector")
             yield Static("", id="cleanup-preview")
             with Horizontal(id="cleanup-buttons"):

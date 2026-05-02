@@ -22,6 +22,7 @@ class IdiomCandidate:
     conflict_reason: str | None
     analyst_model_name: str
     analyst_prompt_version: str
+    meaning_en: str = ""
     translation_run_id: str | None = None
     translator_model_name: str | None = None
     translator_prompt_version: str | None = None
@@ -46,6 +47,7 @@ class IdiomPolicy:
     appearance_count: int
     promoted_from_candidate_id: str
     approval_run_id: str
+    meaning_en: str = ""
     schema_version: int = 1
 
     def to_json_dict(self) -> dict[str, object]:

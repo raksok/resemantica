@@ -1,8 +1,5 @@
 # version: 1.0
 
-CATEGORY: {CATEGORY}
-EVIDENCE: {EVIDENCE_SNIPPET}
-
 Translate the following zh into en with no extra commentary.
 
-{SOURCE_TERM}
+{MEANING_ZH}

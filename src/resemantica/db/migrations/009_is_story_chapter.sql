@@ -1,1 +1,0 @@
-ALTER TABLE summary_drafts ADD COLUMN is_story_chapter INTEGER NOT NULL DEFAULT 1;

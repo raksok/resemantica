@@ -3,9 +3,8 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 
-from resemantica.db.sqlite import apply_migrations
+from resemantica.db.sqlite import ensure_schema
 
 
 @dataclass(slots=True)
@@ -25,8 +24,7 @@ class CheckpointRecord:
 
 
 def ensure_checkpoint_schema(conn: sqlite3.Connection) -> None:
-    migrations_dir = Path(__file__).resolve().parents[1] / "db" / "migrations"
-    apply_migrations(conn, migrations_dir)
+    ensure_schema(conn, "translation")
 
 
 def load_checkpoint(

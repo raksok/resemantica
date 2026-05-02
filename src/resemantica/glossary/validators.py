@@ -108,7 +108,8 @@ def validate_candidates_for_promotion(
         if normalized_target and len(duplicate_sources) > 1:
             reasons.append(
                 (
-                    f"duplicate_target: {target_term!r} maps from multiple source terms in category {candidate.category}",
+                    f"duplicate_target: {target_term!r} maps from multiple source terms"
+                    f" in category {candidate.category}",
                     None,
                 )
             )

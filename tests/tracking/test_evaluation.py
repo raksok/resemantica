@@ -16,7 +16,8 @@ def _fake_translate(text: str) -> str:
         "在下只是一介散修，岂敢与前辈相提并论。":
             "I am but a wandering cultivator, how would I dare to compare myself with you, Senior.",
         "画龙画虎难画骨，知人知面不知心。":
-            "Dragons and tigers are easy to draw, but bones are hard; a man's face and appearance are easy to know, but his heart is not.",
+            "Dragons and tigers are easy to draw, but bones are hard;"
+            " a man's face and appearance are easy to know, but his heart is not.",
     }
     return table.get(text, f"translated: {text}")
 
@@ -101,7 +102,8 @@ class TestRunBenchmark:
             },
             {
                 "source_zh": "画龙画虎难画骨，知人知面不知心。",
-                "expected_en": "Dragons and tigers are easy to draw, but bones are hard; a man's face and appearance are easy to know, but his heart is not.",
+                "expected_en": "Dragons and tigers are easy to draw, but bones are hard;"
+                " a man's face and appearance are easy to know, but his heart is not.",
                 "category": "idiom",
                 "difficulty": 3,
             },

@@ -18,6 +18,7 @@ def _candidate_from_row(row: sqlite3.Row) -> IdiomCandidate:
         source_text=str(row["source_text"]),
         normalized_source_text=str(row["normalized_source_text"]),
         meaning_zh=str(row["meaning_zh"]),
+        meaning_en=str(row["meaning_en"]),
         preferred_rendering_en=str(row["preferred_rendering_en"]),
         usage_notes=None if row["usage_notes"] is None else str(row["usage_notes"]),
         first_seen_chapter=int(row["first_seen_chapter"]),
@@ -32,7 +33,9 @@ def _candidate_from_row(row: sqlite3.Row) -> IdiomCandidate:
         analyst_prompt_version=str(row["analyst_prompt_version"]),
         translation_run_id=None if row["translation_run_id"] is None else str(row["translation_run_id"]),
         translator_model_name=None if row["translator_model_name"] is None else str(row["translator_model_name"]),
-        translator_prompt_version=None if row["translator_prompt_version"] is None else str(row["translator_prompt_version"]),
+        translator_prompt_version=(
+            None if row["translator_prompt_version"] is None else str(row["translator_prompt_version"])
+        ),
         schema_version=int(row["schema_version"]),
     )
 
@@ -44,6 +47,7 @@ def _policy_from_row(row: sqlite3.Row) -> IdiomPolicy:
         source_text=str(row["source_text"]),
         normalized_source_text=str(row["normalized_source_text"]),
         meaning_zh=str(row["meaning_zh"]),
+        meaning_en=str(row["meaning_en"]),
         preferred_rendering_en=str(row["preferred_rendering_en"]),
         usage_notes=None if row["usage_notes"] is None else str(row["usage_notes"]),
         policy_status=str(row["policy_status"]),
@@ -80,14 +84,14 @@ def upsert_discovered_candidates(
             """
             INSERT INTO idiom_candidates(
                 candidate_id, release_id, source_text, normalized_source_text,
-                meaning_zh, preferred_rendering_en, usage_notes,
+                meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
                 first_seen_chapter, last_seen_chapter, appearance_count,
                 evidence_snippet, detection_run_id, candidate_status,
                 validation_status, conflict_reason, analyst_model_name,
                 analyst_prompt_version, translation_run_id, translator_model_name,
                 translator_prompt_version, schema_version, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(candidate_id)
             DO UPDATE SET
                 source_text = excluded.source_text,
@@ -118,6 +122,7 @@ def upsert_discovered_candidates(
                     candidate.source_text,
                     candidate.normalized_source_text,
                     candidate.meaning_zh,
+                    candidate.meaning_en,
                     candidate.preferred_rendering_en,
                     candidate.usage_notes,
                     candidate.first_seen_chapter,
@@ -144,8 +149,9 @@ def list_candidates(conn: sqlite3.Connection, *, release_id: str) -> list[IdiomC
     rows = conn.execute(
         """
         SELECT candidate_id, release_id, source_text, normalized_source_text,
-               meaning_zh, preferred_rendering_en, usage_notes, first_seen_chapter,
-               last_seen_chapter, appearance_count, evidence_snippet, detection_run_id,
+               meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+               first_seen_chapter, last_seen_chapter, appearance_count,
+               evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
                analyst_model_name, analyst_prompt_version, translator_model_name,
                translator_prompt_version, schema_version
@@ -166,11 +172,12 @@ def list_candidates_for_translation(
     rows = conn.execute(
         """
         SELECT candidate_id, release_id, source_text, normalized_source_text,
-               meaning_zh, preferred_rendering_en, usage_notes, first_seen_chapter,
-               last_seen_chapter, appearance_count, evidence_snippet, detection_run_id,
+               meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+               first_seen_chapter, last_seen_chapter, appearance_count,
+               evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
-                analyst_model_name, analyst_prompt_version, translator_model_name,
-                translator_prompt_version, schema_version
+                 analyst_model_name, analyst_prompt_version, translator_model_name,
+                 translator_prompt_version, schema_version
         FROM idiom_candidates
         WHERE release_id = ?
           AND candidate_status = 'discovered'
@@ -188,6 +195,7 @@ def save_idiom_translation(
     candidate_id: str,
     translation_run_id: str,
     target_term: str,
+    meaning_en: str,
     translator_model_name: str,
     translator_prompt_version: str,
 ) -> None:
@@ -196,6 +204,7 @@ def save_idiom_translation(
             """
             UPDATE idiom_candidates
             SET preferred_rendering_en = ?,
+                meaning_en = ?,
                 translation_run_id = ?,
                 translator_model_name = ?,
                 translator_prompt_version = ?,
@@ -203,7 +212,10 @@ def save_idiom_translation(
                 updated_at = CURRENT_TIMESTAMP
             WHERE candidate_id = ?
             """,
-            (target_term, translation_run_id, translator_model_name, translator_prompt_version, candidate_id),
+            (
+                target_term, meaning_en, translation_run_id,
+                translator_model_name, translator_prompt_version, candidate_id,
+            ),
         )
 
 
@@ -215,11 +227,12 @@ def list_candidates_for_promotion(
     rows = conn.execute(
         """
         SELECT candidate_id, release_id, source_text, normalized_source_text,
-               meaning_zh, preferred_rendering_en, usage_notes, first_seen_chapter,
-               last_seen_chapter, appearance_count, evidence_snippet, detection_run_id,
+               meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+               first_seen_chapter, last_seen_chapter, appearance_count,
+               evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
-                analyst_model_name, analyst_prompt_version, translator_model_name,
-                translator_prompt_version, schema_version
+                 analyst_model_name, analyst_prompt_version, translator_model_name,
+                 translator_prompt_version, schema_version
         FROM idiom_candidates
         WHERE release_id = ?
           AND candidate_status = 'translated'
@@ -320,15 +333,17 @@ def promote_policies(conn: sqlite3.Connection, *, policies: Sequence[IdiomPolicy
                 """
                 INSERT INTO idiom_policies(
                     idiom_id, release_id, source_text, normalized_source_text,
-                    meaning_zh, preferred_rendering_en, usage_notes, policy_status,
-                    first_seen_chapter, last_seen_chapter, appearance_count,
-                    promoted_from_candidate_id, approval_run_id, schema_version, updated_at
+                    meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+                    policy_status, first_seen_chapter, last_seen_chapter,
+                    appearance_count, promoted_from_candidate_id, approval_run_id,
+                    schema_version, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(release_id, normalized_source_text)
                 DO UPDATE SET
                     source_text = excluded.source_text,
                     meaning_zh = excluded.meaning_zh,
+                    meaning_en = excluded.meaning_en,
                     preferred_rendering_en = excluded.preferred_rendering_en,
                     usage_notes = excluded.usage_notes,
                     policy_status = excluded.policy_status,
@@ -346,6 +361,7 @@ def promote_policies(conn: sqlite3.Connection, *, policies: Sequence[IdiomPolicy
                     policy.source_text,
                     policy.normalized_source_text,
                     policy.meaning_zh,
+                    policy.meaning_en,
                     policy.preferred_rendering_en,
                     policy.usage_notes,
                     policy.policy_status,
@@ -363,9 +379,9 @@ def list_policies(conn: sqlite3.Connection, *, release_id: str) -> list[IdiomPol
     rows = conn.execute(
         """
         SELECT idiom_id, release_id, source_text, normalized_source_text, meaning_zh,
-               preferred_rendering_en, usage_notes, policy_status, first_seen_chapter,
-               last_seen_chapter, appearance_count, promoted_from_candidate_id,
-               approval_run_id, schema_version
+               meaning_en, preferred_rendering_en, usage_notes, policy_status,
+               first_seen_chapter, last_seen_chapter, appearance_count,
+               promoted_from_candidate_id, approval_run_id, schema_version
         FROM idiom_policies
         WHERE release_id = ?
         ORDER BY normalized_source_text
@@ -384,9 +400,9 @@ def find_exact_policy(
     row = conn.execute(
         """
         SELECT idiom_id, release_id, source_text, normalized_source_text, meaning_zh,
-               preferred_rendering_en, usage_notes, policy_status, first_seen_chapter,
-               last_seen_chapter, appearance_count, promoted_from_candidate_id,
-               approval_run_id, schema_version
+               meaning_en, preferred_rendering_en, usage_notes, policy_status,
+               first_seen_chapter, last_seen_chapter, appearance_count,
+               promoted_from_candidate_id, approval_run_id, schema_version
         FROM idiom_policies
         WHERE release_id = ?
           AND normalized_source_text = ?
