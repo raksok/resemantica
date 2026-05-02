@@ -79,6 +79,14 @@ HeaderBar {
     padding: 1 1 0 1;
 }
 
+#spine-container.spine-dimmed #spine-items > .option-list--option {
+    color: #444a6a;
+}
+
+#spine-container.spine-dimmed #spine-title {
+    color: #444a6a;
+}
+
 .spine-status-not-started {
     color: #676E95;
 }

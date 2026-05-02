@@ -3,7 +3,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
-from textual.widgets import Static, OptionList
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from resemantica.tui.screens.base import BaseScreen, BlockUpdated, ChapterCompleted, ChapterStarted
@@ -36,12 +36,12 @@ class TranslationScreen(BaseScreen):
 
     def _refresh_live_progress(self) -> None:
         super()._refresh_live_progress()
-        
+
         # Update pipeline progress bars in real-time
         state = self._run_state_for_refresh()
         stage_list = self.query_one("#translation-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
-        
+
         self._update_status()
         self._update_event_tail()
 
@@ -75,13 +75,15 @@ class TranslationScreen(BaseScreen):
         self._update_event_tail()
 
     def _build_block_options(self, data: dict[int, list[tuple[str, str]]]) -> list[Option]:
+        if not hasattr(self, "_block_to_index"):
+            self._block_to_index = {}
         self._block_to_index.clear()
         options: list[Option] = []
         for ch_num in sorted(data):
             blocks = data[ch_num]
             done = sum(1 for _, s in blocks if s == "done")
             options.append(Option(f"[bold]Ch {ch_num}[/]  {done}/{len(blocks)} blocks"))
-            
+
             for bid, status in blocks:
                 idx = len(options)
                 self._block_to_index[f"{ch_num}:{bid}"] = idx

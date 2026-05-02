@@ -125,17 +125,22 @@ class ResemanticaApp(App):
         return True
 
     def _drain_live_events(self) -> None:
+        pending: list[Event] = []
         with self._live_event_lock:
-            if not self._live_pending_events:
-                return
-            pending = list(self._live_pending_events)
-            self._live_pending_events.clear()
+            if self._live_pending_events:
+                pending = list(self._live_pending_events)
+                self._live_pending_events.clear()
+                self._live_events.extend(pending)
 
-        self._live_events.extend(pending)
         if self.active_action is None:
             return
 
-        from resemantica.tui.screens.base import BlockUpdated, ChapterCompleted, ChapterStarted
+        from resemantica.tui.screens.base import (
+            BlockUpdated,
+            ChapterCompleted,
+            ChapterHighRisk,
+            ChapterStarted,
+        )
 
         for event in pending:
             et = event.event_type
@@ -145,6 +150,10 @@ class ResemanticaApp(App):
                     self.screen.post_message(ChapterStarted(event.stage_name, ch))
                 elif et.endswith(".chapter_completed"):
                     self.screen.post_message(ChapterCompleted(event.stage_name, ch))
+                elif et.endswith(".paragraph_skipped"):
+                    payload = event.payload or {}
+                    if isinstance(payload, dict) and payload.get("pass_name") == "pass3":
+                        self.screen.post_message(ChapterHighRisk(event.stage_name, ch))
                 elif et.endswith(".paragraph_started"):
                     self.screen.post_message(BlockUpdated(ch, event.block_id or "?", "in-progress"))
                 elif et.endswith(".paragraph_completed"):

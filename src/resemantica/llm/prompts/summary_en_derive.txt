@@ -5,6 +5,6 @@ SUMMARY_EN_DERIVE
 {LOCKED_GLOSSARY}
 
 ## INSTRUCTIONS
-Translate the Chinese summary into concise English, Return only English summary text.
+Translate the following Chinese summary into concise English, preserve formatting, no addintional explanation.
 
 {SOURCE_TEXT_ZH}

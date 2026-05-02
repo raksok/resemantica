@@ -59,3 +59,34 @@ def test_build_packets_emits_chapter_events(tmp_path: Path, monkeypatch) -> None
     ]
     assert received[0].payload["total_chapters"] == 1
     assert received[-1].payload["built"] == 1
+
+
+def test_build_packets_emits_failure_reason(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m19-packet-failure-reason"
+    _write_extracted_chapter(release_id=release_id, chapter_number=1)
+    import resemantica.packets.builder as builder_module
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    def failing_build_chapter_packet(**kwargs):
+        raise RuntimeError("simulated_failure")
+
+    monkeypatch.setattr(builder_module, "build_chapter_packet", failing_build_chapter_packet)
+    received = []
+
+    def callback(event):
+        if event.run_id == "packet-failure-reason":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        build_packets(release_id=release_id, run_id="packet-failure-reason")
+    finally:
+        unsubscribe("*", callback)
+
+    skipped_events = [e for e in received if e.event_type == "packets-build.chapter_skipped"]
+    assert len(skipped_events) == 1, f"Expected 1 chapter_skipped event, got {len(skipped_events)}"
+    payload = skipped_events[0].payload or {}
+    assert payload.get("reason") == "simulated_failure", (
+        f"Expected reason='simulated_failure', got {payload.get('reason')!r}"
+    )

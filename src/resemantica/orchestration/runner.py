@@ -511,10 +511,10 @@ class OrchestrationRunner:
         emit_event(
             self.run_id,
             self.release_id,
-            "translate-chapter.chapter_completed",
+            "translate-chapter.chapter_started",
             "translate-chapter",
             chapter_number=chapter_number,
-            message=f"Chapter {chapter_number} batched translation completed",
+            message=f"Chapter {chapter_number} translation started",
         )
         pass1_result = translate_chapter_pass1(
             release_id=self.release_id,

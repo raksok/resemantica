@@ -801,7 +801,7 @@ def build_packets(
                 release_id,
                 f"{_STAGE_NAME}.chapter_skipped",
                 chapter_number=number,
-                reason="failed",
+                reason=str(exc),
             )
         raise_if_stop_requested(
             stop_token,

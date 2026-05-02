@@ -83,16 +83,32 @@ class DashboardScreen(BaseScreen):
     def _refresh_live_progress(self) -> None:
         super()._refresh_live_progress()
         events = self._recent_events_for_refresh()
-        
-        # Update stage list in real-time
-        self.query_one("#dashboard-stage-list", Static).update(self._render_stage_list())
+        snapshot = self._build_snapshot(events)
+
+        stage_lines = ["[bold]Stages[/bold]"]
+        for stage in snapshot.stages:
+            color = STATUS_COLORS.get(stage.status, "comment")
+            glyph = STATUS_GLYPH.get(stage.status, "\u25cb")
+            st = stage.status.upper()
+            hint = f"  [{color}]{glyph}[/] {stage.label:<16} [{color}]{st:<7}[/]"
+            if stage.action.reason:
+                hint += f" [dim]({stage.action.reason})[/]"
+            stage_lines.append(hint)
+        self.query_one("#dashboard-stage-list", Static).update("\n".join(stage_lines))
 
         worker_widget = self.query_one("#dashboard-active-worker", Static)
-        active_action = getattr(self.app, "active_action", None)
-        if active_action:
-            sdef = next((d for d in STAGE_DEFINITIONS if d["key"] == active_action), None)
-            lbl = sdef["label"] if sdef else active_action
+        if snapshot.active_action:
+            sdef = next((d for d in STAGE_DEFINITIONS if d["key"] == snapshot.active_action), None)
+            lbl = sdef["label"] if sdef else snapshot.active_action
             worker_widget.update(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
+        else:
+            worker_widget.update("")
+
+        failure_widget = self.query_one("#dashboard-latest-failure", Static)
+        if snapshot.latest_failure:
+            failure_widget.update(f"[red]Latest failure: {snapshot.latest_failure}[/]")
+        else:
+            failure_widget.update("")
 
         self.query_one("#dashboard-event-tail", Static).update(
             self._render_cached_event_tail(

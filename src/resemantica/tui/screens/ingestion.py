@@ -34,11 +34,11 @@ class IngestionScreen(BaseScreen):
 
     def _refresh_live_progress(self) -> None:
         super()._refresh_live_progress()
-        
+
         state = self._run_state_for_refresh()
         stage_list = self.query_one("#ingestion-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
-        
+
         self._update_status()
         self._update_event_tail()
 

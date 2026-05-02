@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any, Callable, cast
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
+from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Static, OptionList
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from resemantica.observability.granularity import classify_event_level, tui_verbosity_to_level
@@ -48,9 +49,6 @@ class StageProgress:
         return self.total is not None
 
 
-from textual.message import Message
-
-
 @dataclass
 class ChapterStarted(Message):
     stage_key: str
@@ -70,6 +68,12 @@ class BlockUpdated(Message):
     status: str
 
 
+@dataclass
+class ChapterHighRisk(Message):
+    stage_key: str
+    chapter_number: int
+
+
 class BaseScreen(Screen):
     _PULSE_WIDTH = 30
     _PULSE_GLYPHS = "▁▂▃▄▅▆▇█"
@@ -77,6 +81,13 @@ class BaseScreen(Screen):
     _REFRESH_INTERVAL_SECONDS = 30.0
     _SPINNER_INTERVAL_SECONDS = 0.25
     _STALE_AFTER_SECONDS = 300
+    _SPINE_STATUS_MAP = {
+        "not-started": ("[dim]\u25a1[/]", "spine-status-not-started"),
+        "in-progress": ("[cyan]\u25b8[/]", "spine-status-in-progress"),
+        "complete": ("[green]\u25a0[/]", "spine-status-complete"),
+        "failed": ("[red]\u2717[/]", "spine-status-failed"),
+        "high-risk": ("[orange]\u25c8[/]", "spine-status-high-risk"),
+    }
 
     @property
     def app(self) -> "ResemanticaApp":
@@ -119,6 +130,9 @@ class BaseScreen(Screen):
         self._cached_recent_events: list[Event] = []
         self._cached_chapter_count = 0
         self._cached_extraction_manifest_exists = False
+        self._spine_chapter_numbers: list[int] = []
+        self._spine_chapter_statuses: dict[int, str] = {}
+        self._chapter_to_spine_index: dict[int, int] = {}
         self._refresh_all()
         self.set_interval(self._REFRESH_INTERVAL_SECONDS, self._refresh_all)
         self.set_interval(self._SPINNER_INTERVAL_SECONDS, self._refresh_header_pass)
@@ -338,25 +352,60 @@ class BaseScreen(Screen):
         if spine_items is None:
             return
 
+        container = self.query_one("#spine-container")
+        from resemantica.tui.screens.preprocessing import PreprocessingScreen
+        container.set_class(isinstance(self, PreprocessingScreen), "spine-dimmed")
+
         chapter_data = self._get_chapter_spine_data()
-        
+
         if not chapter_data:
             spine_items.clear_options()
             spine_items.add_option(Option("[dim]No chapter data.[/]"))
+            self._spine_chapter_numbers = []
+            self._spine_chapter_statuses = {}
+            self._chapter_to_spine_index = {}
             return
 
+        self._spine_chapter_numbers = [n for n, _ in chapter_data]
+        self._spine_chapter_statuses = dict(chapter_data)
+
         options = self._render_spine_items(chapter_data)
-        
-        # We replace options to avoid DOM churn.
-        # Note: OptionList.replace_options is more efficient but clear/add_options is safer across versions
+        self._chapter_to_spine_index = {
+            n: i for i, n in enumerate(self._spine_chapter_numbers)
+        }
+
         spine_items.clear_options()
         spine_items.add_options(options)
 
+    def _update_spine_item(self, chapter_number: int, status: str) -> None:
+        if not self._spine_chapter_numbers:
+            if not self._fast_refresh_active():
+                self._update_spine()
+            return
+
+        self._spine_chapter_statuses[chapter_number] = status
+        spine_items = self.query_one_optional("#spine-items", OptionList)
+        if spine_items is None:
+            return
+        idx = self._chapter_to_spine_index.get(chapter_number)
+        if idx is None:
+            return
+        char, _ = self._SPINE_STATUS_MAP.get(status, self._SPINE_STATUS_MAP["not-started"])
+        spine_items.replace_option_prompt_at_index(idx, f"{char} Ch {chapter_number}")
+
     def on_chapter_started(self, message: ChapterStarted) -> None:
-        self._update_spine()
+        self._update_spine_item(message.chapter_number, "in-progress")
 
     def on_chapter_completed(self, message: ChapterCompleted) -> None:
-        self._update_spine()
+        self._update_spine_item(message.chapter_number, "complete")
+
+    def on_chapter_high_risk(self, message: ChapterHighRisk) -> None:
+        self._update_spine_item(message.chapter_number, "high-risk")
+
+    def on_option_list_selected(self, event: "OptionList.OptionSelected") -> None:
+        if event.option.id and event.option.id.startswith("ch-"):
+            from resemantica.tui.screens.translation import TranslationScreen
+            self.app.push_screen(TranslationScreen())
 
     def _get_chapter_spine_data(self) -> list[tuple[int, str]]:
         release_id = self._get_release_id()
@@ -386,33 +435,46 @@ class BaseScreen(Screen):
         try:
             events = load_events(conn, run_id=run_id, release_id=release_id, limit=1000)
             statuses: dict[int, str] = {}
+            high_risk_chapters: set[int] = set()
             for ev in reversed(events):
-               if ev.chapter_number is None:
-                   continue
-               event_type = ev.event_type or ""
-               if event_type.endswith(".chapter_completed"):
-                   statuses[ev.chapter_number] = "complete"
-               elif event_type.endswith(".chapter_started") and ev.chapter_number not in statuses:
-                   statuses[ev.chapter_number] = "in-progress"
-               elif ("fail" in event_type.lower() or event_type.endswith(".failed")) and ev.chapter_number not in statuses:
-                   statuses[ev.chapter_number] = "failed"
+                if ev.chapter_number is None:
+                    continue
+                event_type = ev.event_type or ""
+                payload = ev.payload or {}
+                ch = ev.chapter_number
+
+                if event_type.endswith(".chapter_completed"):
+                    if isinstance(payload, dict):
+                        p1 = payload.get("pass1_status")
+                        p2 = payload.get("pass2_status")
+                        if p1 == "failed" or p2 == "failed":
+                            statuses[ch] = "failed"
+                        elif ch in high_risk_chapters:
+                            statuses[ch] = "high-risk"
+                        else:
+                            statuses[ch] = "complete"
+                    else:
+                        statuses[ch] = "complete"
+
+                elif event_type.endswith(".chapter_started") and ch not in statuses:
+                    statuses[ch] = "in-progress"
+
+                elif ("fail" in event_type.lower() or event_type.endswith(".failed")) and ch not in statuses:
+                    statuses[ch] = "failed"
+
+                elif event_type.endswith(".paragraph_skipped"):
+                    if isinstance(payload, dict) and payload.get("pass_name") == "pass3":
+                        high_risk_chapters.add(ch)
 
             return statuses
         finally:
             conn.close()
 
-    @staticmethod
-    def _render_spine_items(chapter_data: list[tuple[int, str]]) -> list[Option]:
-        STATUS_MAP = {
-            "not-started": ("[dim]\u25fb[/]", "spine-status-not-started"),
-            "in-progress": ("[cyan]\u25b8[/]", "spine-status-in-progress"),
-            "complete": ("[green]\u25fc[/]", "spine-status-complete"),
-            "failed": ("[red]\u2717[/]", "spine-status-failed"),
-            "high-risk": ("[orange]\u25c8[/]", "spine-status-high-risk"),
-        }
+    @classmethod
+    def _render_spine_items(cls, chapter_data: list[tuple[int, str]]) -> list[Option]:
         options: list[Option] = []
         for ch_num, status in chapter_data:
-            char, _ = STATUS_MAP.get(status, STATUS_MAP["not-started"])
+            char, _ = cls._SPINE_STATUS_MAP.get(status, cls._SPINE_STATUS_MAP["not-started"])
             label = f"{char} Ch {ch_num}"
             options.append(Option(label, id=f"ch-{ch_num}"))
         return options

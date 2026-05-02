@@ -3,6 +3,6 @@
 CATEGORY: {CATEGORY}
 EVIDENCE: {EVIDENCE_SNIPPET}
 
-Translate the source term into concise canonical English with no extra commentary.
+Translate the following term into English with no extra commentary.
 
 {SOURCE_TERM}

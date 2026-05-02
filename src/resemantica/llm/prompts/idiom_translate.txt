@@ -3,7 +3,6 @@
 MEANING (ZH): {MEANING_ZH}
 EVIDENCE: {EVIDENCE_SNIPPET}
 
-## IDIOM_TRANSLATE
-Translate this Chinese idiom into concise, natural English with no extra commentary.
+Translate the following Chinese idiom into natural English with no extra commentary.
 
 {SOURCE_TEXT}

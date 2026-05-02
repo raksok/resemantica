@@ -236,12 +236,6 @@ def test_resume_run_dialog_callback_saves_bounds():
 
 
 def test_scoped_launches_pass_chapter_bounds():
-    from resemantica.tui.launch_control import (
-        LaunchAction,
-        LaunchContext,
-        LaunchSnapshot,
-        LaunchStageStatus,
-    )
     from resemantica.tui.screens.preprocessing import PreprocessingScreen
     from resemantica.tui.screens.translation import TranslationScreen
 
@@ -658,8 +652,10 @@ def test_chapter_spine_uses_extracted_count():
     chapter_data = [(i, "not-started") for i in range(1, 6)]
     items = BaseScreen._render_spine_items(chapter_data)
     assert len(items) == 5
-    assert items[0] == ("□ Ch 1", "spine-item spine-status-not-started")
-    assert items[4] == ("□ Ch 5", "spine-item spine-status-not-started")
+    assert "Ch 1" in str(items[0].prompt)
+    assert items[0].id == "ch-1"
+    assert "Ch 5" in str(items[4].prompt)
+    assert items[4].id == "ch-5"
 
 
 def test_chapter_spine_status_chars():
@@ -673,41 +669,37 @@ def test_chapter_spine_status_chars():
         (5, "not-started"),
     ]
     items = BaseScreen._render_spine_items(chapter_data)
-    assert items[0][0].startswith("■")
-    assert items[0][1].endswith("spine-status-complete")
-    assert items[1][0].startswith("▸")
-    assert items[1][1].endswith("spine-status-in-progress")
-    assert items[2][0].startswith("✗")
-    assert items[2][1].endswith("spine-status-failed")
-    assert items[3][0].startswith("◈")
-    assert items[3][1].endswith("spine-status-high-risk")
-    assert items[4][0].startswith("□")
-    assert items[4][1].endswith("spine-status-not-started")
+    assert "■" in str(items[0].prompt)
+    assert "▸" in str(items[1].prompt)
+    assert "✗" in str(items[2].prompt)
+    assert "◈" in str(items[3].prompt)
+    assert "□" in str(items[4].prompt)
 
 
-def test_translation_render_block_progress():
+def test_translation_build_block_options():
     from resemantica.tui.screens.translation import TranslationScreen
 
     data: dict[int, list[tuple[str, str]]] = {
         1: [("blk001", "done"), ("blk002", "in-progress"), ("blk003", "failed")],
         2: [("blk004", "done")],
     }
-    result = TranslationScreen._render_block_progress(data)
-    assert "Ch 1" in result
-    assert "Ch 2" in result
-    assert "1/3 blocks" in result
-    assert "1/1 blocks" in result
-    assert "blk001" in result
-    assert "blk002" in result
-    assert "blk003" in result
-    assert "blk004" in result
+    options = TranslationScreen()._build_block_options(data)
+    prompts = [str(o.prompt) for o in options]
+    assert any("Ch 1" in p for p in prompts)
+    assert any("Ch 2" in p for p in prompts)
+    assert any("1/3 blocks" in p for p in prompts)
+    assert any("1/1 blocks" in p for p in prompts)
+    assert any("blk001" in p for p in prompts)
+    assert any("blk002" in p for p in prompts)
+    assert any("blk003" in p for p in prompts)
+    assert any("blk004" in p for p in prompts)
 
 
-def test_translation_render_block_progress_empty():
+def test_translation_build_block_options_empty():
     from resemantica.tui.screens.translation import TranslationScreen
 
-    result = TranslationScreen._render_block_progress({})
-    assert "No translation run active" in result
+    options = TranslationScreen()._build_block_options({})
+    assert len(options) == 0
 
 
 def test_launch_control_make_adapter_returns_none_without_context():
@@ -952,7 +944,7 @@ def test_ingestion_fast_refresh_renders_extracting_without_manifest_loads(monkey
             await pilot.pause()
 
             status = pilot.app.screen.query_one("#ingestion-status", Static)
-            assert "Extracting" in _static_text(status)
+            assert "EPUB Extract" in _static_text(status)
 
     asyncio.run(run())
 
@@ -1317,6 +1309,8 @@ def test_dashboard_recent_warnings_scopes_events_to_active_run(monkeypatch):
 
 
 def test_tui_dashboard_mount_refresh_is_idempotent():
+    from textual.widgets import OptionList
+
     from resemantica.tui.app import ResemanticaApp
 
     async def run() -> None:
@@ -1326,13 +1320,14 @@ def test_tui_dashboard_mount_refresh_is_idempotent():
             dashboard = pilot.app.screen
 
             assert len(list(dashboard.query("#spine-title"))) == 1
-            assert len(list(dashboard.query("#spine-items > .spine-item"))) == 1
+            spine_items = dashboard.query_one("#spine-items", OptionList)
+            assert spine_items.option_count == 1
 
             dashboard._refresh_all()
             await pilot.pause()
 
             assert len(list(dashboard.query("#spine-title"))) == 1
-            assert len(list(dashboard.query("#spine-items > .spine-item"))) == 1
+            assert spine_items.option_count == 1
 
     asyncio.run(run())
 
