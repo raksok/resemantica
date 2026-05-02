@@ -9,7 +9,8 @@ from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Static
+from textual.widgets import Static, OptionList
+from textual.widgets.option_list import Option
 
 from resemantica.observability.granularity import classify_event_level, tui_verbosity_to_level
 from resemantica.orchestration.stop import StopToken
@@ -47,11 +48,33 @@ class StageProgress:
         return self.total is not None
 
 
+from textual.message import Message
+
+
+@dataclass
+class ChapterStarted(Message):
+    stage_key: str
+    chapter_number: int
+
+
+@dataclass
+class ChapterCompleted(Message):
+    stage_key: str
+    chapter_number: int
+
+
+@dataclass
+class BlockUpdated(Message):
+    chapter_number: int
+    block_id: str
+    status: str
+
+
 class BaseScreen(Screen):
     _PULSE_WIDTH = 30
     _PULSE_GLYPHS = "▁▂▃▄▅▆▇█"
     _SPINNER_GLYPHS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    _REFRESH_INTERVAL_SECONDS = 2.0
+    _REFRESH_INTERVAL_SECONDS = 30.0
     _SPINNER_INTERVAL_SECONDS = 0.25
     _STALE_AFTER_SECONDS = 300
 
@@ -71,7 +94,7 @@ class BaseScreen(Screen):
         )
         yield Vertical(
             Static("Chapter Spine", id="spine-title"),
-            Vertical(id="spine-items"),
+            OptionList(id="spine-items"),
             id="spine-container",
             classes="spine",
         )
@@ -311,15 +334,29 @@ class BaseScreen(Screen):
             pass_widget.update(f"[{indicator.color}]{indicator.label}[/]")
 
     def _update_spine(self) -> None:
-        spine_items = self.query_one("#spine-items", Vertical)
-        spine_items.remove_children()
+        spine_items = self.query_one_optional("#spine-items", OptionList)
+        if spine_items is None:
+            return
 
         chapter_data = self._get_chapter_spine_data()
-        if chapter_data:
-            for label, css in self._render_spine_items(chapter_data):
-                spine_items.mount(Static(label, classes=css))
-        else:
-            spine_items.mount(Static("[dim]No chapter data.[/]", classes="spine-item"))
+        
+        if not chapter_data:
+            spine_items.clear_options()
+            spine_items.add_option(Option("[dim]No chapter data.[/]"))
+            return
+
+        options = self._render_spine_items(chapter_data)
+        
+        # We replace options to avoid DOM churn.
+        # Note: OptionList.replace_options is more efficient but clear/add_options is safer across versions
+        spine_items.clear_options()
+        spine_items.add_options(options)
+
+    def on_chapter_started(self, message: ChapterStarted) -> None:
+        self._update_spine()
+
+    def on_chapter_completed(self, message: ChapterCompleted) -> None:
+        self._update_spine()
 
     def _get_chapter_spine_data(self) -> list[tuple[int, str]]:
         release_id = self._get_release_id()
@@ -365,19 +402,20 @@ class BaseScreen(Screen):
             conn.close()
 
     @staticmethod
-    def _render_spine_items(chapter_data: list[tuple[int, str]]) -> list[tuple[str, str]]:
-        STATUS_MAP: dict[str, tuple[str, str]] = {
-            "not-started": ("□", "spine-status-not-started"),
-            "in-progress": ("▸", "spine-status-in-progress"),
-            "complete": ("■", "spine-status-complete"),
-            "failed": ("✗", "spine-status-failed"),
-            "high-risk": ("◈", "spine-status-high-risk"),
+    def _render_spine_items(chapter_data: list[tuple[int, str]]) -> list[Option]:
+        STATUS_MAP = {
+            "not-started": ("[dim]\u25fb[/]", "spine-status-not-started"),
+            "in-progress": ("[cyan]\u25b8[/]", "spine-status-in-progress"),
+            "complete": ("[green]\u25fc[/]", "spine-status-complete"),
+            "failed": ("[red]\u2717[/]", "spine-status-failed"),
+            "high-risk": ("[orange]\u25c8[/]", "spine-status-high-risk"),
         }
-        items: list[tuple[str, str]] = []
+        options: list[Option] = []
         for ch_num, status in chapter_data:
-            char, css = STATUS_MAP.get(status, STATUS_MAP["not-started"])
-            items.append((f"{char} Ch {ch_num}", f"spine-item {css}"))
-        return items
+            char, _ = STATUS_MAP.get(status, STATUS_MAP["not-started"])
+            label = f"{char} Ch {ch_num}"
+            options.append(Option(label, id=f"ch-{ch_num}"))
+        return options
 
     def _update_footer(
         self,

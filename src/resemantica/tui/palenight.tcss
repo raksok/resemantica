@@ -55,24 +55,28 @@ HeaderBar {
     width: 24;
     height: 1fr;
     background: #1E1F2B;
-    overflow-y: auto;
     border-right: solid #34324A;
+}
+
+#spine-items {
+    background: #1E1F2B;
+    border: none;
+    height: 1fr;
+}
+
+#spine-items > .option-list--option {
+    padding: 0 1;
+}
+
+#spine-items > .option-list--option-highlighted {
+    background: #34324A;
+    color: #82AAFF;
 }
 
 #spine-title {
     color: #676E95;
     text-style: bold;
-    padding: 0 1;
-}
-
-.spine-item {
-    padding: 0 1;
-    height: 1;
-}
-
-.spine-item-focused {
-    background: #34324A;
-    color: #82AAFF;
+    padding: 1 1 0 1;
 }
 
 .spine-status-not-started {
@@ -150,8 +154,22 @@ HeaderBar {
 #dashboard-key-hints,
 #preprocessing-stage-list,
 #preprocessing-event-tail,
-#translation-header,
-#translation-block-list,
+#translation-header {
+    padding: 0 0 1 0;
+}
+
+#translation-block-list {
+    height: 1fr;
+    background: #1E1F2B;
+    border: none;
+    margin: 1 0;
+}
+
+#translation-block-list > .option-list--option-highlighted {
+    background: #34324A;
+    color: #82AAFF;
+}
+
 #translation-event-tail,
 #settings-config-display,
 #ingestion-path,

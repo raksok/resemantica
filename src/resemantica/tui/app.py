@@ -135,6 +135,24 @@ class ResemanticaApp(App):
         if self.active_action is None:
             return
 
+        from resemantica.tui.screens.base import BlockUpdated, ChapterCompleted, ChapterStarted
+
+        for event in pending:
+            et = event.event_type
+            ch = event.chapter_number
+            if ch is not None:
+                if et.endswith(".chapter_started"):
+                    self.screen.post_message(ChapterStarted(event.stage_name, ch))
+                elif et.endswith(".chapter_completed"):
+                    self.screen.post_message(ChapterCompleted(event.stage_name, ch))
+                elif et.endswith(".paragraph_started"):
+                    self.screen.post_message(BlockUpdated(ch, event.block_id or "?", "in-progress"))
+                elif et.endswith(".paragraph_completed"):
+                    self.screen.post_message(BlockUpdated(ch, event.block_id or "?", "done"))
+                elif et.endswith(".validation_failed") or et.endswith(".failed"):
+                    if event.block_id:
+                        self.screen.post_message(BlockUpdated(ch, event.block_id, "failed"))
+
         refresh_live = getattr(self.screen, "_refresh_live_progress", None)
         if callable(refresh_live):
             refresh_live()

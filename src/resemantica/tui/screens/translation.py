@@ -3,9 +3,10 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
-from textual.widgets import Static
+from textual.widgets import Static, OptionList
+from textual.widgets.option_list import Option
 
-from resemantica.tui.screens.base import BaseScreen
+from resemantica.tui.screens.base import BaseScreen, BlockUpdated, ChapterCompleted, ChapterStarted
 from resemantica.tui.screens.run_dialog import ConfirmDialog
 
 
@@ -20,11 +21,12 @@ class TranslationScreen(BaseScreen):
             yield Static("Translation Progress", classes="app-title")
             yield Static("", id="translation-stage-list")
             yield Static("", id="translation-header")
-            yield Static("", id="translation-block-list")
+            yield OptionList(id="translation-block-list")
             yield Static("", id="translation-status")
             yield Static("", id="translation-event-tail", classes="event-tail")
 
     def on_mount(self) -> None:
+        self._block_to_index: dict[str, int] = {}
         super().on_mount()
         self._refresh_translation()
 
@@ -34,6 +36,12 @@ class TranslationScreen(BaseScreen):
 
     def _refresh_live_progress(self) -> None:
         super()._refresh_live_progress()
+        
+        # Update pipeline progress bars in real-time
+        state = self._run_state_for_refresh()
+        stage_list = self.query_one("#translation-stage-list", Static)
+        stage_list.update(self._build_stage_progress(state))
+        
         self._update_status()
         self._update_event_tail()
 
@@ -50,18 +58,55 @@ class TranslationScreen(BaseScreen):
                 f"[bold]Status:[/] {state['status']}"
             )
 
-        block_list = self.query_one("#translation-block-list", Static)
+        block_list = self.query_one("#translation-block-list", OptionList)
         if self._fast_refresh_active():
-            block_list.update("[dim]Block progress updates resume when action completes.[/]")
+            block_list.clear_options()
+            block_list.add_option(Option("[dim]Block progress updates resume when action completes.[/]"))
         else:
             block_data = self._load_block_progress()
             if block_data:
-                block_list.update(self._render_block_progress(block_data))
+                block_list.clear_options()
+                block_list.add_options(self._build_block_options(block_data))
             else:
-                block_list.update("[dim]No translation run active.[/]")
+                block_list.clear_options()
+                block_list.add_option(Option("[dim]No translation run active.[/]"))
 
         self._update_status()
         self._update_event_tail()
+
+    def _build_block_options(self, data: dict[int, list[tuple[str, str]]]) -> list[Option]:
+        self._block_to_index.clear()
+        options: list[Option] = []
+        for ch_num in sorted(data):
+            blocks = data[ch_num]
+            done = sum(1 for _, s in blocks if s == "done")
+            options.append(Option(f"[bold]Ch {ch_num}[/]  {done}/{len(blocks)} blocks"))
+            
+            for bid, status in blocks:
+                idx = len(options)
+                self._block_to_index[f"{ch_num}:{bid}"] = idx
+                options.append(self._make_block_option(bid, status))
+        return options
+
+    def _make_block_option(self, block_id: str, status: str) -> Option:
+        char = "\u25a0" if status == "done" else "\u2717" if status == "failed" else "\u25b8"
+        color = "green" if status == "done" else "red" if status == "failed" else "cyan"
+        return Option(f"  [{color}]{char}[/] {block_id}")
+
+    def on_block_updated(self, message: BlockUpdated) -> None:
+        key = f"{message.chapter_number}:{message.block_id}"
+        idx = self._block_to_index.get(key)
+        if idx is not None:
+            block_list = self.query_one("#translation-block-list", OptionList)
+            block_list.replace_option_at_index(idx, self._make_block_option(message.block_id, message.status))
+
+    def on_chapter_started(self, message: ChapterStarted) -> None:
+        super().on_chapter_started(message)
+        self._refresh_translation()
+
+    def on_chapter_completed(self, message: ChapterCompleted) -> None:
+        super().on_chapter_completed(message)
+        self._refresh_translation()
 
     TRANSLATION_STAGE_KEYS = ["translate-range", "epub-rebuild"]
 
@@ -238,7 +283,7 @@ class TranslationScreen(BaseScreen):
 
             conn = ensure_tracking_db(release_id)
             try:
-                events = load_events(conn, run_id=run_id, release_id=release_id, limit=500)
+                events = load_events(conn, run_id=run_id, release_id=release_id, limit=1000)
                 chapters: dict[int, dict[str, str]] = {}
                 for ev in reversed(events):
                     if ev.chapter_number is None:
@@ -256,20 +301,3 @@ class TranslationScreen(BaseScreen):
                 conn.close()
         except Exception:
             return {}
-
-    @staticmethod
-    def _render_block_progress(data: dict[int, list[tuple[str, str]]]) -> str:
-        if not data:
-            return "[dim]No translation run active.[/]"
-        lines: list[str] = []
-        for ch_num in sorted(data):
-            blocks = data[ch_num]
-            done = sum(1 for _, s in blocks if s == "done")
-            lines.append(f"[bold]Ch {ch_num}[/]  {done}/{len(blocks)} blocks")
-            for bid, status in blocks[:15]:
-                char = "\u25a0" if status == "done" else "\u2717" if status == "failed" else "\u25b8"
-                color = "green" if status == "done" else "red" if status == "failed" else "cyan"
-                lines.append(f"  [{color}]{char}[/] {bid}")
-            if len(blocks) > 15:
-                lines.append(f"  ... +{len(blocks) - 15} more")
-        return "\n".join(lines)

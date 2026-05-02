@@ -83,6 +83,9 @@ class DashboardScreen(BaseScreen):
     def _refresh_live_progress(self) -> None:
         super()._refresh_live_progress()
         events = self._recent_events_for_refresh()
+        
+        # Update stage list in real-time
+        self.query_one("#dashboard-stage-list", Static).update(self._render_stage_list())
 
         worker_widget = self.query_one("#dashboard-active-worker", Static)
         active_action = getattr(self.app, "active_action", None)
