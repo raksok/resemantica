@@ -496,9 +496,7 @@ class BaseScreen(Screen):
             parts.append(f"ch={event.chapter_number}")
         if event.block_id:
             parts.append(f"block={event.block_id}")
-        if event.stage_name:
-            parts.append(f"stage={event.stage_name}")
-        return f"  [{color}]{severity.upper():<7}[/] {'  '.join(parts)[:104]}"
+        return f"  [{color}]{severity.upper()}:[/] {'  '.join(parts)[:104]}"
 
     @classmethod
     def _render_event_tail(

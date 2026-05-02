@@ -44,6 +44,7 @@ All 269 tests pass. No breaking changes. Work is grouped into a single smooth ex
 | DEF3 | Defer | `cli.py` | Duplicate CLI subcommands `run-production` / `run production` — deprecate one |
 | DEF4 | Defer | Pipeline modules | Inconsistent status output (print vs loguru vs TUI) — standardize on logger |
 | DEF5 | Defer | DB repos, `llm/cache.py`, `llm/tokens.py`, `epub/parser.py` | Untested layers — add tests opportunistically |
+| UX1 | UI | `tui/screens/base.py:490-501` | Event tail: drop stage=name field, change severity padding to `SEVERITY:` colon format (requested during preprocessing screen work) |
 
 ---
 

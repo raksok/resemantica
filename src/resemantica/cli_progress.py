@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from collections import deque
 from threading import Lock
 from typing import Any
@@ -56,7 +57,13 @@ class CliProgressSubscriber:
                 BarColumn(),
                 TaskProgressColumn(show_speed=False),
             )
-            self._live = Live(get_renderable=self._render_layout, console=Console(stderr=True), refresh_per_second=4)
+            _width = max(shutil.get_terminal_size().columns, 100)
+            self._live = Live(
+                get_renderable=self._render_layout,
+                console=Console(stderr=True, width=_width),
+                refresh_per_second=4,
+                vertical_overflow="visible",
+            )
             self._live.__enter__()
             replace_stderr_sink(self._log_sink, fmt="{message}")
 
