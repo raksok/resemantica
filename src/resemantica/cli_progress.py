@@ -6,6 +6,7 @@ from threading import Lock
 from typing import Any
 
 from rich.console import Console, Group
+from rich.highlighter import ReprHighlighter
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
@@ -53,8 +54,8 @@ class CliProgressSubscriber:
         else:
             self.progress = Progress(
                 SpinnerColumn(),
-                TextColumn("{task.description}"),
-                BarColumn(),
+                TextColumn("[cyan]{task.description}[/cyan]"),
+                BarColumn(complete_style="green", finished_style="blue"),
                 TaskProgressColumn(show_speed=False),
             )
             _width = max(shutil.get_terminal_size().columns, 100)
@@ -93,21 +94,26 @@ class CliProgressSubscriber:
     def _render_status(self) -> Text:
         pairs: list[str] = []
         if self.skip_count:
-            pairs.append(f"skip: {self.skip_count}")
+            pairs.append(f"[yellow]skip: {self.skip_count}[/yellow]")
         if self.warning_count:
-            pairs.append(f"warn: {self.warning_count}")
+            pairs.append(f"[red]warn: {self.warning_count}[/red]")
         if self.retry_count:
-            pairs.append(f"retry: {self.retry_count}")
+            pairs.append(f"[magenta]retry: {self.retry_count}[/magenta]")
         if self.artifact_count:
-            pairs.append(f"artifacts: {self.artifact_count}")
-        return Text("  |  ".join(pairs))
+            pairs.append(f"[cyan]artifacts: {self.artifact_count}[/cyan]")
+        if not pairs:
+            return Text("")
+        return Text.from_markup("  |  ".join(pairs))
 
     def _render_log_panel(self) -> Panel | Text:
         with self._log_lock:
             lines = list(self._log_buffer)
         if not lines:
             return Text("")
-        return Panel("\n".join(lines), title="Log", border_style="dim")
+        
+        highlighter = ReprHighlighter()
+        text = highlighter(Text("\n".join(lines)))
+        return Panel(text, title="Log", border_style="dim")
 
     def _render_layout(self) -> Group:
         components: list[object] = [
@@ -156,11 +162,11 @@ class CliProgressSubscriber:
         event_type = event.event_type
         payload = event.payload or {}
 
-        if event_type in {"validation_failed", "risk_detected"} or event_type.endswith(".validation_failed"):
+        if event_type.endswith(".validation_failed") or event_type.endswith(".risk_detected"):
             self.warning_count += 1
-        if event_type.endswith("_skipped") or event_type.endswith(".chapter_skipped"):
+        if event_type.endswith(".chapter_skipped") or event_type.endswith(".paragraph_skipped"):
             self.skip_count += 1
-        if event_type.endswith("_retry") or event_type.endswith(".retry"):
+        if event_type.endswith(".retry"):
             self.retry_count += 1
         if event_type.endswith(".artifact_written"):
             self.artifact_count += 1
@@ -170,21 +176,12 @@ class CliProgressSubscriber:
             total = payload.get("total_chapters")
             self._ensure_task(stage, total=total if isinstance(total, int) else None)
             return
-        if event_type.endswith("_started") and "." not in event_type:
-            self._ensure_task(event_type.removesuffix("_started"))
-            return
 
         if event_type.endswith(".completed"):
             self._complete_task(event_type.removesuffix(".completed"))
             return
-        if event_type.endswith("_completed") and "." not in event_type:
-            self._complete_task(event_type.removesuffix("_completed"))
-            return
         if event_type.endswith(".failed"):
             self._complete_task(event_type.removesuffix(".failed"))
-            return
-        if event_type.endswith("_failed") and "." not in event_type:
-            self._complete_task(event_type.removesuffix("_failed"))
             return
 
         if event_type.endswith(".chapter_completed"):

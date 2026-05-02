@@ -60,9 +60,16 @@ def classify_signal_level(event_type: str, *, severity: str = "info") -> int:
     if severity == "debug":
         return 4
     et = event_type.lower()
+    # Prioritize matching standardized dot-namespaced suffixes
     for entry in reversed(GRANULARITY_LEVELS):
         for pattern in entry["patterns"]:
-            if pattern in et or et.endswith(f".{pattern}") or et == pattern:
+            if et.endswith(f".{pattern}"):
+                return entry["level"]
+
+    # Fallback for base patterns (still needed for some non-standardized internal events if any)
+    for entry in reversed(GRANULARITY_LEVELS):
+        for pattern in entry["patterns"]:
+            if pattern in et or et == pattern:
                 return entry["level"]
     return 1
 

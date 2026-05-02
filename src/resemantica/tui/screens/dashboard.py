@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Button, Static
 
-from resemantica.tui.launch_control import STAGE_DEFINITIONS, next_available_stage
+from resemantica.tui.launch_control import STAGE_DEFINITIONS
 from resemantica.tui.screens.base import BaseScreen
 
 STATUS_COLORS = {
@@ -35,8 +36,6 @@ STATUS_GLYPH = {
 
 class DashboardScreen(BaseScreen):
     BINDINGS = [
-        Binding("p", "launch_production", "Production"),
-        Binding("n", "launch_next", "Next Stage"),
         Binding("left", "focus_prev_action", "Previous"),
         Binding("right", "focus_next_action", "Next"),
     ]
@@ -66,12 +65,11 @@ class DashboardScreen(BaseScreen):
                     yield Static("Dashboard", classes="app-title")
                     yield Static("", id="dashboard-session-info")
                     with Horizontal(id="dashboard-action-list"):
-                        yield Button("[[ NEW FILE ]]", id="btn-new-file")
-                        yield Button("[[ RESUME RUN ]]", id="btn-resume-run")
+                        yield Button(Text("[[ NEW FILE ]]"), id="btn-new-file")
+                        yield Button(Text("[[ RESUME RUN ]]"), id="btn-resume-run")
                     yield Static("", id="dashboard-stage-list")
                     yield Static("", id="dashboard-active-worker")
                     yield Static("", id="dashboard-latest-failure")
-                    yield Static("", id="dashboard-key-hints")
                 with Vertical(id="dashboard-event-panel"):
                     yield Static("", id="dashboard-event-tail", classes="event-tail")
 
@@ -157,12 +155,6 @@ class DashboardScreen(BaseScreen):
             )
         )
 
-        hints = self.query_one("#dashboard-key-hints", Static)
-        hints.update(
-            "[dim]p[/]=Production  "
-            "[dim]n[/]=Next Stage"
-        )
-
     def _render_cached_event_tail(self, events: list, *, title: str, limit: int = 5) -> str:
         return self._render_event_tail(events, title=title, limit=limit)
 
@@ -231,66 +223,6 @@ class DashboardScreen(BaseScreen):
             ),
             handle,
         )
-
-    def action_launch_production(self) -> None:
-        adapter = self._make_adapter()
-        if adapter is None:
-            self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
-            return
-        options = self._chapter_scope_options()
-        self.start_worker(
-            "production",
-            lambda stop_token=None: adapter.launch_production(
-                **({"stop_token": stop_token} if stop_token is not None else {}),
-                **options,
-            ),
-        )
-
-    def action_launch_next(self) -> None:
-        snapshot = self._build_snapshot()
-        next_stage = next_available_stage(snapshot)
-        if next_stage is None:
-            self.notify("No available stage to launch", severity="warning", timeout=3)
-            return
-        adapter = self._make_adapter()
-        if adapter is None:
-            self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
-            return
-        if next_stage.key == "epub-extract":
-            session = getattr(self.app, "session", None)
-            input_path = session.input_path if session else None
-            if not input_path:
-                self.notify("No EPUB path selected", severity="error", timeout=3)
-                return
-            resolved = Path(input_path).expanduser().resolve()
-            self.start_worker(next_stage.key, lambda stop_token=None: adapter.extract_epub(resolved))
-        elif next_stage.key == "production":
-            options = self._chapter_scope_options()
-            self.start_worker(
-                next_stage.key,
-                lambda stop_token=None: adapter.launch_production(
-                    **({"stop_token": stop_token} if stop_token is not None else {}),
-                    **options,
-                ),
-            )
-        elif next_stage.key == "epub-rebuild":
-            self.start_worker(
-                next_stage.key,
-                lambda stop_token=None: adapter.launch_stage(
-                    next_stage.key,
-                    **({"stop_token": stop_token} if stop_token is not None else {}),
-                ),
-            )
-        else:
-            options = self._chapter_scope_options()
-            self.start_worker(
-                next_stage.key,
-                lambda stop_token=None: adapter.launch_stage(
-                    next_stage.key,
-                    **({"stop_token": stop_token} if stop_token is not None else {}),
-                    **options,
-                ),
-            )
 
     def _build_phase_progress(self, state: dict | None = None) -> str:
         return type(self)._build_phase_progress_static(state)

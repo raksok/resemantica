@@ -9,6 +9,7 @@ from textual.widgets import Static
 
 from resemantica.tui.launch_control import STAGE_DEFINITIONS
 from resemantica.tui.screens.base import BaseScreen
+from resemantica.tui.screens.run_dialog import ConfirmDialog
 
 
 class IngestionScreen(BaseScreen):
@@ -169,5 +170,9 @@ class IngestionScreen(BaseScreen):
             self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
             return
 
-        resolved = Path(input_path).expanduser().resolve()
-        self.start_worker("epub-extract", lambda stop_token=None: adapter.extract_epub(resolved))
+        def on_confirm(confirmed: bool | None) -> None:
+            if confirmed:
+                resolved = Path(input_path).expanduser().resolve()
+                self.start_worker("epub-extract", lambda stop_token=None: adapter.extract_epub(resolved))
+
+        self.app.push_screen(ConfirmDialog("Confirm", "Start EPUB extraction?"), on_confirm)

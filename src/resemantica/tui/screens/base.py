@@ -350,14 +350,16 @@ class BaseScreen(Screen):
             events = load_events(conn, run_id=run_id, release_id=release_id, limit=1000)
             statuses: dict[int, str] = {}
             for ev in reversed(events):
-                if ev.chapter_number is None:
-                    continue
-                if ev.event_type == "chapter_completed":
-                    statuses[ev.chapter_number] = "complete"
-                elif ev.event_type == "chapter_started" and ev.chapter_number not in statuses:
-                    statuses[ev.chapter_number] = "in-progress"
-                elif "fail" in (ev.event_type or "").lower() and ev.chapter_number not in statuses:
-                    statuses[ev.chapter_number] = "failed"
+               if ev.chapter_number is None:
+                   continue
+               event_type = ev.event_type or ""
+               if event_type.endswith(".chapter_completed"):
+                   statuses[ev.chapter_number] = "complete"
+               elif event_type.endswith(".chapter_started") and ev.chapter_number not in statuses:
+                   statuses[ev.chapter_number] = "in-progress"
+               elif ("fail" in event_type.lower() or event_type.endswith(".failed")) and ev.chapter_number not in statuses:
+                   statuses[ev.chapter_number] = "failed"
+
             return statuses
         finally:
             conn.close()

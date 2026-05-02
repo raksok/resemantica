@@ -6,6 +6,7 @@ from textual.containers import Container
 from textual.widgets import Static
 
 from resemantica.tui.screens.base import BaseScreen
+from resemantica.tui.screens.run_dialog import ConfirmDialog
 
 
 class TranslationScreen(BaseScreen):
@@ -48,8 +49,6 @@ class TranslationScreen(BaseScreen):
                 f"[bold]Stage:[/] {state['stage_name']}\n"
                 f"[bold]Status:[/] {state['status']}"
             )
-        else:
-            header.update("[dim]No translation run active.[/]")
 
         block_list = self.query_one("#translation-block-list", Static)
         if self._fast_refresh_active():
@@ -187,11 +186,18 @@ class TranslationScreen(BaseScreen):
                 ),
             )
 
+    def _confirm_then_launch(self, stage_key: str, message: str) -> None:
+        def on_confirm(confirmed: bool | None) -> None:
+            if confirmed:
+                self._launch_stage(stage_key)
+
+        self.app.push_screen(ConfirmDialog("Confirm", message), on_confirm)
+
     def action_launch_translate(self) -> None:
-        self._launch_stage("translate-range")
+        self._confirm_then_launch("translate-range", "Start Translation?")
 
     def action_launch_rebuild(self) -> None:
-        self._launch_stage("epub-rebuild")
+        self._confirm_then_launch("epub-rebuild", "Start EPUB rebuild?")
 
     def _update_event_tail(self) -> None:
         events = self._screen_events_for_tail()

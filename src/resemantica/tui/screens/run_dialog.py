@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
@@ -91,8 +92,8 @@ class NewFileDialog(ModalScreen[NewFileResult | None]):
                     id="new-end-input",
                 )
             with Horizontal(id="dialog-buttons"):
-                yield Button("[[ SUBMIT ]]", id="new-submit", variant="primary")
-                yield Button("[[ CANCEL ]]", id="new-cancel")
+                yield Button(Text("[[ SUBMIT ]]"), id="new-submit", variant="primary")
+                yield Button(Text("[[ CANCEL ]]"), id="new-cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "new-cancel":
@@ -188,8 +189,8 @@ class ResumeRunDialog(ModalScreen[ResumeRunResult | None]):
                     id="resume-end-input",
                 )
             with Horizontal(id="dialog-buttons"):
-                yield Button("[[ SUBMIT ]]", id="resume-submit", variant="primary")
-                yield Button("[[ CANCEL ]]", id="resume-cancel")
+                yield Button(Text("[[ SUBMIT ]]"), id="resume-submit", variant="primary")
+                yield Button(Text("[[ CANCEL ]]"), id="resume-cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "resume-cancel":
@@ -227,3 +228,39 @@ class ResumeRunDialog(ModalScreen[ResumeRunResult | None]):
 
     def action_close_dialog(self) -> None:
         self.dismiss(None)
+
+
+class ConfirmDialog(ModalScreen[bool]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("left", "focus_previous", "Previous", priority=True),
+        Binding("right", "focus_next", "Next", priority=True),
+    ]
+
+    def __init__(self, title: str, message: str) -> None:
+        super().__init__()
+        self.dialog_title = title
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        with Container(id="confirm-dialog"):
+            yield Static(self.dialog_title, id="confirm-title")
+            yield Static(self.message, classes="dialog-label")
+            with Horizontal(id="dialog-buttons"):
+                yield Button(Text("[[ CONFIRM ]]"), id="confirm-yes", variant="primary")
+                yield Button(Text("[[ CANCEL ]]"), id="confirm-no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm-yes":
+            self.dismiss(True)
+        else:
+            self.dismiss(False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_focus_next(self) -> None:
+        self.focus_next()
+
+    def action_focus_previous(self) -> None:
+        self.focus_previous()

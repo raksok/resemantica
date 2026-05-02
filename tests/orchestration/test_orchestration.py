@@ -252,7 +252,7 @@ class TestRunStage:
 
         assert state is not None
         assert state.status == "stopped"
-        assert [event.event_type for event in events].count("stage_stopped") == 1
+        assert [event.event_type for event in events].count("reset.stopped") == 1
 
     def test_stage_completed_event_persists_llm_usage_payload(self, monkeypatch):
         import uuid
@@ -281,7 +281,7 @@ class TestRunStage:
         finally:
             conn.close()
 
-        completed = next(event for event in events if event.event_type == "stage_completed")
+        completed = next(event for event in events if event.event_type == "reset.completed")
         assert completed.payload["llm_total_tokens"] == 33
         assert completed.payload["llm_request_count"] == 2
 

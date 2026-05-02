@@ -10,6 +10,7 @@ from textual.widgets import Static
 
 from resemantica.tui.launch_control import STAGE_DEFINITIONS, LaunchSnapshot
 from resemantica.tui.screens.base import BaseScreen, StageProgress
+from resemantica.tui.screens.run_dialog import ConfirmDialog
 
 PREPRO_STAGE_KEYS = [
     "epub-extract",
@@ -269,17 +270,24 @@ class PreprocessingScreen(BaseScreen):
     def _default_event_filter(self, event) -> bool:
         return self._event_matches_stage_prefix(event, ("preprocess-", "packets-build"))
 
+    def _confirm_then_launch(self, stage_key: str, message: str) -> None:
+        def on_confirm(confirmed: bool | None) -> None:
+            if confirmed:
+                self._launch_stage(stage_key)
+
+        self.app.push_screen(ConfirmDialog("Confirm", message), on_confirm)
+
     def action_launch_glossary(self) -> None:
-        self._launch_stage("preprocess-glossary")
+        self._confirm_then_launch("preprocess-glossary", "Start Glossary preprocessing?")
 
     def action_launch_summaries(self) -> None:
-        self._launch_stage("preprocess-summaries")
+        self._confirm_then_launch("preprocess-summaries", "Start Summaries preprocessing?")
 
     def action_launch_idioms(self) -> None:
-        self._launch_stage("preprocess-idioms")
+        self._confirm_then_launch("preprocess-idioms", "Start Idioms preprocessing?")
 
     def action_launch_graph(self) -> None:
-        self._launch_stage("preprocess-graph")
+        self._confirm_then_launch("preprocess-graph", "Start Graph preprocessing?")
 
     def action_launch_packets(self) -> None:
-        self._launch_stage("packets-build")
+        self._confirm_then_launch("packets-build", "Start Packet building?")

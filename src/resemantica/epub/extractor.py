@@ -167,7 +167,7 @@ def extract_epub(
         emit_event(
             run_id=run_id,
             release_id=release_id,
-            event_type="epub.extraction.chapter_started",
+            event_type="epub-extract.chapter_started",
             stage_name="epub-extract",
             chapter_number=chapter_doc.chapter_number,
             message=f"Extracting chapter {chapter_doc.chapter_number}",
@@ -178,7 +178,7 @@ def extract_epub(
             emit_event(
                 run_id=run_id,
                 release_id=release_id,
-                event_type="epub.extraction.chapter_completed",
+                event_type="epub-extract.chapter_completed",
                 stage_name="epub-extract",
                 chapter_number=chapter_doc.chapter_number,
                 message=f"Extracted chapter {chapter_doc.chapter_number}",
@@ -187,7 +187,7 @@ def extract_epub(
             emit_event(
                 run_id=run_id,
                 release_id=release_id,
-                event_type="epub.extraction.chapter_skipped",
+                event_type="epub-extract.chapter_skipped",
                 stage_name="epub-extract",
                 chapter_number=chapter_doc.chapter_number,
                 severity="warning",
@@ -197,7 +197,7 @@ def extract_epub(
     emit_event(
         run_id=run_id,
         release_id=release_id,
-        event_type="epub.extraction.completed",
+        event_type="epub-extract.completed",
         stage_name="epub-extract",
         message=f"Extraction completed: {len(chapter_results)} chapters",
     )

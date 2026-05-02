@@ -11,17 +11,6 @@ from resemantica.tracking.repo import ensure_tracking_db, save_event
 
 _EventCallback = Callable[[Event], None]
 
-_STANDARD_TYPE_ALIASES: dict[str, str] = {
-    "stage_started": "orchestration.stage_started",
-    "stage_completed": "orchestration.stage_completed",
-    "stage_failed": "orchestration.stage_failed",
-    "stage_stopped": "orchestration.stage_stopped",
-    "run_finalized": "orchestration.run_finalized",
-    "paragraph_started": "translate.paragraph_started",
-    "paragraph_completed": "translate.paragraph_completed",
-    "risk_detected": "translate.risk_detected",
-}
-
 _STAGE_LABELS: dict[str, str] = {
     "epub-extract": "EPUB extraction",
     "epub-rebuild": "EPUB rebuild",
@@ -123,22 +112,20 @@ def _is_critical_event(event: Event) -> bool:
     event_type = event.event_type
     if event.severity in {"warning", "error"}:
         return True
-    if event_type in {"validation_failed", "risk_detected"}:
+    if event_type.endswith(".validation_failed") or event_type.endswith(".risk_detected"):
         return True
-    if event_type.endswith("_failed") or event_type.endswith(".failed"):
+    if event_type.endswith(".failed"):
         return True
-    if event_type.endswith("_stopped") or event_type.endswith(".stopped"):
+    if event_type.endswith(".stopped"):
         return True
-    if event_type.endswith("_skipped") or event_type.endswith(".chapter_skipped"):
+    if event_type.endswith(".chapter_skipped"):
         return True
-    if event_type.endswith("_artifact_written") or event_type.endswith(".artifact_written"):
+    if event_type.endswith(".artifact_written"):
         return True
     if _is_sampled_progress_event(event_type):
         return False
     return (
-        event_type.endswith("_started")
-        or event_type.endswith("_completed")
-        or event_type.endswith(".started")
+        event_type.endswith(".started")
         or event_type.endswith(".completed")
     )
 
@@ -147,7 +134,6 @@ def _is_sampled_progress_event(event_type: str) -> bool:
     return (
         ".paragraph_" in event_type
         or ".chapter_" in event_type
-        or event_type in {"paragraph_started", "paragraph_completed", "chapter_started", "chapter_completed"}
     )
 
 
@@ -195,21 +181,6 @@ def emit_event(
     )
     result = default_event_bus.publish(event)
 
-    alias = _STANDARD_TYPE_ALIASES.get(event_type)
-    if alias is not None:
-        alias_event = Event(
-            event_type=alias,
-            run_id=run_id,
-            release_id=release_id,
-            stage_name=stage_name,
-            severity=severity,
-            message=resolved_message,
-            chapter_number=chapter_number,
-            block_id=block_id,
-            payload=payload or {},
-        )
-        default_event_bus.publish(alias_event)
-
     _loguru_level = {"error": "ERROR", "warning": "WARNING"}.get(severity, "DEBUG")
     logger.log(
         _loguru_level,
@@ -236,30 +207,30 @@ def _default_message(
     block_id: Optional[str],
     payload: dict[str, Any],
 ) -> str:
-    if event_type.endswith(".started") or event_type.endswith("_started"):
+    if event_type.endswith(".started"):
         return _started_message(event_type=event_type, payload=payload)
-    if event_type.endswith(".chapter_started") or event_type == "chapter_started":
+    if event_type.endswith(".chapter_started"):
         if chapter_number is None:
             return ""
         return f"{_chapter_action(event_type)} {chapter_number}"
-    if event_type.endswith(".chapter_skipped") or event_type == "chapter_skipped":
+    if event_type.endswith(".chapter_skipped"):
         if chapter_number is None:
             return ""
         reason = _humanize_reason(payload.get("reason"))
         suffix = f": {reason}" if reason else ""
         return f"Skipped {_stage_label(_stage_key_for_event(event_type)).lower()} for chapter {chapter_number}{suffix}"
-    if event_type.endswith(".chapter_completed") or event_type == "chapter_completed":
+    if event_type.endswith(".chapter_completed"):
         if chapter_number is None:
             return ""
         count_suffix = _count_suffix(payload)
         label = _stage_label(_stage_key_for_event(event_type)).lower()
         return f"Completed {label} for chapter {chapter_number}{count_suffix}"
-    if event_type.endswith(".completed") or event_type.endswith("_completed"):
+    if event_type.endswith(".completed"):
         count_suffix = _count_suffix(payload)
         return f"{_stage_label(_stage_key_for_event(event_type))} completed{count_suffix}"
-    if event_type.endswith(".failed") or event_type.endswith("_failed"):
+    if event_type.endswith(".failed"):
         return f"{_stage_label(_stage_key_for_event(event_type))} failed"
-    if event_type.endswith(".stopped") or event_type.endswith("_stopped"):
+    if event_type.endswith(".stopped"):
         return f"{_stage_label(_stage_key_for_event(event_type))} stopped"
     if event_type.endswith(".term_found"):
         term = payload.get("term")
@@ -269,26 +240,28 @@ def _default_message(
         entity_name = payload.get("entity_name")
         if isinstance(entity_name, str) and entity_name:
             return f"Extracted graph entity {entity_name}"
-    if event_type.endswith(".artifact_written") or event_type == "artifact_written":
+    if event_type.endswith(".artifact_written"):
         return "Artifact written"
-    if event_type.endswith(".retry") or event_type.endswith("_retry"):
+    if event_type.endswith(".retry"):
         if block_id:
             return f"Retrying {block_id}"
         return "Retrying step"
+    if event_type.endswith(".paragraph_started"):
+        return f"Translating paragraph {block_id or '?'}"
+    if event_type.endswith(".paragraph_completed"):
+        return f"Translated paragraph {block_id or '?'}"
+    if event_type.endswith(".validation_failed"):
+        target = f"paragraph {block_id}" if block_id else f"chapter {chapter_number}"
+        return f"Validation failed for {target}: {payload.get('message', 'Unknown error')}"
+    if event_type.endswith(".risk_detected"):
+        return f"Risk detected in paragraph {block_id}: {payload.get('message', 'High drift')}"
+
     return ""
 
 
 def _stage_key_for_event(event_type: str) -> str:
     if "." in event_type:
         return event_type.rsplit(".", 1)[0]
-    if event_type.endswith("_started"):
-        return event_type.removesuffix("_started")
-    if event_type.endswith("_completed"):
-        return event_type.removesuffix("_completed")
-    if event_type.endswith("_failed"):
-        return event_type.removesuffix("_failed")
-    if event_type.endswith("_stopped"):
-        return event_type.removesuffix("_stopped")
     return event_type
 
 

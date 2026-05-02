@@ -151,6 +151,27 @@ def test_observability_counters_build_from_events_and_logs():
     assert counters.artifacts == 1
 
 
+def test_format_record_escapes_truncated_debug_metadata_for_textual_static():
+    from textual.widgets import Static
+
+    from resemantica.tui.observability import ObservabilityRecord, format_record
+
+    record = ObservabilityRecord(
+        source="persisted",
+        timestamp=_iso(12, 1),
+        severity="info",
+        stage_name="packets-build",
+        event_type="stage_completed",
+        logger_name=None,
+        message="Packets: 0 built, 0 up-to-date, 8 skipped, 0 failed",
+        chapter_number=None,
+        block_id=None,
+        metadata={"results": [{"bundle_path": "x" * 500}]},
+    )
+
+    Static().update("[bold]Persisted Events[/bold]\n" + format_record(record, verbosity="debug"))
+
+
 def test_latest_failure_prefers_newest_record():
     from resemantica.tui.observability import event_to_record, parse_loguru_jsonl_line, select_latest_failure
 

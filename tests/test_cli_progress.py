@@ -65,7 +65,7 @@ def test_cli_progress_counts_warnings_and_skips() -> None:
     )
     subscriber._on_event(
         Event(
-            event_type="validation_failed",
+            event_type="preprocess-summaries.validation_failed",
             run_id="run",
             release_id="rel",
             stage_name="validation",

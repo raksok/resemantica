@@ -43,7 +43,7 @@ class HelpScreen(ModalScreen[None]):
                 "1-7 Switch   ? Help   q Quit",
                 "",
                 "[b]Screen Keys[/]",
-                "1: [[ NEW FILE ]]  [[ RESUME RUN ]]  p=Production  n=Next Stage",
+                "1: [[[[ NEW FILE ]]  [[[[ RESUME RUN ]]",
                 "2: e=Extract",
                 "3: g=Glossary   s=Summaries   i=Idioms   r=Graph   b=Packets",
                 "4: t=Translate   u=Rebuild",

@@ -242,49 +242,17 @@ def test_scoped_launches_pass_chapter_bounds():
         LaunchSnapshot,
         LaunchStageStatus,
     )
-    from resemantica.tui.screens.dashboard import DashboardScreen
     from resemantica.tui.screens.preprocessing import PreprocessingScreen
     from resemantica.tui.screens.translation import TranslationScreen
 
     calls: list[tuple[str, dict[str, int]]] = []
 
     class Adapter:
-        def launch_production(self, **options):
-            calls.append(("production", options))
-
         def launch_stage(self, stage_name: str, **options):
             calls.append((stage_name, options))
 
     def fake_start(action_key, fn):
         fn()
-
-    dashboard = DashboardScreen()
-    dashboard._make_adapter = lambda: Adapter()  # type: ignore[method-assign]
-    dashboard._chapter_scope_options = lambda: {"chapter_start": 2, "chapter_end": 5}  # type: ignore[method-assign]
-    dashboard.start_worker = fake_start  # type: ignore[method-assign]
-    dashboard.action_launch_production()
-
-    ready_stage = LaunchStageStatus(
-        key="preprocess-glossary",
-        label="Glossary",
-        status="ready",
-        action=LaunchAction(
-            key="preprocess-glossary",
-            label="Glossary",
-            enabled=True,
-            reason="",
-            shortcut="g",
-        ),
-        latest_event=None,
-        latest_failure=None,
-    )
-    dashboard._build_snapshot = lambda: LaunchSnapshot(  # type: ignore[method-assign]
-        context=LaunchContext(release_id="rel-1", run_id="run-1"),
-        active_action=None,
-        stages=[ready_stage],
-        latest_failure=None,
-    )
-    dashboard.action_launch_next()
 
     preprocessing = PreprocessingScreen()
     preprocessing._make_adapter = lambda: Adapter()  # type: ignore[method-assign]
@@ -299,8 +267,6 @@ def test_scoped_launches_pass_chapter_bounds():
     translation._launch_stage("translate-range")
 
     assert calls == [
-        ("production", {"chapter_start": 2, "chapter_end": 5}),
-        ("preprocess-glossary", {"chapter_start": 2, "chapter_end": 5}),
         ("packets-build", {"chapter_start": 2, "chapter_end": 5}),
         ("translate-range", {"chapter_start": 2, "chapter_end": 5}),
     ]

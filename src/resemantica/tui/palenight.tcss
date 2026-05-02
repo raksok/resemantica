@@ -224,7 +224,7 @@ Button:disabled {
 
 #btn-new-file,
 #btn-resume-run {
-    width: 19;
+    width: 22;
 }
 
 #btn-new-file {
@@ -447,6 +447,25 @@ FooterBar {
 
 .bright {
     color: #EEFFFF;
+}
+
+ConfirmDialog {
+    background: transparent;
+    align: center middle;
+}
+
+#confirm-dialog {
+    width: 44;
+    height: auto;
+    padding: 1;
+    background: #1E1F2B;
+    border: round #82AAFF;
+}
+
+#confirm-title {
+    color: #C792EA;
+    text-style: bold;
+    padding: 0;
 }
 
 .app-title {

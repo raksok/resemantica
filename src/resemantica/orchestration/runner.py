@@ -181,7 +181,7 @@ class OrchestrationRunner:
         emit_event(
             self.run_id,
             self.release_id,
-            "stage_started",
+            f"{stage_name}.started",
             stage_name,
             message=f"Stage {stage_name} started",
             payload={
@@ -225,11 +225,11 @@ class OrchestrationRunner:
         status = "stopped" if result.stopped else "completed" if result.success else "failed"
         self._update_run_state(stage_name, status, result.checkpoint or {})
         event_type = (
-            "stage_stopped"
+            f"{stage_name}.stopped"
             if result.stopped
-            else "stage_completed"
+            else f"{stage_name}.completed"
             if result.success
-            else "stage_failed"
+            else f"{stage_name}.failed"
         )
         emit_event(
             self.run_id,
@@ -511,10 +511,10 @@ class OrchestrationRunner:
         emit_event(
             self.run_id,
             self.release_id,
-            "chapter_started",
+            "translate-chapter.chapter_completed",
             "translate-chapter",
             chapter_number=chapter_number,
-            message=f"Chapter {chapter_number} translation started",
+            message=f"Chapter {chapter_number} batched translation completed",
         )
         pass1_result = translate_chapter_pass1(
             release_id=self.release_id,
@@ -711,7 +711,7 @@ class OrchestrationRunner:
             emit_event(
                 self.run_id,
                 self.release_id,
-                "chapter_started",
+                "translate-chapter.chapter_started",
                 "translate-chapter",
                 chapter_number=chapter_number,
                 message=f"Chapter {chapter_number} translation started",
@@ -729,7 +729,7 @@ class OrchestrationRunner:
                 emit_event(
                     self.run_id,
                     self.release_id,
-                    "artifact_written",
+                    "translate-chapter.artifact_written",
                     "translate-chapter",
                     chapter_number=chapter_number,
                     message="Pass1 artifact written",
@@ -788,7 +788,7 @@ class OrchestrationRunner:
                 emit_event(
                     self.run_id,
                     self.release_id,
-                    "artifact_written",
+                    "translate-chapter.artifact_written",
                     "translate-chapter",
                     chapter_number=chapter_number,
                     message="Pass2 artifact written",
@@ -847,7 +847,7 @@ class OrchestrationRunner:
                     emit_event(
                         self.run_id,
                         self.release_id,
-                        "artifact_written",
+                        "translate-chapter.artifact_written",
                         "translate-chapter",
                         chapter_number=chapter_number,
                         message="Pass3 artifact written",
@@ -856,10 +856,10 @@ class OrchestrationRunner:
                 emit_event(
                     self.run_id,
                     self.release_id,
-                    "chapter_completed",
+                    "translate-chapter.chapter_completed",
                     "translate-chapter",
                     chapter_number=chapter_number,
-                    message=f"Chapter {chapter_number} translation completed",
+                    message=f"Chapter {chapter_number} batched translation completed",
                     payload=usage_payload_delta(client, chapter_usage_before[chapter_number]),
                 )
             except Exception as exc:

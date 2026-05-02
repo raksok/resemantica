@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+
+from rich.markup import escape
 
 from resemantica.observability.granularity import classify_signal_level, tui_verbosity_to_level
 from resemantica.tracking.models import Event
@@ -14,6 +17,8 @@ ObservabilitySource = Literal["live", "persisted", "log"]
 ObservabilityVerbosity = Literal["normal", "verbose", "debug"]
 ObservabilitySourceFilter = Literal["all", "live", "persisted", "logs"]
 ObservabilitySeverityFilter = Literal["all", "warnings/errors", "errors"]
+
+_UNESCAPED_OPEN_BRACKET_RE = re.compile(r"(?<!\\)\[")
 
 
 @dataclass(frozen=True)
@@ -286,8 +291,12 @@ def format_record(record: ObservabilityRecord, *, verbosity: ObservabilityVerbos
     line = " | ".join(parts) + f" | {record.message}"
 
     if verbosity != "debug" or not record.metadata:
-        return line
-    return f"{line}\n    meta: {_metadata_snippet(record.metadata)}"
+        return _escape_markup_text(line)
+    return _escape_markup_text(f"{line}\n    meta: {_metadata_snippet(record.metadata)}")
+
+
+def _escape_markup_text(value: str) -> str:
+    return _UNESCAPED_OPEN_BRACKET_RE.sub(r"\\[", escape(value))
 
 
 def _sort_key(record: ObservabilityRecord) -> tuple[float, str]:

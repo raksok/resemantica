@@ -12,6 +12,11 @@ from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.translation.bundle_context import (
+    format_bundle_for_pass1,
+    format_glossary_for_pass3,
+    load_bundles_for_chapter,
+)
 from resemantica.translation.checkpoints import (
     ensure_checkpoint_schema,
     load_checkpoint,
@@ -78,7 +83,7 @@ def _emit_translation_event(
         emit_event(
             run_id,
             release_id,
-            event_type,
+            f"translate-chapter.{event_type}",
             "translate-chapter",
             chapter_number=chapter_number,
             block_id=block_id,
@@ -150,6 +155,13 @@ def translate_chapter_pass1(
         for key, value in dict(placeholder_payload.get("blocks", {})).items()
     }
 
+    bundles_by_block = load_bundles_for_chapter(
+        release_id=release_id,
+        chapter_number=chapter_number,
+        config=config_obj,
+        project_root=project_root,
+    )
+
     run_root = paths.release_root / "runs" / run_id
     translation_dir = run_root / "translation" / f"chapter-{chapter_number}"
     pass1_artifact_path = translation_dir / "pass1.json"
@@ -192,6 +204,13 @@ def translate_chapter_pass1(
                 parent_block_id = str(record["parent_block_id"])
                 block_id = str(record["block_id"])
                 placeholder_entries = placeholders_by_block.get(parent_block_id, [])
+                bundle = bundles_by_block.get(block_id) if bundles_by_block else None
+                bundle_ctx = format_bundle_for_pass1(bundle) if bundle else {
+                    "glossary": "",
+                    "alias_resolutions": "",
+                    "matched_idioms": "",
+                    "continuity_notes": "",
+                }
                 _emit_translation_event(
                     release_id=release_id,
                     run_id=run_id,
@@ -207,6 +226,10 @@ def translate_chapter_pass1(
                     model_name=model_name,
                     prompt_template=pass1_prompt.template,
                     source_text=cleaned_source,
+                    glossary=bundle_ctx["glossary"],
+                    alias_resolutions=bundle_ctx["alias_resolutions"],
+                    matched_idioms=bundle_ctx["matched_idioms"],
+                    continuity_notes=bundle_ctx["continuity_notes"],
                 )
                 structure = validate_structure(cleaned_source, draft_text)
                 pass1_structure_checks.append(
@@ -325,6 +348,10 @@ def translate_chapter_pass1(
                         model_name=model_name,
                         prompt_template=pass1_prompt.template,
                         source_text=segment_cleaned,
+                        glossary=bundle_ctx["glossary"],
+                        alias_resolutions=bundle_ctx["alias_resolutions"],
+                        matched_idioms=bundle_ctx["matched_idioms"],
+                        continuity_notes=bundle_ctx["continuity_notes"],
                     )
                     segment_structure = validate_structure(segment_cleaned, segment_draft)
                     pass1_structure_checks.append(
@@ -819,6 +846,13 @@ def translate_chapter_pass3(
                 **usage_payload_delta(client, usage_before),
             }
 
+        bundles_by_block = load_bundles_for_chapter(
+            release_id=release_id,
+            chapter_number=chapter_number,
+            config=config_obj,
+            project_root=project_root,
+        )
+
         threshold_high = config_obj.translation.risk_threshold_high
         pass3_blocks: list[dict[str, Any]] = []
         risk_classifications: list[dict[str, Any]] = []
@@ -874,13 +908,16 @@ def translate_chapter_pass3(
                 )
                 continue
 
+            bundle3 = bundles_by_block.get(block_id) if bundles_by_block else None
+            glossary_text = format_glossary_for_pass3(bundle3) if bundle3 else ""
+
             polished_text = translate_pass3(
                 client=client,
                 model_name=model_name,
                 prompt_template=pass3_prompt.template,
                 source_text=source_text,
                 pass2_output=pass2_output,
-                glossary_text="",
+                glossary_text=glossary_text,
             )
 
             integrity = validate_pass3_integrity(
