@@ -36,6 +36,17 @@ class HeaderPassIndicator:
     stale: bool = False
 
 
+@dataclass(frozen=True)
+class StageProgress:
+    total: int | None = None
+    completed: int = 0
+    active_chapter: int | None = None
+
+    @property
+    def has_progress(self) -> bool:
+        return self.total is not None
+
+
 class BaseScreen(Screen):
     _PULSE_WIDTH = 30
     _PULSE_GLYPHS = "▁▂▃▄▅▆▇█"
@@ -827,6 +838,93 @@ class BaseScreen(Screen):
         if status == "COMPLETED":
             return "[green]COMPLETED[/]"
         return f"[comment]{status}[/]"
+
+    @classmethod
+    def _derive_stage_progress(cls, events: list[Any]) -> dict[str, StageProgress]:
+        deduped: dict[str, Any] = {}
+        for event in events:
+            event_id = str(getattr(event, "event_id", ""))
+            if not event_id:
+                event_id = repr(
+                    (
+                        getattr(event, "event_time", ""),
+                        getattr(event, "event_type", ""),
+                        getattr(event, "chapter_number", None),
+                    )
+                )
+            deduped[event_id] = event
+
+        ordered = sorted(
+            deduped.values(),
+            key=lambda event: (str(getattr(event, "event_time", "")), str(getattr(event, "event_id", ""))),
+        )
+        totals: dict[str, int] = {}
+        completed: dict[str, set[int]] = {}
+        active: dict[str, int] = {}
+
+        for event in ordered:
+            event_type = str(getattr(event, "event_type", "") or "")
+            payload = getattr(event, "payload", {}) or {}
+            total = payload.get("total_chapters") if isinstance(payload, dict) else None
+            if event_type.endswith(".started"):
+                stage_key = event_type.removesuffix(".started")
+                if isinstance(total, int):
+                    totals[stage_key] = total
+                continue
+
+            if event_type.endswith(".chapter_started"):
+                stage_key = event_type.removesuffix(".chapter_started")
+                chapter_number = getattr(event, "chapter_number", None)
+                if isinstance(chapter_number, int):
+                    active[stage_key] = chapter_number
+                continue
+
+            if event_type.endswith(".chapter_completed") or event_type.endswith(".chapter_skipped"):
+                stage_key = event_type.rsplit(".", 1)[0]
+                chapter_number = getattr(event, "chapter_number", None)
+                if isinstance(chapter_number, int):
+                    completed.setdefault(stage_key, set()).add(chapter_number)
+                    if active.get(stage_key) == chapter_number:
+                        active.pop(stage_key, None)
+                continue
+
+        models: dict[str, StageProgress] = {}
+        for stage_key, total in totals.items():
+            done = completed.get(stage_key, set())
+            models[stage_key] = StageProgress(
+                total=total,
+                completed=min(len(done), total),
+                active_chapter=active.get(stage_key),
+            )
+        return models
+
+    @staticmethod
+    def _render_scoped_bar(model: StageProgress, status: str) -> str:
+        width = 20
+        total = max(1, model.total or 0)
+        completed = min(max(0, model.completed), total)
+        if completed >= total:
+            return "[green]\u2501" + "\u2501" * (width - 1) + "[/]"
+        filled = int((completed / total) * width)
+        has_active = model.active_chapter is not None or status == "running"
+        marker = "\u257a" if has_active else "\u2500"
+        empty = max(0, width - filled - (1 if has_active else 0))
+        color = "cyan" if status == "running" or has_active else "comment"
+        filled_text = "\u2501" * filled
+        marker_text = marker if has_active else ""
+        empty_text = "\u2500" * empty
+        return f"[{color}]{filled_text}{marker_text}{empty_text}[/]"
+
+    @staticmethod
+    def _static_bar(*, color: str, fill: str, width: int = 20) -> str:
+        return f"[{color}]{fill * width}[/]"
+
+    @staticmethod
+    def _running_bar(*, color: str, width: int = 20) -> str:
+        filled = "\u2501" * 8
+        marker = "\u257a"
+        remaining = "\u2500" * (width - len(filled) - 1)
+        return f"[{color}]{filled}{marker}{remaining}[/]"
 
     @classmethod
     def _spinner_frame(cls, *, now: datetime | None = None) -> str:

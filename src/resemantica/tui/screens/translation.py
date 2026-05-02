@@ -17,6 +17,7 @@ class TranslationScreen(BaseScreen):
     def _content_widgets(self) -> ComposeResult:
         with Container(id="translation-content"):
             yield Static("Translation Progress", classes="app-title")
+            yield Static("", id="translation-stage-list")
             yield Static("", id="translation-header")
             yield Static("", id="translation-block-list")
             yield Static("", id="translation-status")
@@ -37,6 +38,9 @@ class TranslationScreen(BaseScreen):
 
     def _refresh_translation(self) -> None:
         state = self._run_state_for_refresh()
+
+        stage_list = self.query_one("#translation-stage-list", Static)
+        stage_list.update(self._build_stage_progress(state))
 
         header = self.query_one("#translation-header", Static)
         if state:
@@ -60,15 +64,97 @@ class TranslationScreen(BaseScreen):
         self._update_status()
         self._update_event_tail()
 
+    TRANSLATION_STAGE_KEYS = ["translate-range", "epub-rebuild"]
+
+    def _build_stage_progress(self, state: dict | None = None) -> str:
+        if state is None and not self._fast_refresh_active():
+            state = self._get_run_state()
+        try:
+            events = self._recent_events_for_refresh()
+            snapshot = self._build_snapshot(run_state=state)
+            return self._render_stages_from_snapshot(snapshot, events=events)
+        except Exception:
+            return self._fallback_stage_progress(state)
+
+    def _render_stages_from_snapshot(
+        self,
+        snapshot,
+        *,
+        events=None,
+    ) -> str:
+        progress = self._derive_stage_progress(events or [])
+        lines: list[str] = ["[bold]Pipeline[/bold]"]
+        for stage in snapshot.stages:
+            if stage.key not in self.TRANSLATION_STAGE_KEYS:
+                continue
+            color = {
+                "missing": "comment",
+                "ready": "green",
+                "running": "cyan",
+                "done": "green",
+                "failed": "red",
+                "blocked": "orange",
+                "stale": "orange",
+                "disabled": "dim",
+            }.get(stage.status, "comment")
+            glyph = {
+                "missing": "\u25cb",
+                "ready": "\u25c9",
+                "running": "\u25c9",
+                "done": "\u25cf",
+                "failed": "\u2717",
+                "blocked": "\u2298",
+                "stale": "\u25c9",
+                "disabled": "\u25cb",
+            }.get(stage.status, "\u25cb")
+            stage_progress = progress.get(stage.key)
+            if stage_progress and stage_progress.has_progress:
+                bar = self._render_scoped_bar(stage_progress, stage.status)
+                numeric = f" {stage_progress.completed}/{stage_progress.total}"
+            elif stage.status == "done":
+                bar = self._static_bar(color="green", fill="\u2501")
+                numeric = ""
+            elif stage.status == "running":
+                bar = self._running_bar(color="cyan")
+                numeric = ""
+            else:
+                bar = self._static_bar(color="comment", fill="\u2500")
+                numeric = ""
+            lines.append(
+                f"  [{color}]{glyph}[/] {stage.label:<14} {bar}{numeric:<6}  [{color}]{stage.status.upper():<7}[/]"
+            )
+        return "\n".join(lines)
+
+    def _fallback_stage_progress(self, state: dict | None) -> str:
+        lines: list[str] = ["[bold]Pipeline[/bold]"]
+        for key, label in (("translate-range", "Translation"), ("epub-rebuild", "Rebuild")):
+            if state and state.get("stage_name") == key:
+                bar = self._running_bar(color="cyan")
+                lines.append(f"  [cyan]\u25c9[/] {label:<14} {bar}  [cyan]RUNNING[/]")
+            elif state and state.get("status") == "done":
+                bar = self._static_bar(color="green", fill="\u2501")
+                lines.append(f"  [green]\u25cf[/] {label:<14} {bar}  [green]DONE[/]")
+            else:
+                bar = self._static_bar(color="comment", fill="\u2500")
+                lines.append(f"  [comment]\u25cb[/] {label:<14} {bar}  [comment]PENDING[/]")
+        return "\n".join(lines)
+
     def _update_status(self) -> None:
         snapshot = self._build_snapshot()
         widget = self.query_one("#translation-status", Static)
         parts: list[str] = []
         if snapshot.active_action:
+            from resemantica.tui.launch_control import STAGE_DEFINITIONS
+
+            sdef = next(
+                (d for d in STAGE_DEFINITIONS if d["key"] == snapshot.active_action),
+                None,
+            )
+            lbl = sdef["label"] if sdef else snapshot.active_action
             if getattr(self.app, "active_stop_requested", False):
                 parts.append(f"[cyan]{self._spinner_frame()} Stopping after current chapter...[/]")
             else:
-                parts.append(f"[cyan]{self._spinner_frame()} {snapshot.active_action} in progress...[/]")
+                parts.append(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
         if snapshot.latest_failure:
             parts.append(f"[red]Failure: {snapshot.latest_failure}[/]")
         if parts:

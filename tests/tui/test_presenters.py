@@ -560,7 +560,7 @@ def test_preprocessing_progress_models_use_scoped_started_totals():
         ),
     ]
 
-    model = PreprocessingScreen._derive_progress_models(events)[
+    model = PreprocessingScreen._derive_stage_progress(events)[
         "preprocess-glossary.discover"
     ]
 
