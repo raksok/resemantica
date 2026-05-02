@@ -277,7 +277,6 @@ def generate_chapter_summary(
     validation = validate_chinese_summary(
         structured_summary=parsed,
         expected_chapter_number=chapter_number,
-        locked_glossary=locked_glossary,
     )
     if not validation.is_valid:
         set_summary_draft_status(

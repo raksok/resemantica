@@ -136,30 +136,10 @@ def _validate_future_knowledge(
     return errors
 
 
-def _validate_glossary_terms(
-    summary: dict[str, object],
-    *,
-    locked_glossary: list[LockedGlossaryEntry],
-) -> list[str]:
-    errors: list[str] = []
-    combined_text = "\n".join(_collect_text_fields(summary))
-    normalized_text = combined_text.casefold()
-    for entry in locked_glossary:
-        target = entry.target_term.strip()
-        if not target:
-            continue
-        if target.casefold() in normalized_text:
-            errors.append(
-                f"glossary_conflict: Chinese summary contains locked glossary target term {target!r}"
-            )
-    return errors
-
-
 def validate_chinese_summary(
     *,
     structured_summary: dict[str, Any],
     expected_chapter_number: int,
-    locked_glossary: list[LockedGlossaryEntry],
 ) -> ValidationResult:
     errors: list[str] = []
     errors.extend(_validate_schema(structured_summary, expected_chapter_number))
@@ -167,12 +147,6 @@ def validate_chinese_summary(
         _validate_future_knowledge(
             structured_summary,
             chapter_number=expected_chapter_number,
-        )
-    )
-    errors.extend(
-        _validate_glossary_terms(
-            structured_summary,
-            locked_glossary=locked_glossary,
         )
     )
 

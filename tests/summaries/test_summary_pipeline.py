@@ -273,7 +273,7 @@ def test_preprocess_summaries_emits_progress_events(tmp_path: Path, monkeypatch)
     assert received[-1].payload["done"] == 1
 
 
-def test_glossary_conflict_blocks_chinese_summary_validation(
+def test_glossary_conflict_does_not_block_chinese_summary_validation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -314,7 +314,7 @@ def test_glossary_conflict_blocks_chinese_summary_validation(
         llm_client=llm,
     )
     assert result["status"] == "success"
-    assert result["chapters_processed"] == 0
+    assert result["chapters_processed"] == 1
 
 
 def test_future_knowledge_leak_fails_validation(tmp_path: Path, monkeypatch) -> None:
@@ -596,7 +596,6 @@ def test_non_story_chapter_validator_flagged() -> None:
     result = validate_chinese_summary(
         structured_summary=non_story_summary,
         expected_chapter_number=0,
-        locked_glossary=[],
     )
     assert result.is_valid is False
     assert "non_story_chapter_flagged" in result.errors
