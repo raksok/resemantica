@@ -6,7 +6,11 @@ context_window = 65000
 
 [models]
 translator_name = "HY-MT1.5-7B"
+# translator_context_window = 65000
+# translator_max_context_ratio = 0.75
 analyst_name = "Qwen3.5-9B-GLM5.1"
+# analyst_context_window = 240000
+# analyst_max_context_ratio = 0.75
 embedding_name = "bge-M3"
 
 [paths]

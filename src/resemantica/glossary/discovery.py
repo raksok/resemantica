@@ -173,6 +173,9 @@ def discover_candidates_from_extracted(
         if event_callback is not None:
             event_callback("chapter_started", chapter_number, {})
         source_text_zh = _collect_source_text(payload)
+        analyst_budget = config_obj.models.effective_max_context_per_pass(
+            "analyst", config_obj.budget.max_context_per_pass, config_obj.llm.context_window
+        )
         if not source_text_zh:
             if event_callback is not None:
                 event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
@@ -190,6 +193,7 @@ def discover_candidates_from_extracted(
                 source_text_zh,
                 config=config_obj,
                 static_prompt_tokens=count_tokens(static_prompt),
+                max_tokens=analyst_budget,
             )
         except PromptBudgetError:
             if event_callback is not None:
@@ -217,6 +221,7 @@ def discover_candidates_from_extracted(
                     config=config_obj,
                     stage_name="preprocess-glossary.discover",
                     chapter_number=chapter_number,
+                    max_tokens=analyst_budget,
                 )
             except PromptBudgetError:
                 if event_callback is not None:

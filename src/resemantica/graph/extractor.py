@@ -443,6 +443,9 @@ def extract_entities(
             continue
 
         source_text = _collect_source_text(payload)
+        analyst_budget = config_obj.models.effective_max_context_per_pass(
+            "analyst", config_obj.budget.max_context_per_pass, config_obj.llm.context_window
+        )
         if not source_text:
             if event_callback is not None:
                 event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
@@ -461,6 +464,7 @@ def extract_entities(
                 source_text,
                 config=config_obj,
                 static_prompt_tokens=count_tokens(static_prompt),
+                max_tokens=analyst_budget,
             )
         except PromptBudgetError:
             warnings.append(f"warning_emitted: prompt budget exceeded chapter={chapter_number}, skipping")
@@ -491,6 +495,7 @@ def extract_entities(
                     config=config_obj,
                     stage_name="preprocess-graph.extract",
                     chapter_number=chapter_number,
+                    max_tokens=analyst_budget,
                 )
             except PromptBudgetError:
                 warnings.append(f"warning_emitted: prompt budget exceeded chapter={chapter_number}, skipping")

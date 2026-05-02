@@ -17,8 +17,9 @@ from resemantica.graph.client import GraphClient, InMemoryGraphBackend
 from resemantica.graph.models import GraphAlias, GraphAppearance, GraphEntity, GraphRelationship
 from resemantica.idioms.models import IdiomPolicy
 from resemantica.idioms.validators import normalize_idiom_source
-from resemantica.packets.builder import build_chapter_packet
+from resemantica.packets.builder import _apply_packet_budget, build_chapter_packet
 from resemantica.packets.invalidation import detect_stale_packet
+from resemantica.packets.models import ChapterPacket
 from resemantica.settings import derive_paths, load_config
 
 
@@ -626,3 +627,44 @@ def test_retrieval_precedence_glossary_beats_graph_alias(
     assert "青云门" not in alias_terms
     evidence = "\n".join(str(row) for row in list(bundle["retrieval_evidence_summary"]))
     assert "graph_alias:0" in evidence
+
+
+def test_apply_packet_budget_respects_budget_tokens_override(monkeypatch) -> None:
+    def fake_count_tokens(text: str) -> int:
+        return max(1, len(text) // 8)
+
+    monkeypatch.setattr("resemantica.packets.builder.count_tokens", fake_count_tokens)
+    config = load_config()
+    packet = ChapterPacket(
+        packet_id="",
+        release_id="test",
+        run_id="test",
+        chapter_number=1,
+        chapter_metadata={},
+        chapter_glossary_subset=[],
+        previous_3_summaries=[{"summary_id": "s1", "chapter_number": 0, "content_zh": "x" * 200}],
+        story_so_far_summary="",
+        chapter_summary_short="",
+        active_arc_summary=None,
+        chapter_local_idioms=[],
+        graph_snapshot_reference={},
+        entity_context=[],
+        relationship_context=[],
+        chapter_safe_relationship_snippets=[],
+        alias_resolution_candidates=[],
+        reveal_safe_identity_notes=[],
+        warnings=[],
+        trimmed_sections=[],
+        section_token_counts={},
+        packet_schema_version=1,
+        chapter_source_hash="h",
+        glossary_version_hash="h",
+        summary_version_hash="h",
+        graph_snapshot_hash="h",
+        idiom_policy_hash="h",
+        packet_builder_version="test",
+        built_at="now",
+    )
+    degraded, counts = _apply_packet_budget(packet=packet, config=config, budget_tokens=25)
+    assert "broad_continuity" in degraded
+    assert isinstance(counts, dict)

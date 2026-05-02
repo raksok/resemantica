@@ -208,11 +208,15 @@ def validate_chinese_summary_content(
     )
     if config is not None:
         chapter_number = structured_summary.get("chapter_number")
+        analyst_budget = config.models.effective_max_context_per_pass(
+            "analyst", config.budget.max_context_per_pass, config.llm.context_window
+        )
         ensure_prompt_within_budget(
             prompt,
             config=config,
             stage_name="preprocess-summaries.validation",
             chapter_number=chapter_number if isinstance(chapter_number, int) else None,
+            max_tokens=analyst_budget,
         )
     raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
     try:

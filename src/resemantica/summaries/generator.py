@@ -117,10 +117,14 @@ def _generate_structured_summary(
         },
     )
 
+    analyst_budget = config.models.effective_max_context_per_pass(
+        "analyst", config.budget.max_context_per_pass, config.llm.context_window
+    )
     chunks = chunk_text_for_prompt(
         source_text_zh,
         config=config,
         static_prompt_tokens=count_tokens(static_prompt),
+        max_tokens=analyst_budget,
     )
     parsed_chunks: list[dict[str, Any]] = []
     raw_outputs: list[str] = []
@@ -143,6 +147,7 @@ def _generate_structured_summary(
             config=config,
             stage_name="preprocess-summaries.structured",
             chapter_number=chapter_number,
+            max_tokens=analyst_budget,
         )
         identity = LLMCacheIdentity(
             release_id=release_id,

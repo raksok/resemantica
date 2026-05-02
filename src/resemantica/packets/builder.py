@@ -332,9 +332,11 @@ def _apply_packet_budget(
     *,
     packet: ChapterPacket,
     config: AppConfig,
+    budget_tokens: int | None = None,
 ) -> tuple[list[str], dict[str, dict[str, int]]]:
     degraded_sections: list[str] = []
     section_counts: dict[str, dict[str, int]] = {}
+    effective_budget = budget_tokens if budget_tokens is not None else config.budget.max_context_per_pass
     section_map = {
         "broad_continuity": "previous_3_summaries",
         "fuzzy_candidates": "alias_resolution_candidates",
@@ -353,7 +355,7 @@ def _apply_packet_budget(
             section_counts[section_name] = {"raw_tokens": raw, "buffered_tokens": buffered}
             total_buffered += buffered
 
-        if total_buffered <= config.budget.max_context_per_pass:
+        if total_buffered <= effective_budget:
             break
 
         trimmed = False
@@ -415,6 +417,7 @@ def build_chapter_packet(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     graph_client: GraphClient | None = None,
+    budget_tokens: int | None = None,
 ) -> PacketBuildOutput:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -635,7 +638,9 @@ def build_chapter_packet(
             packet_builder_version=PACKET_BUILDER_VERSION,
             built_at=built_at,
         )
-        trimmed_sections, section_token_counts = _apply_packet_budget(packet=packet, config=config_obj)
+        trimmed_sections, section_token_counts = _apply_packet_budget(
+            packet=packet, config=config_obj, budget_tokens=budget_tokens
+        )
         packet.trimmed_sections = trimmed_sections
         packet.section_token_counts = section_token_counts
         if trimmed_sections:
@@ -725,6 +730,7 @@ def build_packets(
     project_root: Path | None = None,
     graph_client: GraphClient | None = None,
     stop_token: StopToken | None = None,
+    budget_tokens: int | None = None,
 ) -> dict[str, object]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -771,6 +777,7 @@ def build_packets(
                 config=config_obj,
                 project_root=project_root,
                 graph_client=graph_client,
+                budget_tokens=budget_tokens,
             )
             results.append(result)
             if result.status == "skipped":

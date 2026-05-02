@@ -14,6 +14,6 @@ PASS1
 {CONTINUITY_NOTES}
 
 ## INSTRUCTIONS
-Use the context provided. Preserve all placeholders exactly as provided. Translate the following Chinese text into English with no explanation.
+Use the context provided. Preserve all placeholders exactly as provided. Translate the following zh text into en with no explanation.
 
 {SOURCE_TEXT}

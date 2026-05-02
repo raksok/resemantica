@@ -404,6 +404,9 @@ class OrchestrationRunner:
         if stage_name == "packets-build":
             from resemantica.packets.builder import build_packets
 
+            translator_budget = self.config.models.effective_max_context_per_pass(
+                "translator", self.config.budget.max_context_per_pass, self.config.llm.context_window
+            )
             packet_result = build_packets(
                 release_id=self.release_id,
                 run_id=self.run_id,
@@ -412,6 +415,7 @@ class OrchestrationRunner:
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
                 stop_token=stop_token,
+                budget_tokens=translator_budget,
             )
             failed_value = packet_result.get("chapters_failed", 0)
             failed = int(failed_value) if isinstance(failed_value, (int, str)) else 0

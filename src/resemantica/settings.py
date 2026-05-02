@@ -8,8 +8,34 @@ from pathlib import Path
 @dataclass(slots=True)
 class ModelsConfig:
     translator_name: str = "HY-MT1.5-7B"
+    translator_context_window: int | None = None
+    translator_max_context_ratio: float | None = None
     analyst_name: str = "Qwen3.5-9B-GLM5.1"
+    analyst_context_window: int | None = None
+    analyst_max_context_ratio: float | None = None
     embedding_name: str = "bge-M3"
+
+    def effective_context_window(self, role: str, global_window: int) -> int:
+        if role == "translator":
+            return self.translator_context_window or global_window
+        if role == "analyst":
+            return self.analyst_context_window or global_window
+        raise ValueError(f"Unknown model role: {role}")
+
+    def effective_max_context_per_pass(self, role: str, global_budget: int, global_window: int) -> int:
+        if role == "translator":
+            has_custom = self.translator_context_window is not None
+            window = self.translator_context_window or global_window
+            ratio = self.translator_max_context_ratio or 0.75
+        elif role == "analyst":
+            has_custom = self.analyst_context_window is not None
+            window = self.analyst_context_window or global_window
+            ratio = self.analyst_max_context_ratio or 0.75
+        else:
+            raise ValueError(f"Unknown model role: {role}")
+        if has_custom:
+            return int(window * ratio)
+        return global_budget
 
 
 @dataclass(slots=True)
@@ -183,9 +209,25 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 models.get("translator_name", ModelsConfig().translator_name),
                 "models.translator_name",
             ),
+            translator_context_window=(
+                _as_int(models["translator_context_window"], "models.translator_context_window")
+                if "translator_context_window" in models else None
+            ),
+            translator_max_context_ratio=(
+                _as_float(models["translator_max_context_ratio"], "models.translator_max_context_ratio")
+                if "translator_max_context_ratio" in models else None
+            ),
             analyst_name=_as_str(
                 models.get("analyst_name", ModelsConfig().analyst_name),
                 "models.analyst_name",
+            ),
+            analyst_context_window=(
+                _as_int(models["analyst_context_window"], "models.analyst_context_window")
+                if "analyst_context_window" in models else None
+            ),
+            analyst_max_context_ratio=(
+                _as_float(models["analyst_max_context_ratio"], "models.analyst_max_context_ratio")
+                if "analyst_max_context_ratio" in models else None
             ),
             embedding_name=_as_str(
                 models.get("embedding_name", ModelsConfig().embedding_name),
@@ -303,6 +345,14 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
     if config.events.progress_sample_every <= 0:
         raise ValueError("events.progress_sample_every must be > 0.")
+    for role in ("translator", "analyst"):
+        cw = getattr(config.models, f"{role}_context_window")
+        if cw is not None and cw <= 0:
+            raise ValueError(f"models.{role}_context_window must be > 0 when set")
+        r = getattr(config.models, f"{role}_max_context_ratio")
+        if r is not None and not (0 < r <= 1):
+            raise ValueError(f"models.{role}_max_context_ratio must be in (0, 1] when set")
+
     if not config.paths.artifact_root.strip():
         raise ValueError("paths.artifact_root must not be empty.")
     if not config.paths.db_filename.strip():

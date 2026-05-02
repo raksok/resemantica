@@ -35,15 +35,16 @@ def ensure_prompt_within_budget(
     config: AppConfig,
     stage_name: str,
     chapter_number: int | None = None,
+    max_tokens: int | None = None,
 ) -> int:
     token_count = count_tokens(prompt)
-    max_tokens = config.budget.max_context_per_pass
-    if token_count > max_tokens:
+    limit = max_tokens if max_tokens is not None else config.budget.max_context_per_pass
+    if token_count > limit:
         raise PromptBudgetError(
             stage_name=stage_name,
             chapter_number=chapter_number,
             token_count=token_count,
-            max_tokens=max_tokens,
+            max_tokens=limit,
         )
     return token_count
 
@@ -94,18 +95,20 @@ def chunk_text_for_prompt(
     *,
     config: AppConfig,
     static_prompt_tokens: int,
+    max_tokens: int | None = None,
 ) -> list[TextChunk]:
     cleaned = text.strip()
     if not cleaned:
         return []
 
-    max_text_tokens = config.budget.max_context_per_pass - static_prompt_tokens
+    limit = max_tokens if max_tokens is not None else config.budget.max_context_per_pass
+    max_text_tokens = limit - static_prompt_tokens
     if max_text_tokens <= 0:
         raise PromptBudgetError(
             stage_name="chunk_text_for_prompt",
             chapter_number=None,
             token_count=static_prompt_tokens,
-            max_tokens=config.budget.max_context_per_pass,
+            max_tokens=limit,
         )
 
     if count_tokens(cleaned) <= max_text_tokens:

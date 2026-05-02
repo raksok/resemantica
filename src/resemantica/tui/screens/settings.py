@@ -53,6 +53,15 @@ class SettingsScreen(BaseScreen):
             lines.append(f"  db_filename:   {config.paths.db_filename}")
 
             lines.append("")
+            lines.append("[bold]Model Budgets[/bold]")
+            lines.append(
+                f"  translator ctx: {config.models.effective_context_window('translator', config.llm.context_window)}"
+            )
+            lines.append(
+                f"  analyst ctx:    {config.models.effective_context_window('analyst', config.llm.context_window)}"
+            )
+
+            lines.append("")
             lines.append("[bold]Budget[/bold]")
             lines.append(f"  max_context_per_pass: {config.budget.max_context_per_pass}")
             lines.append(f"  max_paragraph_chars:  {config.budget.max_paragraph_chars}")
