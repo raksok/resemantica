@@ -107,9 +107,10 @@ class DashboardScreen(BaseScreen):
         snapshot = self._build_snapshot(events)
 
         key_hints = (
-            "[dim][n][/] New File    [dim][r][/] Resume Run\n"
-            "[dim][c][/] Scope       [dim][f][/] Force    [dim][d][/] Dry-Run\n"
-            "[dim][p][/] Production"
+            "[dim][N]ew File[/]    [dim][R]esume Run[/]    "
+            "S[dim][c][/]ope    "
+            "(toggle) [dim][F][/]orce    (toggle) [dim][D][/]ry-Run    "
+            "[dim][P][/]roduction"
         )
         self.query_one("#dashboard-key-hints", Static).update(key_hints)
 
