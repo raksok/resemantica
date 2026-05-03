@@ -282,13 +282,13 @@ class DashboardScreen(BaseScreen):
 
     def action_toggle_force(self) -> None:
         self._force = not getattr(self, "_force", False)
-        status = "ON" if self._force else "OFF"
-        self.notify(f"Force re-run: {status}", timeout=2)
+        self._refresh_dashboard()
+        self.notify(f"Force re-run: {'ON' if self._force else 'OFF'}", timeout=2)
 
     def action_toggle_dry_run(self) -> None:
         self._dry_run = not getattr(self, "_dry_run", False)
-        status = "ON" if self._dry_run else "OFF"
-        self.notify(f"Dry-run mode: {status}", timeout=2)
+        self._refresh_dashboard()
+        self.notify(f"Dry-run mode: {'ON' if self._dry_run else 'OFF'}", timeout=2)
 
     def action_launch_production(self) -> None:
         adapter = self._make_adapter()
