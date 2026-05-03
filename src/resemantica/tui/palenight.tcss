@@ -208,26 +208,6 @@ HeaderBar {
     height: 1fr;
 }
 
-#dashboard-scope-inputs {
-    layout: horizontal;
-    height: 1;
-    margin: 0 0 1 0;
-}
-
-#dashboard-scope-inputs Input {
-    width: 12;
-    height: 1;
-    margin: 0 1 0 0;
-    padding: 0 1;
-    border: none;
-    background: #161720;
-    color: #EEFFFF;
-}
-
-#dashboard-scope-inputs Input:focus {
-    background: #001A43;
-}
-
 #config-path-input {
     width: 1fr;
     height: 1;
@@ -239,6 +219,41 @@ HeaderBar {
 }
 
 #config-path-input:focus {
+    background: #001A43;
+}
+
+#dashboard-key-hints {
+    padding: 0 0 1 0;
+    color: #D4D5F0;
+}
+
+#chapter-scope-dialog {
+    width: 36;
+    height: auto;
+    padding: 1;
+    background: #1E1F2B;
+    border: round #82AAFF;
+}
+
+#chapter-scope-title {
+    color: #C792EA;
+    text-style: bold;
+    padding: 0;
+}
+
+#scope-start-input,
+#scope-end-input {
+    width: 1fr;
+    height: 1;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    border: none;
+    background: #161720;
+    color: #EEFFFF;
+}
+
+#scope-start-input:focus,
+#scope-end-input:focus {
     background: #001A43;
 }
 

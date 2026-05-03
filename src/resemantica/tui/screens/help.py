@@ -43,7 +43,7 @@ class HelpScreen(ModalScreen[None]):
                 "1-8 Switch   ? Help   q Quit",
                 "",
                 "[b]Dashboard[/]",
-                "c=Scope   f=Force   d=Dry-Run   p=Production   n=Next   r=Resume",
+                "n=New File   r=Resume Run   c=Scope   f=Force   d=Dry-Run   p=Production",
                 "[b]Ingestion[/]",
                 "e=Extract",
                 "[b]Preprocess[/]",

@@ -21,6 +21,12 @@ class NewFileResult:
 
 
 @dataclass(frozen=True)
+class ChapterScopeResult:
+    chapter_start: int | None = None
+    chapter_end: int | None = None
+
+
+@dataclass(frozen=True)
 class ResumeRunResult:
     input_path: Path | None
     release_id: str
@@ -225,6 +231,59 @@ class ResumeRunDialog(ModalScreen[ResumeRunResult | None]):
                 chapter_end=chapter_end,
             )
         )
+
+    def action_close_dialog(self) -> None:
+        self.dismiss(None)
+
+
+class ChapterScopeDialog(ModalScreen[ChapterScopeResult | None]):
+    BINDINGS = [
+        Binding("escape", "close_dialog", "Close", priority=True),
+    ]
+
+    def __init__(
+        self,
+        *,
+        chapter_start: int | None = None,
+        chapter_end: int | None = None,
+    ) -> None:
+        super().__init__()
+        self._chapter_start = chapter_start
+        self._chapter_end = chapter_end
+
+    def compose(self) -> ComposeResult:
+        with Container(id="chapter-scope-dialog"):
+            yield Static("Chapter Range", id="chapter-scope-title")
+            yield Static("From chapter", classes="dialog-label")
+            yield Input(
+                value="" if self._chapter_start is None else str(self._chapter_start),
+                placeholder="e.g. 1",
+                id="scope-start-input",
+            )
+            yield Static("To chapter", classes="dialog-label")
+            yield Input(
+                value="" if self._chapter_end is None else str(self._chapter_end),
+                placeholder="e.g. 20",
+                id="scope-end-input",
+            )
+            with Horizontal(id="dialog-buttons"):
+                yield Button(Text("[[ SUBMIT ]]"), id="scope-submit", variant="primary")
+                yield Button(Text("[[ CANCEL ]]"), id="scope-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "scope-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id != "scope-submit":
+            return
+        chapter_start, chapter_end, bounds_error = parse_chapter_bounds(
+            self.query_one("#scope-start-input", Input).value,
+            self.query_one("#scope-end-input", Input).value,
+        )
+        if bounds_error:
+            self.notify(bounds_error, severity="error", timeout=4)
+            return
+        self.dismiss(ChapterScopeResult(chapter_start=chapter_start, chapter_end=chapter_end))
 
     def action_close_dialog(self) -> None:
         self.dismiss(None)

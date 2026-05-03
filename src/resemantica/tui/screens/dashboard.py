@@ -5,7 +5,7 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Input, Static
+from textual.widgets import Static
 
 from resemantica.tui.launch_control import STAGE_DEFINITIONS
 from resemantica.tui.screens.base import BaseScreen
@@ -22,25 +22,25 @@ STATUS_COLORS = {
 }
 
 STATUS_GLYPH = {
-    "missing": "○",
-    "ready": "◉",
-    "running": "◉",
-    "done": "●",
-    "failed": "✗",
-    "blocked": "⊘",
-    "stale": "◉",
-    "disabled": "○",
+    "missing": "\u25cb",
+    "ready": "\u25c9",
+    "running": "\u25c9",
+    "done": "\u25cf",
+    "failed": "\u2717",
+    "blocked": "\u2298",
+    "stale": "\u25c9",
+    "disabled": "\u25cb",
 }
 
 
 class DashboardScreen(BaseScreen):
     BINDINGS = [
-        Binding("c", "toggle_chapter_scope", "Scope"),
+        Binding("n", "new_file", "New File"),
+        Binding("r", "resume_run", "Resume"),
+        Binding("c", "set_scope", "Scope"),
         Binding("f", "toggle_force", "Force"),
         Binding("d", "toggle_dry_run", "Dry-Run"),
         Binding("p", "launch_production", "Production"),
-        Binding("n", "launch_next", "Next"),
-        Binding("r", "resume_run", "Resume"),
     ]
 
     def _content_widgets(self) -> ComposeResult:
@@ -48,18 +48,8 @@ class DashboardScreen(BaseScreen):
             with Horizontal(id="dashboard-main"):
                 with Vertical(id="dashboard-left"):
                     yield Static("Dashboard", classes="app-title")
+                    yield Static("", id="dashboard-key-hints")
                     yield Static("", id="dashboard-session-info")
-                    with Horizontal(id="dashboard-scope-inputs"):
-                        yield Input(
-                            placeholder="From Ch",
-                            id="chapter-start-input",
-                            type="integer",
-                        )
-                        yield Input(
-                            placeholder="To Ch",
-                            id="chapter-end-input",
-                            type="integer",
-                        )
                     yield Static("", id="dashboard-stage-list")
                     yield Static("", id="dashboard-active-worker")
                     yield Static("", id="dashboard-latest-failure")
@@ -116,6 +106,13 @@ class DashboardScreen(BaseScreen):
         events = self._recent_events_for_refresh()
         snapshot = self._build_snapshot(events)
 
+        key_hints = (
+            "[dim][n][/] New File    [dim][r][/] Resume Run\n"
+            "[dim][c][/] Scope       [dim][f][/] Force    [dim][d][/] Dry-Run\n"
+            "[dim][p][/] Production"
+        )
+        self.query_one("#dashboard-key-hints", Static).update(key_hints)
+
         session = getattr(self.app, "session", None)
         info_lines = ["[bold]Session[/bold]"]
         info_lines.append(f"  Release:  {snapshot.context.release_id or '[dim]not set[/]'}")
@@ -166,7 +163,6 @@ class DashboardScreen(BaseScreen):
         if getattr(self, "_dry_run", False):
             flags.append("[yellow]DRY-RUN[/]")
         if flags:
-            worker_widget = self.query_one("#dashboard-active-worker", Static)
             worker_widget.update(f"{' '.join(flags)}")
 
         recent = self._build_recent_runs()
@@ -208,23 +204,76 @@ class DashboardScreen(BaseScreen):
     def _render_cached_event_tail(self, events: list, *, title: str, limit: int = 5) -> str:
         return self._render_event_tail(events, title=title, limit=limit)
 
-    def on_input_submitted(self, message: Input.Submitted) -> None:
-        try:
-            val = int(message.value) if message.value.strip() else None
-        except ValueError:
-            self.notify("Invalid chapter number", severity="error", timeout=3)
-            return
-        if message.input.id == "chapter-start-input":
-            self.app.session.chapter_start = val
-        elif message.input.id == "chapter-end-input":
-            self.app.session.chapter_end = val
-        self._refresh_dashboard()
+    def action_new_file(self) -> None:
+        from resemantica.tui.screens.run_dialog import NewFileDialog, NewFileResult
 
-    def action_toggle_chapter_scope(self) -> None:
-        widget = self.query_one("#dashboard-scope-inputs", Horizontal)
-        widget.display = not widget.display
-        if widget.display:
-            self.query_one("#chapter-start-input", Input).focus()
+        def handle(result: NewFileResult | None) -> None:
+            if result is None:
+                self.notify("Session not initialised", severity="warning", timeout=3)
+                return
+            self.app.session.input_path = result.input_path
+            self.app.session.chapter_start = result.chapter_start
+            self.app.session.chapter_end = result.chapter_end
+            self.app.set_ids(result.release_id, result.run_id)
+            self.notify(
+                f"Release: {result.release_id}, Run: {result.run_id}",
+                severity="information", timeout=3,
+            )
+            self._refresh_dashboard()
+
+        session = getattr(self.app, "session", None)
+        self.app.push_screen(
+            NewFileDialog(
+                chapter_start=session.chapter_start if session else None,
+                chapter_end=session.chapter_end if session else None,
+            ),
+            handle,
+        )
+
+    def action_resume_run(self) -> None:
+        from resemantica.tui.screens.run_dialog import ResumeRunDialog, ResumeRunResult
+
+        def handle(result: ResumeRunResult | None) -> None:
+            if result is None:
+                self.notify("Session not initialised", severity="warning", timeout=3)
+                return
+            self.app.session.input_path = None
+            self.app.session.chapter_start = result.chapter_start
+            self.app.session.chapter_end = result.chapter_end
+            self.app.set_ids(result.release_id, result.run_id)
+            self.notify(
+                f"Release: {result.release_id}, Run: {result.run_id}",
+                severity="information", timeout=3,
+            )
+            self._refresh_dashboard()
+
+        session = getattr(self.app, "session", None)
+        self.app.push_screen(
+            ResumeRunDialog(
+                chapter_start=session.chapter_start if session else None,
+                chapter_end=session.chapter_end if session else None,
+            ),
+            handle,
+        )
+
+    def action_set_scope(self) -> None:
+        from resemantica.tui.screens.run_dialog import ChapterScopeDialog, ChapterScopeResult
+
+        def handle(result: ChapterScopeResult | None) -> None:
+            if result is None:
+                return
+            self.app.session.chapter_start = result.chapter_start
+            self.app.session.chapter_end = result.chapter_end
+            self._refresh_dashboard()
+
+        session = getattr(self.app, "session", None)
+        self.app.push_screen(
+            ChapterScopeDialog(
+                chapter_start=session.chapter_start if session else None,
+                chapter_end=session.chapter_end if session else None,
+            ),
+            handle,
+        )
 
     def action_toggle_force(self) -> None:
         self._force = not getattr(self, "_force", False)
@@ -251,45 +300,6 @@ class DashboardScreen(BaseScreen):
                 **options,
             ),
         )
-
-    def action_launch_next(self) -> None:
-        adapter = self._make_adapter()
-        if adapter is None:
-            self.notify("Cannot launch: release/run not set", severity="error", timeout=3)
-            return
-        snapshot = self._build_snapshot()
-        next_stage = next(
-            (s.action.key for s in snapshot.stages if s.action.key and s.action.reason == ""),
-            None,
-        )
-        if next_stage is None:
-            self.notify("No next stage available", severity="warning", timeout=3)
-            return
-        options = self._chapter_scope_options()
-        self.start_worker(
-            next_stage,
-            lambda stop_token=None: adapter.launch_stage(
-                next_stage,
-                **({"stop_token": stop_token} if stop_token is not None else {}),
-                **options,
-            ),
-        )
-
-    def action_resume_run(self) -> None:
-            release_id = self._get_release_id()
-            run_id = self._get_run_id()
-            if not release_id or not run_id:
-                self.notify("No active run to resume", severity="warning", timeout=3)
-                return
-            from resemantica.orchestration.resume import resume_run
-
-            self.start_worker(
-                f"resume-{run_id}",
-                lambda stop_token=None: resume_run(
-                    release_id=release_id,
-                    run_id=run_id,
-                ),
-            )
 
     def _build_phase_progress(self, state: dict | None = None) -> str:
         return type(self)._build_phase_progress_static(state)

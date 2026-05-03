@@ -253,59 +253,106 @@ TCSS width change: `#footer-block-progress { width: 28; }` (was 20 — needs roo
 
 ## Part 3: Dashboard Changes
 
+### Key Bindings (dialog-based)
+
+```python
+BINDINGS = [
+    Binding("n", "new_file", "New File"),
+    Binding("r", "resume_run", "Resume"),
+    Binding("c", "set_scope", "Scope"),
+    Binding("f", "toggle_force", "Force"),
+    Binding("d", "toggle_dry_run", "Dry-Run"),
+    Binding("p", "launch_production", "Production"),
+]
+```
+
+All primary actions go through modal dialogs — no inline Input fields on the dashboard.
+
 ### Widget Layout
 
 ```python
 def _content_widgets(self) -> ComposeResult:
     with Container(id="dashboard-content"):
         yield Static("Dashboard", classes="app-title")
+        yield Static("", id="dashboard-key-hints")
         yield Static("", id="dashboard-session-info")
-        yield Static("", id="dashboard-chapter-scope")
         yield Static("", id="dashboard-stage-list")
         yield Static("", id="dashboard-active-worker")
         yield Static("", id="dashboard-latest-failure")
         yield Static("", id="dashboard-recent-runs")
+        yield Static("", id="dashboard-event-tail", classes="event-tail")
 ```
 
-### Chapter Scope Input Fields
+### Key Hints Display
 
-Add two Input widgets in compose — but only when the operator activates them via a key, to keep the layout clean:
-
-```python
-BINDINGS = [
-    Binding("c", "toggle_chapter_scope", "Scope", priority=True),
-    Binding("p", "launch_production", "Production"),
-    Binding("n", "launch_next", "Next Stage"),
-    Binding("f", "toggle_force", "Force"),
-    Binding("d", "toggle_dry_run", "Dry-Run"),
-    Binding("r", "resume_run", "Resume"),
-]
-```
-
-`action_toggle_chapter_scope` toggles visibility of a `Horizontal` container with two Inputs (chapter-start, chapter-end). On `Input.Submitted`, validates and stores in `TuiSession`.
-
-Alternative: Always show the Inputs if not yet set. Keep it simple:
+Rendered in `_refresh_dashboard()`:
 
 ```python
-yield Horizontal(
-    Input(placeholder="From Ch", id="chapter-start-input", type="integer"),
-    Input(placeholder="To Ch", id="chapter-end-input", type="integer"),
-    id="dashboard-scope-inputs",
+hints = (
+    "[dim][n][/] New File    [dim][r][/] Resume Run\n"
+    "[dim][c][/] Scope       [dim][f][/] Force    [dim][d][/] Dry-Run\n"
+    "[dim][p][/] Production"
 )
+self.query_one("#dashboard-key-hints", Static).update(hints)
 ```
 
-On `Input.Submitted` for either field:
+### New File Dialog (restored from pre-refactor)
+
+`action_new_file` pushes `NewFileDialog` and handles the result:
+
 ```python
-def _on_chapter_input_submitted(self, message: Input.Submitted) -> None:
-    try:
-        val = int(message.value) if message.value.strip() else None
-    except ValueError:
-        self.notify("Invalid chapter number", severity="error")
-        return
-    if message.input.id == "chapter-start-input":
-        self.app.session.chapter_start = val
-    elif message.input.id == "chapter-end-input":
-        self.app.session.chapter_end = val
+def action_new_file(self) -> None:
+    from resemantica.tui.screens.run_dialog import NewFileDialog, NewFileResult
+
+    def handle(result: NewFileResult | None) -> None:
+        if result is None:
+            self.notify("Session not initialised", severity="warning", timeout=3)
+            return
+        self.app.session.input_path = result.input_path
+        self.app.session.chapter_start = result.chapter_start
+        self.app.session.chapter_end = result.chapter_end
+        self.app.set_ids(result.release_id, result.run_id)
+        self.notify(
+            f"Release: {result.release_id}, Run: {result.run_id}",
+            severity="information", timeout=3,
+        )
+        self._refresh_dashboard()
+
+    session = getattr(self.app, "session", None)
+    self.app.push_screen(
+        NewFileDialog(
+            chapter_start=session.chapter_start if session else None,
+            chapter_end=session.chapter_end if session else None,
+        ), handle,
+    )
+```
+
+### Resume Run Dialog (restored from pre-refactor)
+
+`action_resume_run` pushes `ResumeRunDialog` and handles the result — same callback pattern as `action_new_file` but sets `input_path = None`.
+
+### Chapter Scope Dialog
+
+`action_set_scope` pushes `ChapterScopeDialog`:
+
+```python
+def action_set_scope(self) -> None:
+    from resemantica.tui.screens.run_dialog import ChapterScopeDialog, ChapterScopeResult
+
+    def handle(result: ChapterScopeResult | None) -> None:
+        if result is None:
+            return
+        self.app.session.chapter_start = result.chapter_start
+        self.app.session.chapter_end = result.chapter_end
+        self._refresh_dashboard()
+
+    session = getattr(self.app, "session", None)
+    self.app.push_screen(
+        ChapterScopeDialog(
+            chapter_start=session.chapter_start if session else None,
+            chapter_end=session.chapter_end if session else None,
+        ), handle,
+    )
 ```
 
 ### Force Toggle
@@ -330,23 +377,51 @@ def action_toggle_dry_run(self) -> None:
 
 Passed through to `adapter.launch_production(dry_run=self._dry_run)`.
 
-### Resume Run
+## ChapterScopeDialog (`run_dialog.py`)
+
+### Data Model
 
 ```python
-def action_resume_run(self) -> None:
-    runs = self._get_recent_runs()
-    if not runs:
-        self.notify("No recent runs to resume", severity="warning")
-        return
-    # For now: resume most recent run
-    run = runs[0]
-    self.start_worker(
-        f"resume-{run.run_id}",
-        lambda: adapter.resume_run(release_id=run.release_id, run_id=run.run_id),
-    )
+@dataclass(frozen=True)
+class ChapterScopeResult:
+    chapter_start: int | None = None
+    chapter_end: int | None = None
 ```
 
-`_get_recent_runs()` queries the tracking DB for the 5 most recent runs.
+### Dialog Class
+
+```python
+class ChapterScopeDialog(ModalScreen[ChapterScopeResult | None]):
+    BINDINGS = [
+        Binding("escape", "close_dialog", "Close", priority=True),
+    ]
+
+    def __init__(self, *, chapter_start: int | None = None, chapter_end: int | None = None) -> None:
+        super().__init__()
+        self._chapter_start = chapter_start
+        self._chapter_end = chapter_end
+```
+
+Same visual style as `NewFileDialog` / `ResumeRunDialog`: centered, transparent background, round border, `[[ SUBMIT ]]` / `[[ CANCEL ]]` buttons.
+
+Uses the existing `parse_chapter_bounds()` helper from the same module:
+
+```python
+def on_button_pressed(self, event: Button.Pressed) -> None:
+    if event.button.id == "scope-cancel":
+        self.dismiss(None)
+        return
+    if event.button.id != "scope-submit":
+        return
+    chapter_start, chapter_end, bounds_error = parse_chapter_bounds(
+        self.query_one("#scope-start-input", Input).value,
+        self.query_one("#scope-end-input", Input).value,
+    )
+    if bounds_error:
+        self.notify(bounds_error, severity="error", timeout=4)
+        return
+    self.dismiss(ChapterScopeResult(chapter_start=chapter_start, chapter_end=chapter_end))
+```
 
 ## Part 4: Preprocess Screen Changes
 
@@ -482,7 +557,7 @@ When `phase` is set, it's passed to the orchestration runner which uses it to sk
 
 | Screen | Keys | Actions |
 |--------|------|---------|
-| 1 Dashboard | `c` chapter scope toggle, `f` force, `d` dry-run, `p` production, `n` next stage, `r` resume | 6 keys |
+| 1 Dashboard | `n` new file, `r` resume, `c` scope, `f` force, `d` dry-run, `p` production | 6 keys |
 | 2 Ingestion | `e` extract | 1 key |
 | 3 Preprocess | `d` gloss-disc, `t` gloss-trans, `p` gloss-prom, `s` summaries, `i` idioms, `r` graph, `b` packets | 7 keys |
 | 4 Translation | `t` translate, `u` rebuild, `b` batched toggle | 3 keys |
@@ -492,8 +567,6 @@ When `phase` is set, it's passed to the orchestration runner which uses it to sk
 | 8 Settings | `l` load config | 1 key |
 
 ## Help Modal
-
-Update `_build_help_text`:
 
 ```python
 def _build_help_text(self) -> str:
@@ -505,7 +578,7 @@ def _build_help_text(self) -> str:
     lines.extend([
         "", "[b]Keys[/]", "1-8 Switch   ? Help   q Quit", "",
         "[b]Dashboard[/]",
-        "c=Scope   f=Force   d=Dry-Run   p=Production   n=Next   r=Resume",
+        "n=New File   r=Resume Run   c=Scope   f=Force   d=Dry-Run   p=Production",
         "[b]Ingestion[/]",
         "e=Extract",
         "[b]Preprocess[/]",
