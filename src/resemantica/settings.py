@@ -73,6 +73,7 @@ class TranslationConfig:
     pass3_default: bool = False
     risk_threshold_high: float = 0.7
     batched_model_order: bool = False
+    pass2_concurrency: int = 2
 
 
 @dataclass(slots=True)
@@ -296,6 +297,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 ),
                 "translation.batched_model_order",
             ),
+            pass2_concurrency=_as_int(
+                translation.get(
+                    "pass2_concurrency",
+                    TranslationConfig().pass2_concurrency,
+                ),
+                "translation.pass2_concurrency",
+            ),
         ),
         summaries=SummariesConfig(
             exclude_chapter_patterns=_as_str_list(
@@ -343,6 +351,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("translation.risk_threshold_high must be in [0.0, 1.0].")
     if config.events.persistence_mode not in {"normal", "reduced"}:
         raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
+    if config.translation.pass2_concurrency < 1:
+        raise ValueError("translation.pass2_concurrency must be >= 1.")
     if config.events.progress_sample_every <= 0:
         raise ValueError("events.progress_sample_every must be > 0.")
     for role in ("translator", "analyst"):

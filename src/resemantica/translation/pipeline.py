@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -450,6 +451,161 @@ def translate_chapter_pass1(
 # Phase 2: Correction (analyst model)
 # ---------------------------------------------------------------------------
 
+
+def _process_pass2_block(
+    block: dict[str, Any],
+    *,
+    pass2_prompt_template: str,
+    analyst_model: str,
+    client: LLMClient,
+    placeholders_by_block: dict[str, list[PlaceholderEntry]],
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    source_text = str(block["source_text_zh"])
+    parent_block_id = str(block["parent_block_id"])
+    placeholder_entries = placeholders_by_block.get(parent_block_id, [])
+
+    if bool(block.get("was_resegmented")):
+        prior_segment_translations: list[str] = []
+        segment_outputs: list[dict[str, Any]] = []
+        structure_checks: list[dict[str, Any]] = []
+        for segment in list(block.get("segments", [])):
+            segment_id = str(segment["segment_id"])
+            segment_source = str(segment["source_text_zh"])
+            segment_draft = str(segment["draft_text"])
+            segment_corrected = translate_pass2(
+                client=client,
+                model_name=analyst_model,
+                prompt_template=pass2_prompt_template,
+                source_text=segment_source,
+                draft_text=segment_draft,
+                full_source_block=source_text,
+                prior_segment_translations=prior_segment_translations,
+            )
+            structure = validate_structure(segment_source, segment_corrected)
+            structure_checks.append(
+                {
+                    "stage": "pass2_resegment",
+                    "block_id": segment_id,
+                    "status": structure.status,
+                    "errors": structure.errors,
+                    "warnings": structure.warnings,
+                }
+            )
+            if not structure.is_valid:
+                raise RuntimeError(
+                    f"Pass 2 structural validation failed for segment {segment_id}."
+                )
+
+            prior_segment_translations.append(segment_corrected)
+            segment_outputs.append(
+                {
+                    "segment_id": segment_id,
+                    "output_text_en": segment_corrected,
+                }
+            )
+
+        corrected_text = "".join(segment["output_text_en"] for segment in segment_outputs)
+        restored_text, restore_warnings = restore_from_placeholders(
+            corrected_text,
+            placeholder_entries,
+        )
+        blocking_restore_warnings = [
+            warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
+        ]
+        if blocking_restore_warnings:
+            raise RuntimeError(
+                f"Pass 2 restoration failed for block {parent_block_id}."
+            )
+        fidelity = validate_basic_fidelity(source_text, restored_text)
+        fidelity_check = {
+            "block_id": parent_block_id,
+            "status": fidelity.status,
+            "errors": fidelity.errors,
+            "warnings": fidelity.warnings,
+        }
+        block_result = {
+            "block_id": parent_block_id,
+            "parent_block_id": parent_block_id,
+            "source_text_zh": source_text,
+            "output_text_en": corrected_text,
+            "restored_text_en": restored_text,
+            "segments": segment_outputs,
+            "restoration_warnings": restore_warnings,
+        }
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="paragraph_completed",
+            chapter_number=chapter_number,
+            block_id=parent_block_id,
+            message=f"Pass2 completed for {parent_block_id}",
+            payload={"pass_name": "pass2"},
+        )
+        return block_result, structure_checks, fidelity_check
+
+    block_id = str(block["block_id"])
+    draft_text = str(block["draft_text"])
+    corrected_text = translate_pass2(
+        client=client,
+        model_name=analyst_model,
+        prompt_template=pass2_prompt_template,
+        source_text=source_text,
+        draft_text=draft_text,
+        full_source_block=source_text,
+        prior_segment_translations=[],
+    )
+    structure = validate_structure(source_text, corrected_text)
+    structure_check = {
+        "stage": "pass2",
+        "block_id": block_id,
+        "status": structure.status,
+        "errors": structure.errors,
+        "warnings": structure.warnings,
+    }
+    if not structure.is_valid:
+        raise RuntimeError(f"Pass 2 structural validation failed for block {block_id}.")
+
+    restored_text, restore_warnings = restore_from_placeholders(
+        corrected_text,
+        placeholder_entries,
+    )
+    blocking_restore_warnings = [
+        warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
+    ]
+    if blocking_restore_warnings:
+        raise RuntimeError(f"Pass 2 restoration failed for block {block_id}.")
+
+    fidelity = validate_basic_fidelity(source_text, restored_text)
+    fidelity_check = {
+        "block_id": block_id,
+        "status": fidelity.status,
+        "errors": fidelity.errors,
+        "warnings": fidelity.warnings,
+    }
+    block_result = {
+        "block_id": block_id,
+        "parent_block_id": parent_block_id,
+        "source_text_zh": source_text,
+        "draft_text": draft_text,
+        "output_text_en": corrected_text,
+        "restored_text_en": restored_text,
+        "restoration_warnings": restore_warnings,
+    }
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="paragraph_completed",
+        chapter_number=chapter_number,
+        block_id=block_id,
+        message=f"Pass2 completed for {block_id}",
+        payload={"pass_name": "pass2"},
+    )
+    return block_result, [structure_check], fidelity_check
+
+
 def translate_chapter_pass2(
     *,
     release_id: str,
@@ -525,6 +681,7 @@ def translate_chapter_pass2(
             pass2_structure_checks = []
             fidelity_checks = []
 
+            blocks_to_process: list[dict[str, Any]] = []
             for block in list(pass1_payload.get("blocks", [])):
                 if block.get("status") == "failed":
                     _emit_translation_event(
@@ -537,156 +694,36 @@ def translate_chapter_pass2(
                         payload={"pass_name": "pass2"},
                     )
                     continue
+                blocks_to_process.append(block)
 
-                source_text = str(block["source_text_zh"])
-                parent_block_id = str(block["parent_block_id"])
-                placeholder_entries = placeholders_by_block.get(parent_block_id, [])
-
-                if bool(block.get("was_resegmented")):
-                    prior_segment_translations: list[str] = []
-                    segment_outputs: list[dict[str, Any]] = []
-                    for segment in list(block.get("segments", [])):
-                        segment_id = str(segment["segment_id"])
-                        segment_source = str(segment["source_text_zh"])
-                        segment_draft = str(segment["draft_text"])
-                        segment_corrected = translate_pass2(
+            if blocks_to_process:
+                concurrency = config_obj.translation.pass2_concurrency
+                with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                    fut_map: dict[Future, int] = {}
+                    for i, block in enumerate(blocks_to_process):
+                        fut = executor.submit(
+                            _process_pass2_block,
+                            block,
+                            pass2_prompt_template=pass2_prompt.template,
+                            analyst_model=analyst_model,
                             client=client,
-                            model_name=analyst_model,
-                            prompt_template=pass2_prompt.template,
-                            source_text=segment_source,
-                            draft_text=segment_draft,
-                            full_source_block=source_text,
-                            prior_segment_translations=prior_segment_translations,
+                            placeholders_by_block=placeholders_by_block,
+                            release_id=release_id,
+                            run_id=run_id,
+                            chapter_number=chapter_number,
                         )
-                        structure = validate_structure(segment_source, segment_corrected)
-                        pass2_structure_checks.append(
-                            {
-                                "stage": "pass2_resegment",
-                                "block_id": segment_id,
-                                "status": structure.status,
-                                "errors": structure.errors,
-                                "warnings": structure.warnings,
-                            }
-                        )
-                        if not structure.is_valid:
-                            raise RuntimeError(
-                                f"Pass 2 structural validation failed for segment {segment_id}."
-                            )
+                        fut_map[fut] = i
 
-                        prior_segment_translations.append(segment_corrected)
-                        segment_outputs.append(
-                            {
-                                "segment_id": segment_id,
-                                "output_text_en": segment_corrected,
-                            }
-                        )
+                    results: dict[int, tuple] = {}
+                    for future in as_completed(fut_map):
+                        idx = fut_map[future]
+                        results[idx] = future.result()
 
-                    corrected_text = "".join(segment["output_text_en"] for segment in segment_outputs)
-                    restored_text, restore_warnings = restore_from_placeholders(
-                        corrected_text,
-                        placeholder_entries,
-                    )
-                    blocking_restore_warnings = [
-                        warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
-                    ]
-                    if blocking_restore_warnings:
-                        raise RuntimeError(
-                            f"Pass 2 restoration failed for block {parent_block_id}."
-                        )
-                    fidelity = validate_basic_fidelity(source_text, restored_text)
-                    fidelity_checks.append(
-                        {
-                            "block_id": parent_block_id,
-                            "status": fidelity.status,
-                            "errors": fidelity.errors,
-                            "warnings": fidelity.warnings,
-                        }
-                    )
-                    pass2_blocks.append(
-                        {
-                            "block_id": parent_block_id,
-                            "parent_block_id": parent_block_id,
-                            "source_text_zh": source_text,
-                            "output_text_en": corrected_text,
-                            "restored_text_en": restored_text,
-                            "segments": segment_outputs,
-                            "restoration_warnings": restore_warnings,
-                        }
-                    )
-                    _emit_translation_event(
-                        release_id=release_id,
-                        run_id=run_id,
-                        event_type="paragraph_completed",
-                        chapter_number=chapter_number,
-                        block_id=parent_block_id,
-                        message=f"Pass2 completed for {parent_block_id}",
-                        payload={"pass_name": "pass2"},
-                    )
-                    continue
-
-                block_id = str(block["block_id"])
-                draft_text = str(block["draft_text"])
-                corrected_text = translate_pass2(
-                    client=client,
-                    model_name=analyst_model,
-                    prompt_template=pass2_prompt.template,
-                    source_text=source_text,
-                    draft_text=draft_text,
-                    full_source_block=source_text,
-                    prior_segment_translations=[],
-                )
-                structure = validate_structure(source_text, corrected_text)
-                pass2_structure_checks.append(
-                    {
-                        "stage": "pass2",
-                        "block_id": block_id,
-                        "status": structure.status,
-                        "errors": structure.errors,
-                        "warnings": structure.warnings,
-                    }
-                )
-                if not structure.is_valid:
-                    raise RuntimeError(f"Pass 2 structural validation failed for block {block_id}.")
-
-                restored_text, restore_warnings = restore_from_placeholders(
-                    corrected_text,
-                    placeholder_entries,
-                )
-                blocking_restore_warnings = [
-                    warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
-                ]
-                if blocking_restore_warnings:
-                    raise RuntimeError(f"Pass 2 restoration failed for block {block_id}.")
-
-                fidelity = validate_basic_fidelity(source_text, restored_text)
-                fidelity_checks.append(
-                    {
-                        "block_id": block_id,
-                        "status": fidelity.status,
-                        "errors": fidelity.errors,
-                        "warnings": fidelity.warnings,
-                    }
-                )
-                pass2_blocks.append(
-                    {
-                        "block_id": block_id,
-                        "parent_block_id": parent_block_id,
-                        "source_text_zh": source_text,
-                        "draft_text": draft_text,
-                        "output_text_en": corrected_text,
-                        "restored_text_en": restored_text,
-                        "restoration_warnings": restore_warnings,
-                    }
-                )
-                _emit_translation_event(
-                    release_id=release_id,
-                    run_id=run_id,
-                    event_type="paragraph_completed",
-                    chapter_number=chapter_number,
-                    block_id=block_id,
-                    message=f"Pass2 completed for {block_id}",
-                    payload={"pass_name": "pass2"},
-                )
+                for idx in sorted(results):
+                    block_result, struct_checks, fidelity_check = results[idx]
+                    pass2_blocks.append(block_result)
+                    pass2_structure_checks.extend(struct_checks)
+                    fidelity_checks.append(fidelity_check)
 
             pass2_failed = any(check["status"] == "failed" for check in pass2_structure_checks) or any(
                 check["status"] == "failed" for check in fidelity_checks
