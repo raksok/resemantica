@@ -33,21 +33,21 @@ def _add_verbose_arg(parser: argparse.ArgumentParser) -> None:
 
 def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: str) -> None:
     parser.add_argument(
-        "--release", required=True,
-        help="Release identifier. Creates/references artifacts/releases/<id>/.",
+        "-r", "--release", required=True,
+        help="Release identifier. Creates artifacts/releases/<id>/.",
     )
     parser.add_argument(
-        "--run",
+        "-R", "--run",
         required=False,
         default=default_run,
-        help=f"Run identifier for checkpoint tracking and artifact scoping (default: {default_run}).",
+        help=f"Checkpoint tracking and artifact scoping identifier (default: {default_run}).",
     )
     parser.add_argument(
-        "--config",
+        "-c", "--config",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Optional path to resemantica.toml (default: ./resemantica.toml).",
+        help="Path to resemantica.toml (default: ./resemantica.toml).",
     )
     _add_verbose_arg(parser)
 
@@ -174,46 +174,56 @@ def _exit_code(result: Any) -> int:
     return 0 if getattr(result, "success", False) else 1
 
 
-def _add_chapter_range_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--start",
-        required=False,
+def _add_chapter_scope_args(parser: argparse.ArgumentParser, required: bool = False) -> None:
+    group = parser.add_mutually_exclusive_group(required=required)
+    group.add_argument(
+        "-C", "--chapter",
         type=int,
-        default=None,
-        help="First chapter number to include (inclusive). If omitted, starts from the earliest extracted chapter.",
+        help="Single chapter number to process. Mutually exclusive with --start.",
+    )
+    group.add_argument(
+        "-s", "--start",
+        type=int,
+        help="First chapter in range (inclusive). Mutually exclusive with --chapter.",
     )
     parser.add_argument(
-        "--end",
-        required=False,
+        "-e", "--end",
         type=int,
-        default=None,
-        help="Last chapter number to include (inclusive). If omitted, goes to the latest extracted chapter.",
+        help="Last chapter in range (inclusive). Used with --start.",
     )
 
 
 def _add_batched_model_order_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--batched-model-order",
+        "-b", "--batched", "--batched-model-order",
+        dest="batched_model_order",
         action="store_true",
-        help="Run all chapters pass1-first, then pass2, then pass3. Best with separate model endpoints.",
+        help="Run all chapters pass1-first, then pass2, then pass3.",
     )
 
 
 _PROGRAM_DESCRIPTION = """\
-Resemantica — local-first EPUB translation pipeline for Chinese web novels.
+NAME
+  rsem — local-first EPUB translation pipeline for Chinese web novels
 
-Pipeline stages (in execution order):
-  M1  epub-roundtrip     Unpack, extract, and validate EPUB structure
-  M3  preprocess         Glossary discovery, translation, and promotion
-  M4  preprocess         Chapter summaries (Chinese + English)
-  M5  preprocess         Idiom policies (detection + validation)
-  M6  preprocess         Graph MVP state (entity, alias, relationship graph)
-  M8  packets build      Build chapter packets with graph-enriched context
-  M2  translate-range    Run pass1 (translator), pass2 (analyst), pass3 (polish)
-  M16 rebuild-epub       Reconstruct translated EPUB from pass artifacts
+SYNOPSIS
+  rsem [options] <command> [<args>...]
 
-Configuration: resemantica.toml in project root, or --config <path>.
-See docs/ for architecture, task briefs, and operation guides."""
+DESCRIPTION
+  Unrolls Chinese webnovel EPUBs through a deterministic pipeline:
+  glossary discovery, summary generation, idiom detection,
+  entity-relationship graph building, translation passes, and
+  EPUB reconstruction.
+
+  Pipeline stages (execution order):
+    extract     Unpack and validate EPUB structure
+    preprocess  Glossary, summaries, idioms, entity graph
+    packets     Build chapter packets with enriched context
+    translate   Pass1 (translator), Pass2 (analyst), Pass3 (polish)
+    rebuild     Reconstruct translated EPUB from pass artifacts
+
+  Configuration: resemantica.toml or --config <path>.
+  See docs/ for architecture, task briefs, and operation guides."""
 
 _PROGRAM_EPILOG = """\
 Exit codes:
@@ -232,104 +242,71 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    roundtrip = subparsers.add_parser(
-        "epub-roundtrip",
+    extract = subparsers.add_parser(
+        "extract", aliases=["ext"],
         help="Unpack, extract, validate, and rebuild an EPUB without translation changes.",
         description="""\
-Milestone M1 — the entry point for a new release.
-
-Unpacks the source EPUB into structured artifacts: extracted chapters
-(chapter-{n}.json per chapter with block-level records), placeholder
-maps (⟦TYPE_N⟧ markers for inline formatting elements), a validation
-report, and a lossless reconstruction EPUB to confirm round-trip fidelity.
-
-Outputs:
-  artifacts/releases/<release>/extracted/chapters/
-  artifacts/releases/<release>/extracted/placeholders/
-  artifacts/releases/<release>/extracted/reports/
-  artifacts/releases/<release>/rebuild/reconstructed.epub""",
+Entry point for a new release. Unpacks a source EPUB into structured
+chapters, placeholder maps, and a validation report. Produces a lossless
+reconstructed EPUB to confirm round-trip fidelity.""",
     )
-    roundtrip.add_argument(
-        "--input", required=True, type=Path,
+    extract.add_argument(
+        "-i", "--input", required=True, type=Path,
         help="Path to the source EPUB file.",
     )
-    roundtrip.add_argument(
-        "--release", required=True,
+    extract.add_argument(
+        "-r", "--release", required=True,
         help="Release identifier. Creates artifacts/releases/<id>/.",
     )
-    roundtrip.add_argument(
-        "--config",
+    extract.add_argument(
+        "-c", "--config",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Optional path to resemantica.toml (default: ./resemantica.toml).",
+        help="Path to resemantica.toml (default: ./resemantica.toml).",
     )
-    _add_verbose_arg(roundtrip)
+    _add_verbose_arg(extract)
 
     translate = subparsers.add_parser(
-        "translate-chapter",
-        help="Translate one extracted chapter using pass1 and pass2.",
+        "translate", aliases=["tra"],
+        help="Translate one or multiple extracted chapters.",
         description="""\
-Milestone M2 — two-pass translation for a single chapter.
-
-Pass 1 (translator model): produces a draft English translation, preserving
-all placeholders (⟦TYPE_N⟧ markers). On structural failure, the source block
-is split into sentences and retried segment-by-segment.
-
-Pass 2 (analyst model): JSON-structured fidelity check. Corrects omissions,
-mistranslations, and terminology violations. Produces the final per-block output.
-
-Requires: epub-roundtrip (extracted chapters + placeholders).
-For full context enrichment, preprocessing stages (glossary, summaries, idioms,
-graph) and packets must be completed first; otherwise context sections are empty.
-
-Outputs:
-  artifacts/releases/<release>/runs/<run>/translation/chapter-<n>/pass1.json
-  artifacts/releases/<release>/runs/<run>/translation/chapter-<n>/pass2.json
-  artifacts/releases/<release>/runs/<run>/validation/chapter-<n>/
-  Checkpoint rows in resemantica.db for resume support.""",
+Two-pass translation of one or more chapters. Pass 1 (translator model)
+produces a draft English translation preserving all placeholders. Pass 2
+(analyst model) performs a structured fidelity check, correcting omissions
+and terminology violations.""",
     )
     translate.add_argument(
-        "--release", required=True,
-        help="Release identifier.",
+        "-r", "--release", required=True,
+        help="Release identifier. Creates artifacts/releases/<id>/.",
     )
     translate.add_argument(
-        "--chapter", required=True, type=int,
-        help="Chapter number to translate.",
+        "-R", "--run", required=True,
+        help="Checkpoint tracking and artifact scoping identifier.",
     )
+    _add_chapter_scope_args(translate, required=True)
     translate.add_argument(
-        "--run", required=True,
-        help="Run identifier for checkpoint tracking and artifact scoping.",
-    )
-    translate.add_argument(
-        "--force-pass1",
+        "-f", "--force-pass1",
         action="store_true",
         help="Ignore cached pass1 checkpoint and re-run from scratch.",
     )
     translate.add_argument(
-        "--config",
+        "-c", "--config",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Optional path to resemantica.toml (default: ./resemantica.toml).",
+        help="Path to resemantica.toml (default: ./resemantica.toml).",
     )
+    _add_batched_model_order_arg(translate)
     _add_verbose_arg(translate)
 
     preprocess = subparsers.add_parser(
-        "preprocess",
+        "preprocess", aliases=["pre"],
         help="Run preprocessing stage tasks.",
         description="""\
-Preprocessing stages that must run before translation to build the authority
-datasets (glossary, summaries, idioms, graph). Run individually or as part
-of 'run production'.
-
-Ordering (see each subcommand's description for dependencies):
-  glossary-discover  →  glossary-translate  →  glossary-promote
-  summaries
-  idioms
-  graph
-
-All subcommands accept --release, --run, --config, and --verbose.""",
+Preprocessing stages: glossary discovery, translation, and promotion;
+chapter summaries; idiom detection and policy generation; entity-relationship
+graph building. Run individual subcommands or as part of 'run production'.""",
     )
     preprocess_subparsers = preprocess.add_subparsers(
         dest="preprocess_command",
@@ -337,25 +314,17 @@ All subcommands accept --release, --run, --config, and --verbose.""",
     )
 
     glossary_discover = preprocess_subparsers.add_parser(
-        "glossary-discover",
+        "glossary-discover", aliases=["gls-discover"],
         help="Discover glossary candidates from extracted chapters.",
         description="""\
-Milestone M3 step 1. Scans extracted chapter text for Chinese terms not yet
-in the locked glossary. Writes candidate entries with frequency counts and
-context snippets to candidates.json.
-
-Applies deterministic filters (date patterns, stop-list) and BGE-M3
-embedding critic to prune non-glossary terms. Use --pruning-threshold 0
-for evaluation-only mode (scores stored, no pruning).
-
-Requires: epub-roundtrip (extracted chapters).
-
-Outputs:
-  artifacts/releases/<release>/glossary/candidates.json""",
+Scans extracted chapters for Chinese terms not in the locked glossary.
+Applies deterministic filters and BGE-M3 embedding critic. Writes
+candidates.json with frequency counts and context snippets.""",
     )
     _add_common_release_args(glossary_discover, default_run="glossary-discover")
+    _add_chapter_scope_args(glossary_discover)
     glossary_discover.add_argument(
-        "--pruning-threshold",
+        "-p", "--pruning-threshold",
         required=False,
         type=float,
         default=None,
@@ -363,61 +332,39 @@ Outputs:
     )
 
     glossary_translate = preprocess_subparsers.add_parser(
-        "glossary-translate",
+        "glossary-translate", aliases=["gls-translate"],
         help="Translate discovered glossary candidates to provisional English terms.",
         description="""\
-Milestone M3 step 2. Each untranslated candidate in candidates.json is sent
-through the translator LLM to produce a provisional English rendering. Adds
-translation metadata to candidates.json.
-
-Requires: glossary-discover.
-
-Outputs: updated artifacts/releases/<release>/glossary/candidates.json""",
+Sends untranslated glossary candidates through the translator LLM to
+produce provisional English renderings. Updates candidates.json.""",
     )
     _add_common_release_args(glossary_translate, default_run="glossary-translate")
+    _add_chapter_scope_args(glossary_translate)
 
     glossary_review = preprocess_subparsers.add_parser(
-        "glossary-review",
+        "glossary-review", aliases=["gls-review"],
         help="Generate a human-editable review file for translated candidates.",
         description="""\
-Milestone M3 review step. Reads all translated glossary candidates and writes
-a JSON review file to artifacts/releases/<release>/glossary/review.json.
-
-The user edits the file to:
-  - Override translations
-  - Mark entries for deletion
-  - Add new entries
-
-Then run glossary-promote --review-file <path> to apply changes.
-
-Requires: glossary-translate.
-
-Outputs:
-  artifacts/releases/<release>/glossary/review.json""",
+Generates a human-editable JSON review file of translated glossary
+candidates. Edit the file to override translations, mark deletions, or
+add entries, then run glossary-promote to apply changes.""",
     )
     _add_common_release_args(glossary_review, default_run="glossary-review")
+    _add_chapter_scope_args(glossary_review)
 
     glossary_promote = preprocess_subparsers.add_parser(
-        "glossary-promote",
+        "glossary-promote", aliases=["gls-promote"],
         help="Validate and promote glossary candidates into locked glossary.",
         description="""\
-Milestone M3 step 3. Validates translated candidates (no empty terms, no
-duplicates, no conflicts), promotes them to the locked glossary, and writes
-any unresolvable conflicts to conflicts.json for manual review.
-
-With --review-file, reads a previously generated review file, applies
-user overrides (translation edits, deletions, additions), then runs
-standard validation and promotion.
-
-Requires: glossary-translate (or glossary-review if --review-file is used).
-
-Outputs:
-  Locked rows added to resemantica.db (glossary tables)
-  artifacts/releases/<release>/glossary/conflicts.json""",
+Validates translated glossary candidates and promotes them into the
+locked glossary. With --review-file, applies user edits from a previous
+glossary-review run before promotion.""",
     )
     _add_common_release_args(glossary_promote, default_run="glossary-promote")
+    _add_chapter_scope_args(glossary_promote)
     glossary_promote.add_argument(
-        "--review-file",
+        "-F", "--review", "--review-file",
+        dest="review_file",
         required=False,
         type=Path,
         default=None,
@@ -426,79 +373,51 @@ Outputs:
     )
 
     summaries = preprocess_subparsers.add_parser(
-        "summaries",
+        "summaries", aliases=["sum"],
         help="Generate validated Chinese summaries and derived English summaries.",
         description="""\
-Milestone M4. Generates three summary types per chapter:
-  - story_so_far_zh: cumulative plot summary up to the current chapter
-  - chapter_summary_zh_short: one-paragraph synopsis of the chapter
-  - arc_summary_zh: active narrative arc context (when applicable)
-Summaries are stored in resemantica.db and serve as continuity context during
-translation.
-
-Requires: epub-roundtrip. Strongly recommended: locked glossary (M3).
-
-Outputs: rows added to resemantica.db (summaries tables).""",
+Generates three summary types per chapter: story_so_far_zh (cumulative
+plot), chapter_summary_zh_short (one-paragraph synopsis), and
+arc_summary_zh (active narrative arc context). Stored in resemantica.db.""",
     )
     _add_common_release_args(summaries, default_run="summaries")
-    _add_chapter_range_args(summaries)
+    _add_chapter_scope_args(summaries)
 
     idioms = preprocess_subparsers.add_parser(
         "idioms",
         help="Detect, validate, and promote idiom policies from extracted chapters.",
         description="""\
-Milestone M5. Scans extracted chapters for idiomatic expressions (chengyu,
-set phrases, proverbs). Validates detected idioms against glossary entries
-to avoid term conflicts, then writes idiom policies with preferred English
-renderings to resemantica.db.
-
-Requires: epub-roundtrip. Strongly recommended: locked glossary (M3).
-
-Outputs: rows added to resemantica.db (idiom tables).""",
+Scans chapters for idiomatic expressions (chengyu, set phrases, proverbs).
+Validates against the glossary to avoid conflicts, then writes idiom
+policies with preferred English renderings to resemantica.db.""",
     )
     _add_common_release_args(idioms, default_run="idioms")
+    _add_chapter_scope_args(idioms)
 
     idiom_review = preprocess_subparsers.add_parser(
-        "idiom-review",
+        "idiom-review", aliases=["idi-review"],
         help="Generate a human-editable review file for translated idiom candidates.",
         description="""\
-Milestone M5 review step. Reads all translated idiom candidates and writes
-a JSON review file to artifacts/releases/<release>/idioms/review.json.
-
-The user edits the file to:
-  - Override idiom renderings
-  - Mark entries for deletion
-  - Add new entries
-
-Then run idiom-promote --review-file <path> to apply changes.
-
-Requires: preprocess idioms (at least through translation phase).
-
-Outputs:
-  artifacts/releases/<release>/idioms/review.json""",
+Generates a human-editable JSON review file of translated idiom candidates.
+Edit the file to override renderings, mark deletions, or add entries,
+then run idiom-promote to apply changes.""",
     )
     _add_common_release_args(idiom_review, default_run="idiom-review")
+    _add_chapter_scope_args(idiom_review)
 
     idiom_promote = preprocess_subparsers.add_parser(
-        "idiom-promote",
+        "idiom-promote", aliases=["idi-promote"],
         help="Validate and promote idiom candidates into idiom policies.",
         description="""\
-Milestone M5 promote step. Validates translated idiom candidates and promotes
-them into the authoritative idiom policy store.
-
-With --review-file, reads a previously generated review file, applies
-user overrides (rendering edits, deletions, additions), then runs
-standard validation and promotion.
-
-Requires: preprocess idioms (at least through translation phase).
-
-Outputs:
-  Locked rows added to resemantica.db (idiom tables)
-  artifacts/releases/<release>/idioms/conflicts.json""",
+Validates translated idiom candidates and promotes them into the
+authoritative idiom policy store. With --review-file, applies user edits
+from a previous idiom-review run before promotion.""",
     )
     _add_common_release_args(idiom_promote, default_run="idiom-promote")
+    _add_chapter_scope_args(idiom_promote)
     idiom_promote.add_argument(
-        "--review-file",
+        "-F", "--review", "--review-file",
+        dest="review_file",
         required=False,
         type=Path,
         default=None,
@@ -510,28 +429,19 @@ Outputs:
         "graph",
         help="Extract, validate, and promote Graph MVP state from preprocessing assets.",
         description="""\
-Milestones M6–M7. Builds a lightweight entity-relationship graph from
-glossary entries, summaries, and chapter text. Extracts entities, aliases,
-appearances, and relationships; applies chapter-safe filters to prevent
-future-spoiler leaks.
-
-The graph database (LadybugDB) is queried during packet building to enrich
-translation context with entity relationships, alias resolutions, and
-reveal-safe lore.
-
-Requires: locked glossary (M3), summaries (M4), idioms (M5).
-
-Outputs:
-  artifacts/graph.ladybug  (LadybugDB database file)
-  artifacts/releases/<release>/graph/snapshot.json""",
+Builds an entity-relationship graph from glossary entries, summaries, and
+chapter text. Extracts entities, aliases, appearances, and relationships
+with chapter-safe spoiler filters. Outputs graph.ladybug and snapshot.json.""",
     )
     _add_common_release_args(graph, default_run="graph")
+    _add_chapter_scope_args(graph)
 
     packets = subparsers.add_parser(
-        "packets",
+        "packets", aliases=["pac"],
         help="Build immutable chapter packets and paragraph bundles.",
         description="""\
-Build or rebuild immutable chapter artifacts from validated upstream state.""",
+Build or rebuild immutable chapter artifacts from validated upstream
+state.""",
     )
     packets_subparsers = packets.add_subparsers(
         dest="packets_command",
@@ -541,136 +451,24 @@ Build or rebuild immutable chapter artifacts from validated upstream state.""",
         "build",
         help="Build chapter packets from validated upstream authority state.",
         description="""\
-Milestone M8. For each chapter, assembles a ChapterPacket containing:
-  - Glossary subset (entries that appear in the chapter)
-  - Previous 3 chapter summaries + story-so-far + active arc
-  - Local idiom matches
-  - Graph-enriched context (entities, relationships, alias resolutions,
-    reveal-safe identity notes)
-Then derives narrow ParagraphBundle per block — the exact context the
-translation passes consume for that block.
-
-Staleness detection: if any upstream hash (chapter source, glossary,
-summaries, graph snapshot, idiom policy) has changed since the last build,
-the packet is rebuilt automatically.
-
-Requires: locked glossary (M3), summaries (M4), idioms (M5), graph (M6–M7).
-
-Outputs per chapter:
-  artifacts/releases/<release>/packets/chapter-<n>-<packet_id>.json
-  artifacts/releases/<release>/packets/chapter-<n>-<packet_id>-bundles.json
-  Metadata rows in resemantica.db (packet_metadata table)""",
+Assembles ChapterPacket per chapter (glossary subset, summaries, idiom
+matches, graph context) and derives ParagraphBundle per block. Staleness
+detection rebuilds automatically when upstream hashes change.""",
     )
     _add_common_release_args(packets_build, default_run="packets-build")
-    packets_build.add_argument(
-        "--chapter",
-        required=False,
-        type=int,
-        default=None,
-        help="Single chapter number to build. If omitted, all extracted chapters are built.",
-    )
+    _add_chapter_scope_args(packets_build)
 
     rebuild = subparsers.add_parser(
-        "rebuild-epub",
+        "rebuild", aliases=["reb"],
         help="Rebuild EPUB from unpacked release content.",
         description="""\
-Milestone M16. Reads the final translated pass artifacts (pass2 or pass3
-output per block), restores placeholders to their original XHTML elements,
-and reconstructs a complete EPUB file ready for reading.
+Reads final translated pass artifacts (pass2 or pass3), restores
+placeholders to original XHTML elements, and reconstructs a complete
+EPUB.""",
+    )
+    _add_common_release_args(rebuild, default_run="rebuild")
 
-Requires: completed translate-range or translate-chapter for all chapters
-in the release.
-
-Outputs:
-  artifacts/releases/<release>/rebuild/reconstructed.epub""",
-    )
-    rebuild.add_argument(
-        "--release", required=True,
-        help="Release identifier. Creates artifacts/releases/<id>/.",
-    )
-    rebuild.add_argument(
-        "--run-id",
-        "--run",
-        dest="run_id",
-        required=False,
-        default="rebuild-epub",
-        help="Run identifier for artifact lookup (default: rebuild-epub).",
-    )
-    rebuild.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="Optional path to resemantica.toml (default: ./resemantica.toml).",
-    )
-    _add_verbose_arg(rebuild)
-
-    translate_range = subparsers.add_parser(
-        "translate-range",
-        help="Translate a range of chapters.",
-        description="""\
-Milestone M2 batch mode. Translates every chapter from --start to --end
-inclusive. Each chapter runs pass1 → pass2 → pass3 sequentially.
-
-With --batched-model-order, all chapters run pass1 first, then all pass2,
-then all pass3 — this can be more efficient when the translator and analyst
-models are served from separate endpoints.
-
-Requires: epub-roundtrip, preprocessing stages, and packets build (for
-bundle context enrichment).
-
-Outputs (per chapter):
-  artifacts/releases/<release>/runs/<run>/translation/chapter-<n>/{pass1,pass2,pass3}.json
-  artifacts/releases/<release>/runs/<run>/validation/chapter-<n>/""",
-    )
-    translate_range.add_argument(
-        "--release", required=True,
-        help="Release identifier.",
-    )
-    translate_range.add_argument(
-        "--run", required=True,
-        help="Run identifier for checkpoint tracking and artifact scoping.",
-    )
-    translate_range.add_argument(
-        "--start", required=True, type=int,
-        help="First chapter number to translate (inclusive).",
-    )
-    translate_range.add_argument(
-        "--end", required=True, type=int,
-        help="Last chapter number to translate (inclusive).",
-    )
-    translate_range.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="Optional path to resemantica.toml (default: ./resemantica.toml).",
-    )
-    _add_batched_model_order_arg(translate_range)
-    _add_verbose_arg(translate_range)
-
-    run_production_top = subparsers.add_parser(
-        "run-production",
-        help="Run or inspect the full production workflow.",
-        description="""\
-Convenience alias for 'run production'. Executes the full pipeline in stage
-order: preprocess → packets-build → translate-range → epub-rebuild.
-
-With --dry-run, prints the ordered stage list and exits without executing.
-
-Exit codes:
-  0    All stages completed
-  1    A stage failed (details in logs)
-  130  Stopped by user (Ctrl+C)""",
-    )
-    _add_common_release_args(run_production_top, default_run="production")
-    run_production_top.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the deterministic stage plan without executing any stages.",
-    )
-    _add_chapter_range_args(run_production_top)
-    _add_batched_model_order_arg(run_production_top)
+    # The standalone translate-range and run-production commands have been removed.
 
     tui_cmd = subparsers.add_parser(
         "tui",
@@ -678,44 +476,35 @@ Exit codes:
         description="""\
 Interactive terminal UI for monitoring pipeline runs, inspecting artifacts,
 and triggering individual stages. Supports keyboard navigation and session
-persistence.
-
-Optional arguments constrain which release/run/chapter range the TUI shows
-by default; all can be changed interactively.""",
+persistence.""",
     )
     tui_cmd.add_argument(
-        "--release",
+        "-r", "--release",
         required=False,
         default=None,
-        help="Release identifier to pre-load in the TUI.",
+        help="Release to pre-load in the TUI.",
     )
     tui_cmd.add_argument(
-        "--run",
+        "-R", "--run",
         required=False,
         default=None,
-        help="Run identifier to pre-load in the TUI.",
+        help="Run to pre-load in the TUI.",
     )
     tui_cmd.add_argument(
-        "--config",
+        "-c", "--config",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Optional path to resemantica.toml (default: ./resemantica.toml).",
+        help="Path to resemantica.toml (default: ./resemantica.toml).",
     )
-    _add_chapter_range_args(tui_cmd)
+    _add_chapter_scope_args(tui_cmd)
 
     run = subparsers.add_parser(
         "run",
         help="Orchestration run commands.",
         description="""\
-Central workflow control: run the full production pipeline, resume from a
-checkpoint, or plan/apply cleanup of intermediate artifacts.
-
-Subcommands:
-  production     Execute all pipeline stages in order
-  resume         Continue a previous run from its last checkpoint
-  cleanup-plan   Dry-run to list deletable artifacts for a scope
-  cleanup-apply  Actually delete artifacts for a scope""",
+Central workflow control: full production pipeline, checkpoint resume,
+and cleanup of intermediate artifacts.""",
     )
     run_subparsers = run.add_subparsers(
         dest="run_command",
@@ -723,54 +512,35 @@ Subcommands:
     )
 
     run_production = run_subparsers.add_parser(
-        "production",
+        "production", aliases=["prod"],
         help="Run full production workflow from preprocess through EPUB rebuild.",
         description="""\
-Executes all pipeline stages in canonical order:
-
-  1. preprocess-glossary    — discover, translate, promote
-  2. preprocess-summaries   — generate chapter summaries
-  3. preprocess-idioms      — detect and validate idioms
-  4. preprocess-graph       — build entity-relationship graph
-  5. packets-build          — build chapter packets with context
-  6. translate-range        — run pass1/pass2/pass3 on all chapters
-  7. epub-rebuild           — reconstruct translated EPUB
-
-With --dry-run, prints the ordered stage list and exits.
-With --start/--end, limits the chapter range for applicable stages.
-With --batched-model-order, runs all pass1 first, then all pass2,
-then all pass3.
-
-Exit codes:
-  0    All stages completed
-  1    A stage failed (details in logs)
-  130  Stopped by user (Ctrl+C)""",
+Executes all pipeline stages in canonical order: preprocess-glossary,
+preprocess-summaries, preprocess-idioms, preprocess-graph, packets-build,
+translate-range, epub-rebuild. With --dry-run, prints the ordered stage
+list without executing.""",
     )
     _add_common_release_args(run_production, default_run="production")
     run_production.add_argument(
-        "--dry-run",
+        "-n", "--dry-run",
         action="store_true",
         help="Print the deterministic stage plan without executing any stages.",
     )
-    _add_chapter_range_args(run_production)
+    _add_chapter_scope_args(run_production)
     _add_batched_model_order_arg(run_production)
 
     run_resume = run_subparsers.add_parser(
         "resume",
         help="Resume a previous run from its last checkpoint.",
         description="""\
-Loads the last saved checkpoint for a given release + run and continues
-execution from that point. Useful after an interrupted production run.
-
-With --from-stage, override the resume point to a specific stage name.
-Useful after manual fixes to skip or re-run a particular stage.
-
-Stage order: preprocess-glossary → preprocess-summaries → preprocess-idioms
-→ preprocess-graph → packets-build → translate-range → epub-rebuild""",
+Loads the last saved checkpoint for a release and run, and continues
+execution from that point. With --from-stage, overrides the resume
+point to a specific stage.""",
     )
     _add_common_release_args(run_resume, default_run="resume")
     run_resume.add_argument(
-        "--from-stage",
+        "-t", "--stage", "--from-stage",
+        dest="from_stage",
         required=False,
         type=str,
         default=None,
@@ -779,21 +549,15 @@ Stage order: preprocess-glossary → preprocess-summaries → preprocess-idioms
     )
 
     run_cleanup_plan = run_subparsers.add_parser(
-        "cleanup-plan",
+        "cleanup-plan", aliases=["cln-plan"],
         help="Plan cleanup by enumerating deletable artifacts.",
         description="""\
-Dry-run inspection of what would be deleted for a given scope. No files are
-removed. Scopes:
-
-  run           Artifacts for the current run (default)
-  translation   All translation artifacts across runs
-  preprocess    All preprocessing artifacts (glossary, summaries, etc.)
-  cache         All cached data and intermediate files
-  all           Everything except the reconstructed EPUB""",
+Dry-run inspection of deletable artifacts for a given scope. No files
+removed. Scopes: run, translation, preprocess, cache, all.""",
     )
     _add_common_release_args(run_cleanup_plan, default_run="cleanup-plan")
     run_cleanup_plan.add_argument(
-        "--scope",
+        "-S", "--scope",
         required=False,
         type=str,
         default="run",
@@ -802,24 +566,15 @@ removed. Scopes:
     )
 
     run_cleanup_apply = run_subparsers.add_parser(
-        "cleanup-apply",
+        "cleanup-apply", aliases=["cln-apply"],
         help="Apply a previously planned cleanup.",
         description="""\
 Deletes artifacts matching the given scope. Use cleanup-plan first to
-inspect what will be removed.
-
-Scopes:
-  run           Artifacts for the current run (default)
-  translation   All translation artifacts across runs
-  preprocess    All preprocessing artifacts (glossary, summaries, etc.)
-  cache         All cached data and intermediate files
-  all           Everything except the reconstructed EPUB
-
-With --force, bypasses the scope-mismatch safety check (use with caution).""",
+preview. Scopes: run, translation, preprocess, cache, all.""",
     )
     _add_common_release_args(run_cleanup_apply, default_run="cleanup-apply")
     run_cleanup_apply.add_argument(
-        "--scope",
+        "-S", "--scope",
         required=False,
         type=str,
         default="run",
@@ -827,7 +582,7 @@ With --force, bypasses the scope-mismatch safety check (use with caution).""",
         help="Cleanup scope (default: run).",
     )
     run_cleanup_apply.add_argument(
-        "--force",
+        "-f", "--force",
         action="store_true",
         help="Skip scope-mismatch safety check (use with caution).",
     )
@@ -835,14 +590,51 @@ With --force, bypasses the scope-mismatch safety check (use with caution).""",
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+_ALIAS_MAP: dict[str, str] = {
+    "ext": "extract",
+    "tra": "translate",
+    "pre": "preprocess",
+    "pac": "packets",
+    "reb": "rebuild",
+    "gls-discover": "glossary-discover",
+    "gls-translate": "glossary-translate",
+    "gls-review": "glossary-review",
+    "gls-promote": "glossary-promote",
+    "sum": "summaries",
+    "idi-review": "idiom-review",
+    "idi-promote": "idiom-promote",
+    "prod": "production",
+    "cln-plan": "cleanup-plan",
+    "cln-apply": "cleanup-apply",
+}
+
+
+def _resolve_command(command: str) -> str:
+    return _ALIAS_MAP.get(command, command)
+
+
+def _parse_and_resolve(argv: list[str] | None = None) -> argparse.Namespace:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    args.command = _resolve_command(args.command)
+    for attr in ("preprocess_command", "packets_command", "run_command"):
+        val = getattr(args, attr, None)
+        if val:
+            setattr(args, attr, _resolve_command(val))
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_and_resolve(argv)
     result: Any
 
-    if args.command == "epub-roundtrip":
+    if getattr(args, "chapter", None) is not None:
+        args.start = args.chapter
+        args.end = args.chapter
+
+    if args.command == "extract":
         config = load_config(args.config)
-        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id="epub-roundtrip")
+        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id="extract")
         roundtrip_result = _with_cli_progress(
             lambda: extract_epub(
                 input_path=args.input,
@@ -857,20 +649,36 @@ def main(argv: list[str] | None = None) -> int:
         print(f"validation_report={roundtrip_result.validation_report_path}")
         return 0 if roundtrip_result.status == "success" else 1
 
-    if args.command == "translate-chapter":
+    if args.command == "translate":
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
         stop_token = StopToken()
-        result = _with_cli_progress(
-            lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                "translate-chapter",
-                chapter_number=args.chapter,
-                force=bool(getattr(args, "force_pass1", False)),
+
+        # Determine if running a single chapter or a range
+        if getattr(args, "chapter", None) is not None:
+            result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                    "translate-chapter",
+                    chapter_number=args.chapter,
+                    force=bool(getattr(args, "force_pass1", False)),
+                    stop_token=stop_token,
+                ),
                 stop_token=stop_token,
-            ),
-            stop_token=stop_token,
-            verbosity=int(getattr(args, "verbose", 0) or 0),
-        )
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+        else:
+            result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                    "translate-range",
+                    chapter_start=args.start,
+                    chapter_end=args.end,
+                    batched_model_order=bool(getattr(args, "batched_model_order", False)),
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+
         if result is _INTERRUPTED_STOP:
             return 130
         print(f"status={_status_text(result)}")
@@ -1157,68 +965,13 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  - {e}")
             return 0
 
-    if args.command == "run-production":
-        config = load_config(args.config)
-        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
-        if getattr(args, "dry_run", False):
-            result = OrchestrationRunner(args.release, args.run, config=config).run_production(
-                dry_run=True,
-                chapter_start=args.start,
-                chapter_end=args.end,
-                batched_model_order=bool(getattr(args, "batched_model_order", False)),
-            )
-            for stage in result.metadata.get("stages", []):
-                print(stage["stage_name"])
-            return 0
-        stop_token = StopToken()
-        result = _with_cli_progress(
-            lambda: OrchestrationRunner(
-                args.release,
-                args.run,
-                config=config,
-                stop_token=stop_token,
-            ).run_production(
-                dry_run=False,
-                chapter_start=args.start,
-                chapter_end=args.end,
-                batched_model_order=bool(getattr(args, "batched_model_order", False)),
-            ),
-            stop_token=stop_token,
-            verbosity=int(getattr(args, "verbose", 0) or 0),
-        )
-        if result is _INTERRUPTED_STOP:
-            return 130
-        print(result.message)
-        return _exit_code(result)
-
-    if args.command == "rebuild-epub":
-        config = load_config(args.config)
-        _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run_id)
-        stop_token = StopToken()
-        result = _with_cli_progress(
-            lambda: OrchestrationRunner(args.release, args.run_id, config=config).run_stage(
-                "epub-rebuild",
-                stop_token=stop_token,
-            ),
-            stop_token=stop_token,
-            verbosity=int(getattr(args, "verbose", 0) or 0),
-        )
-        if result is _INTERRUPTED_STOP:
-            return 130
-        print(f"status={_status_text(result)}")
-        print(f"message={result.message}")
-        return _exit_code(result)
-
-    if args.command == "translate-range":
+    if args.command == "rebuild":
         config = load_config(args.config)
         _configure_cli_logging(args=args, config=config, release_id=args.release, run_id=args.run)
         stop_token = StopToken()
         result = _with_cli_progress(
             lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
-                "translate-range",
-                chapter_start=args.start,
-                chapter_end=args.end,
-                batched_model_order=bool(getattr(args, "batched_model_order", False)),
+                "epub-rebuild",
                 stop_token=stop_token,
             ),
             stop_token=stop_token,

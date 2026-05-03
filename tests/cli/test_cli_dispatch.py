@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from resemantica import cli as cli_mod
-from resemantica.cli import _build_parser
+from resemantica.cli import _build_parser, _parse_and_resolve
 
 
 class TestCliDispatch:
@@ -16,17 +16,80 @@ class TestCliDispatch:
         parser = _build_parser()
         commands = self._get_subcommands(parser)
         expected = {
-            "epub-roundtrip",
-            "translate-chapter",
-            "preprocess",
-            "packets",
-            "rebuild-epub",
-            "translate-range",
-            "run-production",
+            "extract", "ext",
+            "translate", "tra",
+            "preprocess", "pre",
+            "packets", "pac",
+            "rebuild", "reb",
             "run",
             "tui",
         }
         assert commands == expected, f"Missing: {expected - commands}, Extra: {commands - expected}"
+
+    def test_extract_alias(self):
+        args = _parse_and_resolve(["ext", "--input", "test.epub", "--release", "r1"])
+        assert args.command == "extract"
+
+    def test_translate_alias(self):
+        args = _parse_and_resolve(["tra", "--release", "r1", "--run", "r1", "--chapter", "3"])
+        assert args.command == "translate"
+        assert args.chapter == 3
+
+    def test_preprocess_alias(self):
+        args = _parse_and_resolve(["pre", "glossary-discover", "--release", "r1"])
+        assert args.command == "preprocess"
+        assert args.preprocess_command == "glossary-discover"
+
+    def test_packets_alias(self):
+        args = _parse_and_resolve(["pac", "build", "--release", "r1", "--chapter", "5"])
+        assert args.command == "packets"
+        assert args.packets_command == "build"
+
+    def test_rebuild_alias(self):
+        args = _parse_and_resolve(["reb", "--release", "r1"])
+        assert args.command == "rebuild"
+
+    def test_glossary_discover_alias(self):
+        args = _parse_and_resolve(["pre", "gls-discover", "--release", "r1"])
+        assert args.command == "preprocess"
+        assert args.preprocess_command == "glossary-discover"
+
+    def test_glossary_translate_alias(self):
+        args = _parse_and_resolve(["pre", "gls-translate", "--release", "r1"])
+        assert args.preprocess_command == "glossary-translate"
+
+    def test_glossary_review_alias(self):
+        args = _parse_and_resolve(["pre", "gls-review", "--release", "r1"])
+        assert args.preprocess_command == "glossary-review"
+
+    def test_glossary_promote_alias(self):
+        args = _parse_and_resolve(["pre", "gls-promote", "--release", "r1"])
+        assert args.preprocess_command == "glossary-promote"
+
+    def test_summaries_alias(self):
+        args = _parse_and_resolve(["pre", "sum", "--release", "r1"])
+        assert args.preprocess_command == "summaries"
+
+    def test_idiom_review_alias(self):
+        args = _parse_and_resolve(["pre", "idi-review", "--release", "r1"])
+        assert args.preprocess_command == "idiom-review"
+
+    def test_idiom_promote_alias(self):
+        args = _parse_and_resolve(["pre", "idi-promote", "--release", "r1"])
+        assert args.preprocess_command == "idiom-promote"
+
+    def test_production_alias(self):
+        args = _parse_and_resolve(["run", "prod", "--release", "r1"])
+        assert args.run_command == "production"
+
+    def test_cleanup_plan_alias(self):
+        args = _parse_and_resolve(["run", "cln-plan", "--release", "r1"])
+        assert args.run_command == "cleanup-plan"
+
+    def test_cleanup_apply_alias(self):
+        args = _parse_and_resolve(["run", "cln-apply", "--release", "r1", "--force"])
+        assert args.run_command == "cleanup-apply"
+        assert args.force is True
 
     def test_preprocess_subcommands(self):
         parser = _build_parser()
@@ -225,3 +288,58 @@ class TestCliDispatch:
 
         assert result == 0
         assert captured["verbosity"] == 3
+
+    # --- Short flag tests ---
+
+    def test_extract_short_flags(self):
+        args = _parse_and_resolve(["ext", "-i", "book.epub", "-r", "r1"])
+        assert args.input.name == "book.epub"
+        assert args.release == "r1"
+
+    def test_translate_short_flags(self):
+        args = _parse_and_resolve(["tra", "-r", "r1", "-R", "run-1", "-C", "3"])
+        assert args.command == "translate"
+        assert args.release == "r1"
+        assert args.run == "run-1"
+        assert args.chapter == 3
+
+    def test_glossary_discover_short_flags(self):
+        args = _parse_and_resolve(["pre", "gls-discover", "-r", "r1", "-p", "0.5"])
+        assert args.pruning_threshold == 0.5
+
+    def test_glossary_promote_short_flags(self):
+        args = _parse_and_resolve(["pre", "gls-promote", "-r", "r1", "-F", "review.json"])
+        assert args.review_file.name == "review.json"
+
+    def test_production_short_flags(self):
+        args = _parse_and_resolve(["run", "prod", "-r", "r1", "-n"])
+        assert args.dry_run is True
+
+    def test_run_resume_short_flags(self):
+        args = _parse_and_resolve(["run", "resume", "-r", "r1", "-t", "translate-chapter"])
+        assert args.from_stage == "translate-chapter"
+
+    def test_cleanup_plan_short_flags(self):
+        args = _parse_and_resolve(["run", "cln-plan", "-r", "r1", "-S", "translation"])
+        assert args.scope == "translation"
+
+    def test_cleanup_apply_short_flags(self):
+        args = _parse_and_resolve(["run", "cln-apply", "-r", "r1", "-S", "all", "-f"])
+        assert args.scope == "all"
+        assert args.force is True
+
+    def test_chapter_scope_short_flags(self):
+        args = _parse_and_resolve(["tra", "-r", "r1", "-R", "r1", "-s", "1", "-e", "10"])
+        assert args.start == 1
+        assert args.end == 10
+
+    def test_batched_model_order_short_flag(self):
+        args = _parse_and_resolve(["tra", "-r", "r1", "-R", "r1", "-C", "3", "-b"])
+        assert args.batched_model_order is True
+
+    def test_tui_short_flags(self):
+        args = _parse_and_resolve(["tui", "-r", "r1", "-R", "run-1", "-s", "2", "-e", "5"])
+        assert args.release == "r1"
+        assert args.run == "run-1"
+        assert args.start == 2
+        assert args.end == 5
