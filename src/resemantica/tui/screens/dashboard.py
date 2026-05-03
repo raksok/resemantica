@@ -111,9 +111,8 @@ class DashboardScreen(BaseScreen):
         force_chk = f"[cyan]\\[{'x' if force_on else ' '}][/]"
         dry_chk = f"[cyan]\\[{'x' if dry_on else ' '}][/]"
         key_hints = (
-            f"[dim]\\[N]ew File[/]    [dim]\\[R]esume Run[/]    "
-            f"S[dim]\\[c][/]ope    "
-            f"{force_chk} [dim]\\[F][/]orce    {dry_chk} [dim]\\[D][/]ry-Run    "
+            f"[dim]\\[N]ew File[/]    [dim]\\[R]esume Run[/]    S[dim]\\[c][/]ope\n"
+            f"{force_chk} [dim]\\[F][/]orce    {dry_chk} [dim]\\[D][/]ry-Run\n"
             f"[dim]\\[P][/]roduction"
         )
         self.query_one("#dashboard-key-hints", Static).update(key_hints)
