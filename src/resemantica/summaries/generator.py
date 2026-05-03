@@ -279,12 +279,21 @@ def generate_chapter_summary(
         expected_chapter_number=chapter_number,
     )
     if not validation.is_valid:
-        set_summary_draft_status(
+        save_summary_draft(
             conn,
             release_id=release_id,
             chapter_number=chapter_number,
             summary_type="chapter_summary_zh_structured",
+            content={
+                "parsed_summary": parsed,
+                "validation_errors": validation.errors,
+            },
+            chapter_source_hash=chapter_source_hash,
+            model_name=model_name,
+            prompt_version=prompt_version,
+            run_id=run_id,
             validation_status="failed",
+            is_story_chapter=is_story,
         )
         return None
 

@@ -444,3 +444,67 @@ class TestM11CleanupScopes:
             report = json.load(f)
         assert "deleted_dirs" in report
         assert "sqlite_rows_deleted" in report
+
+    def test_factory_scope_plan_creates_factory_plan(self):
+        import uuid
+
+        from resemantica.settings import load_config
+
+        release_id = f"test-factory-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        plan = plan_cleanup(release_id, run_id, scope="factory", dry_run=True)
+
+        assert plan["scope"] == "factory"
+        assert plan["sqlite_rows"] == []
+        assert plan["release_id"] == release_id
+        assert plan["run_id"] == run_id
+
+        cfg = load_config()
+        plan_path = Path(cfg.paths.artifact_root) / "factory_cleanup_plan.json"
+        assert plan_path.exists()
+
+    def test_factory_scope_apply_requires_plan(self):
+        import uuid
+
+        from resemantica.settings import load_config as _load_config
+
+        release_id = f"test-factory-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        # Clean up any stale factory plan from other tests
+        cfg = _load_config()
+        plan_path = Path(cfg.paths.artifact_root) / "factory_cleanup_plan.json"
+        if plan_path.exists():
+            plan_path.unlink()
+
+        result = apply_cleanup(release_id, run_id, scope="factory")
+        assert result["success"] is False
+        assert "No cleanup plan found" in result["message"]
+
+    def test_factory_scope_apply_deletes_artifacts(self, monkeypatch, tmp_path):
+        import uuid
+
+        release_id = f"test-factory-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        class MockPaths:
+            artifact_root = str(tmp_path)
+            db_filename = "resemantica.db"
+
+        class MockConfig:
+            paths = MockPaths()
+
+        monkeypatch.setattr("resemantica.orchestration.cleanup.load_config", lambda: MockConfig())
+
+        releases_dir = tmp_path / "releases"
+        (releases_dir / release_id / "runs" / run_id).mkdir(parents=True, exist_ok=True)
+        (releases_dir / release_id / "runs" / run_id / "test.txt").write_text("test")
+        global_db = tmp_path / "resemantica.db"
+        global_db.write_text("test")
+
+        plan_cleanup(release_id, run_id, scope="factory", dry_run=True)
+        apply_cleanup(release_id, run_id, scope="factory")
+
+        assert not releases_dir.exists()
+        assert not global_db.exists()

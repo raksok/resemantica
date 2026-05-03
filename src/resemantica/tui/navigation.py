@@ -19,8 +19,9 @@ SCREEN_INFOS: tuple[ScreenInfo, ...] = (
     ScreenInfo(3, "preprocessing", "PreprocessingScreen", "Prep", "Preprocessing", "Prepare chapters"),
     ScreenInfo(4, "translation", "TranslationScreen", "Translate", "Translation", "Translation progress"),
     ScreenInfo(5, "observability", "ObservabilityScreen", "Observe", "Observability", "Run signals and logs"),
-    ScreenInfo(6, "artifact", "ArtifactScreen", "Artifact", "Artifact", "Output files and cleanup"),
-    ScreenInfo(7, "settings", "SettingsScreen", "Settings", "Settings", "Active config"),
+    ScreenInfo(6, "artifact", "ArtifactScreen", "Artifact", "Artifact", "Output files"),
+    ScreenInfo(7, "cleanup-wizard", "CleanupWizardScreen", "Cleanup", "Cleanup", "Scoped cleanup wizard"),
+    ScreenInfo(8, "settings", "SettingsScreen", "Settings", "Settings", "Active config"),
 )
 
 TOTAL_PRIMARY_SCREENS = len(SCREEN_INFOS)
@@ -45,5 +46,5 @@ def format_location(info: ScreenInfo | None) -> str:
 
 def format_footer_keys(info: ScreenInfo | None) -> str:
     if info is None:
-        return "1-7 Switch  ? Help  q Quit"
-    return f"Active: {info.number} {info.title} | 1-7 Switch  ? Help  q Quit"
+        return "1-8 Switch  ? Help  q Quit"
+    return f"Active: {info.number} {info.title} | 1-8 Switch  ? Help  q Quit"

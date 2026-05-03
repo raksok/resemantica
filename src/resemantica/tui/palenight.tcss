@@ -123,7 +123,8 @@ HeaderBar {
 }
 
 #observability-content,
-#artifact-content {
+#artifact-content,
+#cleanup-wizard-content {
     width: 1fr;
     height: 1fr;
 }
@@ -134,6 +135,7 @@ HeaderBar {
 #ingestion-content,
 #observability-content,
 #artifact-content,
+#cleanup-wizard-content,
 #settings-content {
     height: 1fr;
 }
@@ -183,8 +185,7 @@ HeaderBar {
 #ingestion-path,
 #ingestion-status,
 #ingestion-chapter-list,
-#ingestion-event-tail,
-#artifact-cleanup-preview {
+#ingestion-event-tail {
     padding: 0 0 1 0;
 }
 
@@ -286,16 +287,37 @@ Button:disabled {
     color: #D4D5F0;
 }
 
-/* Artifact split-pane layout */
-
-#artifact-tree-section {
+/* Cleanup wizard layout */
+#cleanup-wizard-content {
+    width: 1fr;
     height: 1fr;
-    border-bottom: solid #34324A;
 }
 
-#artifact-cleanup-section {
-    height: auto;
-    min-height: 8;
+#wizard-step-indicator {
+    color: #C792EA;
+    text-style: bold;
+    padding: 0 0 0 0;
+}
+
+#wizard-scope-info {
+    color: #89DDFF;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+#wizard-main-content {
+    color: #D4D5F0;
+    padding: 0 0 1 0;
+}
+
+#wizard-key-hints {
+    color: #676E95;
+    padding: 1 0 1 0;
+}
+
+/* Artifact tree layout */
+#artifact-tree-section {
+    height: 1fr;
 }
 
 #artifact-tree {

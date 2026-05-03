@@ -40,7 +40,7 @@ class HelpScreen(ModalScreen[None]):
             [
                 "",
                 "[b]Keys[/]",
-                "1-7 Switch   ? Help   q Quit",
+                "1-8 Switch   ? Help   q Quit",
                 "",
                 "[b]Screen Keys[/]",
                 "1: [[[[ NEW FILE ]]  [[[[ RESUME RUN ]]",
@@ -48,7 +48,9 @@ class HelpScreen(ModalScreen[None]):
                 "3: g=Glossary   s=Summaries   i=Idioms   r=Graph   b=Packets",
                 "4: t=Translate   u=Rebuild",
                 "5: v=Verbose   s=Source   e=Severity   f=Stage   c=Chapter   r=Refresh",
-                "6: y=Dry Run   a=Apply",
+                "6: (browse only)",
+                "7: s=Scope   p=Preview   b=Back   a=Apply   Esc=Artifact",
+                "8: (read-only)",
             ]
         )
         return "\n".join(lines)

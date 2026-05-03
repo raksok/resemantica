@@ -15,6 +15,7 @@ from resemantica.tui.navigation import SCREEN_INFOS, screen_info_for_class_name
 from resemantica.tui.observability import ObservabilityVerbosity
 from resemantica.tui.screens import (
     ArtifactScreen,
+    CleanupWizardScreen,
     DashboardScreen,
     HelpScreen,
     IngestionScreen,
@@ -43,6 +44,7 @@ class ResemanticaApp(App):
         "translation": TranslationScreen,
         "observability": ObservabilityScreen,
         "artifact": ArtifactScreen,
+        "cleanup-wizard": CleanupWizardScreen,
         "settings": SettingsScreen,
         "help": HelpScreen,
     }

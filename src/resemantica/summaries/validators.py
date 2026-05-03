@@ -124,15 +124,29 @@ def _validate_future_knowledge(
         for match in _FUTURE_CHAPTER_ZH_RE.finditer(text):
             referenced = int(match.group(1))
             if referenced > chapter_number:
-                errors.append(
-                    f"future_knowledge: references chapter {referenced} while validating chapter {chapter_number}"
+                msg = (
+                    f"future_knowledge: references chapter {referenced}"
+                    f" while validating chapter {chapter_number}"
                 )
+                logger.warning(
+                    "{} — matched_text={!r}",
+                    msg,
+                    text[:200],
+                )
+                errors.append(msg)
         for match in _FUTURE_CHAPTER_EN_RE.finditer(text):
             referenced = int(match.group(1))
             if referenced > chapter_number:
-                errors.append(
-                    f"future_knowledge: references chapter {referenced} while validating chapter {chapter_number}"
+                msg = (
+                    f"future_knowledge: references chapter {referenced}"
+                    f" while validating chapter {chapter_number}"
                 )
+                logger.warning(
+                    "{} — matched_text={!r}",
+                    msg,
+                    text[:200],
+                )
+                errors.append(msg)
     return errors
 
 
@@ -153,6 +167,13 @@ def validate_chinese_summary(
     is_story_chapter = structured_summary.get("is_story_chapter")
     if is_story_chapter is False:
         errors.insert(0, "non_story_chapter_flagged")
+
+    if errors:
+        logger.warning(
+            "validate_chinese_summary failed for chapter {} — errors={}",
+            expected_chapter_number,
+            errors,
+        )
 
     return ValidationResult(
         status="failed" if errors else "success",

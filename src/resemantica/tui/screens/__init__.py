@@ -1,4 +1,5 @@
 from resemantica.tui.screens.artifact import ArtifactScreen
+from resemantica.tui.screens.cleanup_wizard import CleanupWizardScreen
 from resemantica.tui.screens.dashboard import DashboardScreen
 from resemantica.tui.screens.help import HelpScreen
 from resemantica.tui.screens.ingestion import IngestionScreen
@@ -8,12 +9,13 @@ from resemantica.tui.screens.settings import SettingsScreen
 from resemantica.tui.screens.translation import TranslationScreen
 
 __all__ = [
-    "DashboardScreen",
-    "IngestionScreen",
-    "PreprocessingScreen",
-    "TranslationScreen",
-    "ObservabilityScreen",
     "ArtifactScreen",
-    "SettingsScreen",
+    "CleanupWizardScreen",
+    "DashboardScreen",
     "HelpScreen",
+    "IngestionScreen",
+    "ObservabilityScreen",
+    "PreprocessingScreen",
+    "SettingsScreen",
+    "TranslationScreen",
 ]

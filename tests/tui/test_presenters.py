@@ -1380,7 +1380,7 @@ def test_tui_large_viewport_expands_primary_content_width():
                 ("2", "#ingestion-content"),
                 ("3", "#preprocessing-content"),
                 ("4", "#translation-content"),
-                ("7", "#settings-content"),
+                ("8", "#settings-content"),
             ):
                 await pilot.press(key)
                 await pilot.pause()
@@ -1451,19 +1451,19 @@ def test_tui_header_and_footer_show_current_screen_location():
 
             header = pilot.app.screen.query_one("#header-screen-location", Static)
             footer = pilot.app.screen.query_one("#footer-keys", Static)
-            assert _static_text(header) == "Screen 1/7 Dashboard"
+            assert _static_text(header) == "Screen 1/8 Dashboard"
             assert "Active: 1 Dashboard" in _static_text(footer)
             assert "? Help" in _static_text(footer)
 
             await pilot.press("4")
             await pilot.pause()
             header = pilot.app.screen.query_one("#header-screen-location", Static)
-            assert _static_text(header) == "Screen 4/7 Translation"
+            assert _static_text(header) == "Screen 4/8 Translation"
 
-            await pilot.press("7")
+            await pilot.press("8")
             await pilot.pause()
             header = pilot.app.screen.query_one("#header-screen-location", Static)
-            assert _static_text(header) == "Screen 7/7 Settings"
+            assert _static_text(header) == "Screen 8/8 Settings"
 
     asyncio.run(run())
 
@@ -1477,7 +1477,7 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
     async def run() -> None:
         app = ResemanticaApp()
         async with app.run_test() as pilot:
-            await pilot.press("7")
+            await pilot.press("8")
             await pilot.pause()
 
             await pilot.press("?")
@@ -1490,7 +1490,7 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
             help_content = pilot.app.screen.query_one("#help-content", Static)
             rendered = _static_text(help_content)
 
-            assert "Screen 7/7 Settings" in rendered
+            assert "Screen 8/8 Settings" in rendered
             for label in (
                 "Dashboard",
                 "Ingestion",
@@ -1498,10 +1498,11 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
                 "Translation",
                 "Observability",
                 "Artifact",
+                "Cleanup",
                 "Settings",
             ):
                 assert label in rendered
-            assert "1-7 Switch" in rendered
+            assert "1-8 Switch" in rendered
             assert "? Help" in rendered
             assert "v=Verbose" in rendered
             assert "r=Refresh" in rendered

@@ -397,6 +397,7 @@ Requires: epub-roundtrip. Strongly recommended: locked glossary (M3).
 Outputs: rows added to resemantica.db (summaries tables).""",
     )
     _add_common_release_args(summaries, default_run="summaries")
+    _add_chapter_range_args(summaries)
 
     idioms = preprocess_subparsers.add_parser(
         "idioms",
@@ -849,6 +850,8 @@ def main(argv: list[str] | None = None) -> int:
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                     "preprocess-summaries",
+                    chapter_start=args.start,
+                    chapter_end=args.end,
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
