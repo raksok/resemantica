@@ -175,15 +175,21 @@ def test_new_file_dialog_callback_saves_bounds(tmp_path):
     from textual.widgets import Input
 
     from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.run_dialog import NewFileDialog
 
     epub = tmp_path / "book.epub"
     epub.write_bytes(b"epub")
 
     async def run() -> None:
         app = ResemanticaApp()
+        dialog_result: list[object] = []
+
+        def on_dialog(result: object) -> None:
+            dialog_result.append(result)
+
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            await pilot.click("#btn-new-file")
+            pilot.app.push_screen(NewFileDialog(), on_dialog)
             await pilot.pause()
 
             screen = pilot.app.screen
@@ -196,11 +202,15 @@ def test_new_file_dialog_callback_saves_bounds(tmp_path):
             await pilot.click("#new-submit")
             await pilot.pause()
 
-            assert pilot.app.session.input_path == epub.resolve()
-            assert pilot.app.release_id == "rel-1"
-            assert pilot.app.run_id == "run-1"
-            assert pilot.app.session.chapter_start == 2
-            assert pilot.app.session.chapter_end == 4
+            assert len(dialog_result) == 1
+            result = dialog_result[0]
+            from resemantica.tui.screens.run_dialog import NewFileResult
+            assert isinstance(result, NewFileResult)
+            assert result.input_path == epub.resolve()
+            assert result.release_id == "rel-1"
+            assert result.run_id == "run-1"
+            assert result.chapter_start == 2
+            assert result.chapter_end == 4
 
     asyncio.run(run())
 
@@ -209,12 +219,18 @@ def test_resume_run_dialog_callback_saves_bounds():
     from textual.widgets import Input
 
     from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.run_dialog import ResumeRunDialog
 
     async def run() -> None:
         app = ResemanticaApp()
+        dialog_result: list[object] = []
+
+        def on_dialog(result: object) -> None:
+            dialog_result.append(result)
+
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            await pilot.click("#btn-resume-run")
+            pilot.app.push_screen(ResumeRunDialog(), on_dialog)
             await pilot.pause()
 
             screen = pilot.app.screen
@@ -226,11 +242,15 @@ def test_resume_run_dialog_callback_saves_bounds():
             await pilot.click("#resume-submit")
             await pilot.pause()
 
-            assert pilot.app.session.input_path is None
-            assert pilot.app.release_id == "rel-1"
-            assert pilot.app.run_id == "run-1"
-            assert pilot.app.session.chapter_start == 3
-            assert pilot.app.session.chapter_end == 8
+            assert len(dialog_result) == 1
+            result = dialog_result[0]
+            from resemantica.tui.screens.run_dialog import ResumeRunResult
+            assert isinstance(result, ResumeRunResult)
+            assert result.input_path is None
+            assert result.release_id == "rel-1"
+            assert result.run_id == "run-1"
+            assert result.chapter_start == 3
+            assert result.chapter_end == 8
 
     asyncio.run(run())
 
@@ -262,7 +282,7 @@ def test_scoped_launches_pass_chapter_bounds():
 
     assert calls == [
         ("packets-build", {"chapter_start": 2, "chapter_end": 5}),
-        ("translate-range", {"chapter_start": 2, "chapter_end": 5}),
+        ("translate-range", {"chapter_start": 2, "chapter_end": 5, "batched": False}),
     ]
 
 
@@ -485,8 +505,7 @@ def test_preprocessing_presenter_builds_stages():
     assert "Graph MVP" in result
     assert "Packets" in result
     assert "◉[/] Glossary" in result
-    assert "━━━━━━━━╺─────────" in result
-    assert "█" not in result
+    assert "\u2593" in result
 
 
 def test_preprocessing_progress_models_use_scoped_started_totals():
@@ -713,18 +732,26 @@ def test_launch_control_make_adapter_returns_none_without_context():
 def test_base_screen_formats_chapter_progress_from_checkpoint_shapes():
     from resemantica.tui.screens.base import BaseScreen
 
-    assert BaseScreen._format_chapter_progress(
+    result = BaseScreen._format_chapter_progress(
         total_chapters=12,
         checkpoint={"chapter_number": 4},
-    ) == "Ch 4/12"
-    assert BaseScreen._format_chapter_progress(
+    )
+    assert "Ch 4/12" in result
+    assert "\u2593" in result  # filled bar char
+
+    result = BaseScreen._format_chapter_progress(
         total_chapters=12,
         checkpoint={"completed_chapters": [1, 3], "pass2_completed": [5, 7]},
-    ) == "Ch 7/12"
-    assert BaseScreen._format_chapter_progress(
+    )
+    assert "Ch 7/12" in result
+    assert "\u2593" in result
+
+    result = BaseScreen._format_chapter_progress(
         total_chapters=12,
         checkpoint={"chapter_number": 2, "pass3_completed": [9]},
-    ) == "Ch 2/12"
+    )
+    assert "Ch 2/12" in result
+    assert "\u2593" in result
 
 
 def test_base_screen_maps_pass_labels_for_supported_stages():
@@ -890,9 +917,9 @@ def test_tui_spinner_refresh_does_not_reload_run_data():
 
     screen._get_run_state = fail_load  # type: ignore[method-assign]
     screen._load_recent_run_events = fail_load  # type: ignore[method-assign]
-    screen.query_one = lambda selector, widget_type=None: Static(id="header-pass")  # type: ignore[method-assign]
+    screen.query_one = lambda selector, widget_type=None: Static(id="status-pass")  # type: ignore[method-assign]
 
-    screen._refresh_header_pass()
+    screen._refresh_status_pass()
 
 
 def test_tui_fast_refresh_skips_heavy_loaders_during_active_action(monkeypatch):
@@ -1102,9 +1129,9 @@ def test_tui_header_pass_prefers_active_action_when_run_state_empty():
         async with app.run_test(size=(140, 48)) as pilot:
             await pilot.pause()
 
-            header_pass = pilot.app.screen.query_one("#header-pass", Static)
-            assert "PASS 1" in _static_text(header_pass)
-            assert "IDLE" not in _static_text(header_pass)
+            status_pass = pilot.app.screen.query_one("#status-pass", Static)
+            assert "PASS 1" in _static_text(status_pass)
+            assert "IDLE" not in _static_text(status_pass)
 
     asyncio.run(run())
 
@@ -1184,7 +1211,8 @@ def test_base_screen_derives_footer_metrics_from_events():
 
     metrics = BaseScreen._derive_footer_metrics(state, events)
 
-    assert metrics["block_progress"] == "1/2 blocks"
+    assert "1/2 blk" in metrics["block_progress"]
+    assert "\u2593" in metrics["block_progress"]
     assert metrics["warnings"] == "Warn 1"
     assert metrics["failures"] == "Fail 1"
     assert metrics["elapsed"] == "2:03:04"
@@ -1344,7 +1372,7 @@ def test_tui_shell_places_main_content_beside_spine():
             main = screen.query_one("#main-content")
 
             assert main.region.x >= spine.region.x + spine.region.width
-            assert main.region.y <= spine.region.y + 1
+            assert main.region.y <= spine.region.y + 2
 
     asyncio.run(run())
 
@@ -1449,21 +1477,21 @@ def test_tui_header_and_footer_show_current_screen_location():
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            header = pilot.app.screen.query_one("#header-screen-location", Static)
+            tab_bar = pilot.app.screen.query_one("#tab-bar", Static)
             footer = pilot.app.screen.query_one("#footer-keys", Static)
-            assert _static_text(header) == "Screen 1/8 Dashboard"
+            assert "1 Dashboard" in _static_text(tab_bar)
             assert "Active: 1 Dashboard" in _static_text(footer)
             assert "? Help" in _static_text(footer)
 
             await pilot.press("4")
             await pilot.pause()
-            header = pilot.app.screen.query_one("#header-screen-location", Static)
-            assert _static_text(header) == "Screen 4/8 Translation"
+            tab_bar = pilot.app.screen.query_one("#tab-bar", Static)
+            assert "4 Translate" in _static_text(tab_bar)
 
             await pilot.press("8")
             await pilot.pause()
-            header = pilot.app.screen.query_one("#header-screen-location", Static)
-            assert _static_text(header) == "Screen 8/8 Settings"
+            tab_bar = pilot.app.screen.query_one("#tab-bar", Static)
+            assert "8 Settings" in _static_text(tab_bar)
 
     asyncio.run(run())
 
@@ -1517,13 +1545,14 @@ def test_tui_help_modal_lists_navigation_and_returns_to_prior_screen():
 
 def test_tui_run_dialogs_are_centered_transparent_and_compact():
     from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.run_dialog import NewFileDialog, ResumeRunDialog
 
     async def run() -> None:
         app = ResemanticaApp()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
 
-            await pilot.click("#btn-new-file")
+            pilot.app.push_screen(NewFileDialog())
             await pilot.pause()
 
             new_screen = pilot.app.screen
@@ -1539,7 +1568,7 @@ def test_tui_run_dialogs_are_centered_transparent_and_compact():
             await pilot.press("escape")
             await pilot.pause()
 
-            await pilot.click("#btn-resume-run")
+            pilot.app.push_screen(ResumeRunDialog())
             await pilot.pause()
 
             resume_screen = pilot.app.screen
@@ -1559,16 +1588,14 @@ def test_tui_command_buttons_use_unified_bracket_labels():
     from textual.widgets import Button
 
     from resemantica.tui.app import ResemanticaApp
+    from resemantica.tui.screens.run_dialog import NewFileDialog, ResumeRunDialog
 
     async def run() -> None:
         app = ResemanticaApp()
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
 
-            assert _button_label(pilot.app.screen.query_one("#btn-new-file", Button)) == "[[ NEW FILE ]]"
-            assert _button_label(pilot.app.screen.query_one("#btn-resume-run", Button)) == "[[ RESUME RUN ]]"
-
-            await pilot.click("#btn-new-file")
+            pilot.app.push_screen(NewFileDialog())
             await pilot.pause()
 
             assert _button_label(pilot.app.screen.query_one("#new-submit", Button)) == "[[ SUBMIT ]]"
@@ -1577,7 +1604,7 @@ def test_tui_command_buttons_use_unified_bracket_labels():
             await pilot.press("escape")
             await pilot.pause()
 
-            await pilot.click("#btn-resume-run")
+            pilot.app.push_screen(ResumeRunDialog())
             await pilot.pause()
 
             assert _button_label(pilot.app.screen.query_one("#resume-submit", Button)) == "[[ SUBMIT ]]"

@@ -39,14 +39,13 @@ class IngestionScreen(BaseScreen):
         stage_list = self.query_one("#ingestion-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
 
-        self._update_status()
-        self._update_event_tail()
+        self._refresh_screen_status()
 
     def _refresh_ingestion(self) -> None:
         state = self._run_state_for_refresh()
         stage_list = self.query_one("#ingestion-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
-        self._update_status()
+        self._refresh_screen_status()
         self._update_event_tail()
 
     def _build_stage_progress(self, state: dict | None = None) -> str:
@@ -126,7 +125,7 @@ class IngestionScreen(BaseScreen):
         lines.append("[dim]e[/]=Extract")
         return "\n".join(lines)
 
-    def _update_status(self) -> None:
+    def _refresh_screen_status(self) -> None:
         snapshot = self._build_snapshot()
         widget = self.query_one("#ingestion-status", Static)
         parts: list[str] = []

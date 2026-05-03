@@ -215,6 +215,12 @@ class ResemanticaApp(App):
         screen_info = screen_info_for_class_name(self.screen.__class__.__name__)
         await self.push_screen(HelpScreen(current_screen_info=screen_info))
 
+    async def action_switch_screen(self, screen_id: str) -> None:
+        await self.push_screen(screen_id)
+        render_tab_bar = getattr(self.screen, "_render_tab_bar", None)
+        if callable(render_tab_bar):
+            render_tab_bar()
+
     def action_request_stop(self) -> None:
         token = self.active_stop_token
         if self.active_action is None or token is None:

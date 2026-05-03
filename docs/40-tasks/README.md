@@ -53,3 +53,5 @@ Always follow the milestone sequence below.
 | M24 | task-24 | M23, M19 | TUI Read-Only Observability Parity |
 | M25 | task-25 | M24, M19, M16 | TUI Launch Control |
 | M26 | task-26 | M25, M19 | Global Observability & Event Granularity |
+| M27 | task-34 | M25, M11 | Cleanup Wizard TUI Screen |
+| M28 | task-37 | M25, M27 | CLI–TUI Feature Parity |

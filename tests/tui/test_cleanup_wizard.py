@@ -311,10 +311,8 @@ def test_help_shows_8_screens():
     help_screen = HelpScreen()
     text = help_screen._build_help_text()
 
-    assert "Cleanup" in text
+    assert "[b]Cleanup[/]" in text
     assert "1-8 Switch" in text
-    assert "7:" in text
-    assert "8:" in text
     assert "s=Scope" in text
     assert "a=Apply" in text
 

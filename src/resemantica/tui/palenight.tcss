@@ -19,7 +19,13 @@ HeaderBar {
     color: #D4D5F0;
 }
 
-#header-container {
+#tab-bar {
+    height: 1;
+    color: #D4D5F0;
+    background: #1E1F2B;
+}
+
+#status-bar-container {
     layout: horizontal;
     height: 1;
 }
@@ -29,23 +35,17 @@ HeaderBar {
     color: #89DDFF;
 }
 
-#header-screen-location {
-    width: 32;
-    color: #C792EA;
-    text-style: bold;
-}
-
-#header-run-info {
+#status-run-info {
     width: 1fr;
     color: #EEFFFF;
 }
 
-#header-chapter-progress {
-    width: 12;
+#status-chapter-progress {
+    width: 24;
     color: #D4D5F0;
 }
 
-#header-pass {
+#status-pass {
     width: 14;
     color: #89DDFF;
 }
@@ -208,10 +208,43 @@ HeaderBar {
     height: 1fr;
 }
 
-#dashboard-action-list {
+#dashboard-scope-inputs {
     layout: horizontal;
     height: 1;
     margin: 0 0 1 0;
+}
+
+#dashboard-scope-inputs Input {
+    width: 12;
+    height: 1;
+    margin: 0 1 0 0;
+    padding: 0 1;
+    border: none;
+    background: #161720;
+    color: #EEFFFF;
+}
+
+#dashboard-scope-inputs Input:focus {
+    background: #001A43;
+}
+
+#config-path-input {
+    width: 1fr;
+    height: 1;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    border: none;
+    background: #161720;
+    color: #EEFFFF;
+}
+
+#config-path-input:focus {
+    background: #001A43;
+}
+
+#settings-active-config {
+    padding: 0 0 1 0;
+    color: #D4D5F0;
 }
 
 Button {
@@ -337,7 +370,7 @@ FooterBar {
 }
 
 #footer-block-progress {
-    width: 20;
+    width: 28;
     color: #D4D5F0;
 }
 

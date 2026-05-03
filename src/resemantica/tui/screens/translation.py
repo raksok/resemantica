@@ -14,6 +14,7 @@ class TranslationScreen(BaseScreen):
     BINDINGS = [
         Binding("t", "launch_translate", "Translate"),
         Binding("u", "launch_rebuild", "Rebuild"),
+        Binding("b", "toggle_batched", "Batched"),
     ]
 
     def _content_widgets(self) -> ComposeResult:
@@ -42,12 +43,11 @@ class TranslationScreen(BaseScreen):
         stage_list = self.query_one("#translation-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
 
-        self._update_status()
+        self._refresh_screen_status()
         self._update_event_tail()
 
     def _refresh_translation(self) -> None:
         state = self._run_state_for_refresh()
-
         stage_list = self.query_one("#translation-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
 
@@ -130,6 +130,9 @@ class TranslationScreen(BaseScreen):
     ) -> str:
         progress = self._derive_stage_progress(events or [])
         lines: list[str] = ["[bold]Pipeline[/bold]"]
+        batched = getattr(self, "_batched", False)
+        mode = "[cyan]BATCHED[/]" if batched else "[comment]SEQUENTIAL[/]"
+        lines.append(f"  Mode: {mode}  [dim]b[/]=toggle")
         for stage in snapshot.stages:
             if stage.key not in self.TRANSLATION_STAGE_KEYS:
                 continue
@@ -158,13 +161,13 @@ class TranslationScreen(BaseScreen):
                 bar = self._render_scoped_bar(stage_progress, stage.status)
                 numeric = f" {stage_progress.completed}/{stage_progress.total}"
             elif stage.status == "done":
-                bar = self._static_bar(color="green", fill="\u2501")
+                bar = self._static_bar(color="green")
                 numeric = ""
             elif stage.status == "running":
                 bar = self._running_bar(color="cyan")
                 numeric = ""
             else:
-                bar = self._static_bar(color="comment", fill="\u2500")
+                bar = self._static_bar(color="comment", fill=self._PROGRESS_EMPTY)
                 numeric = ""
             lines.append(
                 f"  [{color}]{glyph}[/] {stage.label:<14} {bar}{numeric:<6}  [{color}]{stage.status.upper():<7}[/]"
@@ -173,19 +176,22 @@ class TranslationScreen(BaseScreen):
 
     def _fallback_stage_progress(self, state: dict | None) -> str:
         lines: list[str] = ["[bold]Pipeline[/bold]"]
+        batched = getattr(self, "_batched", False)
+        mode = "[cyan]BATCHED[/]" if batched else "[comment]SEQUENTIAL[/]"
+        lines.append(f"  Mode: {mode}  [dim]b[/]=toggle")
         for key, label in (("translate-range", "Translation"), ("epub-rebuild", "Rebuild")):
             if state and state.get("stage_name") == key:
                 bar = self._running_bar(color="cyan")
                 lines.append(f"  [cyan]\u25c9[/] {label:<14} {bar}  [cyan]RUNNING[/]")
             elif state and state.get("status") == "done":
-                bar = self._static_bar(color="green", fill="\u2501")
+                bar = self._static_bar(color="green")
                 lines.append(f"  [green]\u25cf[/] {label:<14} {bar}  [green]DONE[/]")
             else:
-                bar = self._static_bar(color="comment", fill="\u2500")
+                bar = self._static_bar(color="comment", fill=self._PROGRESS_EMPTY)
                 lines.append(f"  [comment]\u25cb[/] {label:<14} {bar}  [comment]PENDING[/]")
         return "\n".join(lines)
 
-    def _update_status(self) -> None:
+    def _refresh_screen_status(self) -> None:
         snapshot = self._build_snapshot()
         widget = self.query_one("#translation-status", Static)
         parts: list[str] = []
@@ -205,8 +211,16 @@ class TranslationScreen(BaseScreen):
             parts.append(f"[red]Failure: {snapshot.latest_failure}[/]")
         if parts:
             parts.append("")
-        parts.append("[dim]t[/]=Translate  [dim]u[/]=Rebuild")
+        batched = getattr(self, "_batched", False)
+        mode = "BATCHED" if batched else "SEQUENTIAL"
+        parts.append(f"[dim]{mode}[/]  [dim]t[/]=Translate  [dim]u[/]=Rebuild  [dim]b[/]=toggle")
         widget.update("\n".join(parts))
+
+    def action_toggle_batched(self) -> None:
+        self._batched = not getattr(self, "_batched", False)
+        status = "BATCHED" if self._batched else "SEQUENTIAL"
+        self.notify(f"Mode: {status}", timeout=2)
+        self._refresh_translation()
 
     def _launch_stage(self, stage_key: str) -> None:
         adapter = self._make_adapter()
@@ -216,6 +230,7 @@ class TranslationScreen(BaseScreen):
 
         if stage_key == "translate-range":
             kwargs = self._chapter_scope_options()
+            kwargs["batched"] = getattr(self, "_batched", False)
             self.start_worker(
                 stage_key,
                 lambda stop_token=None: adapter.launch_stage(

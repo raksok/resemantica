@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container
-from textual.widgets import Static
+from textual.widgets import Input, Static
 
 from resemantica.tui.screens.base import BaseScreen
 
 
 class SettingsScreen(BaseScreen):
+    BINDINGS = [
+        Binding("l", "load_config", "Load"),
+    ]
+
     def _content_widgets(self) -> ComposeResult:
         with Container(id="settings-content"):
             yield Static("Configuration", classes="app-title")
+            yield Input(placeholder="/path/to/config.toml", id="config-path-input")
+            yield Static("", id="settings-active-config")
             yield Static("", id="settings-config-display")
 
     def on_mount(self) -> None:
@@ -22,6 +31,9 @@ class SettingsScreen(BaseScreen):
         self._refresh_settings()
 
     def _refresh_settings(self) -> None:
+        active = self.query_one("#settings-active-config", Static)
+        path = getattr(self.app, "config_path", None)
+        active.update(f"Active: [bold]{path or '[dim]default[/]'}[/]")
         config_display = self.query_one("#settings-config-display", Static)
         config_display.update(self._build_config_text())
 
@@ -75,3 +87,19 @@ class SettingsScreen(BaseScreen):
             return "\n".join(lines)
         except Exception as exc:
             return f"[red]Could not load config: {exc}[/]"
+
+    def action_load_config(self) -> None:
+        path_str = self.query_one("#config-path-input", Input).value
+        if not path_str.strip():
+            self.notify("No path entered", severity="warning", timeout=3)
+            return
+        path = Path(path_str).expanduser().resolve()
+        if not path.exists():
+            self.notify(f"Config not found: {path}", severity="error", timeout=3)
+            return
+        if path.suffix != ".toml":
+            self.notify("Config must be a .toml file", severity="error", timeout=3)
+            return
+        self.app._config_path = path
+        self.notify(f"Config loaded: {path}", timeout=3)
+        self._refresh_settings()

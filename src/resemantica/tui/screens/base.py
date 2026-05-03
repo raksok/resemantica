@@ -21,7 +21,11 @@ from resemantica.tui.launch_control import (
     TuiSession,
     build_snapshot,
 )
-from resemantica.tui.navigation import format_footer_keys, format_location, screen_info_for_class_name
+from resemantica.tui.navigation import (
+    format_footer_keys,
+    format_tab_bar,
+    screen_info_for_class_name,
+)
 
 if TYPE_CHECKING:
     from resemantica.tracking.models import Event
@@ -78,6 +82,9 @@ class BaseScreen(Screen):
     _PULSE_WIDTH = 30
     _PULSE_GLYPHS = "▁▂▃▄▅▆▇█"
     _SPINNER_GLYPHS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _PROGRESS_FILLED = "\u2593"
+    _PROGRESS_ACTIVE = "\u2592"
+    _PROGRESS_EMPTY = "\u2591"
     _REFRESH_INTERVAL_SECONDS = 30.0
     _SPINNER_INTERVAL_SECONDS = 0.25
     _STALE_AFTER_SECONDS = 300
@@ -94,14 +101,13 @@ class BaseScreen(Screen):
         return cast("ResemanticaApp", super().app)
 
     def compose(self) -> ComposeResult:
+        yield Static(id="tab-bar")
         yield Horizontal(
             Static(id="pulse-bar"),
-            Static(id="header-screen-location"),
-            Static(id="header-run-info"),
-            Static(id="header-chapter-progress"),
-            Static(id="header-pass"),
-            id="header-container",
-            classes="header-bar",
+            Static(id="status-run-info"),
+            Static(id="status-chapter-progress"),
+            Static(id="status-pass"),
+            id="status-bar-container",
         )
         yield Vertical(
             Static("Chapter Spine", id="spine-title"),
@@ -133,16 +139,18 @@ class BaseScreen(Screen):
         self._spine_chapter_numbers: list[int] = []
         self._spine_chapter_statuses: dict[int, str] = {}
         self._chapter_to_spine_index: dict[int, int] = {}
+        self._render_tab_bar()
         self._refresh_all()
         self.set_interval(self._REFRESH_INTERVAL_SECONDS, self._refresh_all)
-        self.set_interval(self._SPINNER_INTERVAL_SECONDS, self._refresh_header_pass)
+        self.set_interval(self._SPINNER_INTERVAL_SECONDS, self._refresh_status_pass)
 
     def _refresh_all(self) -> None:
+        self._render_tab_bar()
         if self._fast_refresh_active():
             fast_state = self._cached_run_state_for_refresh() or {}
             events = self._cached_recent_events_for_refresh()
             chapter_count = self._cached_chapter_count_for_refresh()
-            self._update_header(state=fast_state, events=events, chapter_count=chapter_count)
+            self._update_status(state=fast_state, events=events, chapter_count=chapter_count)
             self._update_footer(state=fast_state, events=events)
             return
 
@@ -154,7 +162,7 @@ class BaseScreen(Screen):
             events=events,
             chapter_count=chapter_count,
         )
-        self._update_header(state=state, events=events, chapter_count=chapter_count)
+        self._update_status(state=state, events=events, chapter_count=chapter_count)
         self._update_spine()
         self._update_footer(state=state, events=events)
 
@@ -273,7 +281,7 @@ class BaseScreen(Screen):
             return None
         return getattr(app, "run_id", None)
 
-    def _update_header(
+    def _update_status(
         self,
         *,
         state: dict[str, Any] | None = None,
@@ -287,16 +295,12 @@ class BaseScreen(Screen):
         pulse = self.query_one("#pulse-bar", Static)
         pulse.update(self._render_pulse_bar(state, events))
 
-        screen_info = screen_info_for_class_name(self.__class__.__name__)
-        screen_location = self.query_one("#header-screen-location", Static)
-        screen_location.update(format_location(screen_info))
-
         run_id = self._get_run_id() or "--"
         release_id = self._get_release_id() or "--"
-        run_info = self.query_one("#header-run-info", Static)
+        run_info = self.query_one("#status-run-info", Static)
         run_info.update(f"Run: {run_id}  Rel: {release_id}")
 
-        chapter_progress = self.query_one("#header-chapter-progress", Static)
+        chapter_progress = self.query_one("#status-chapter-progress", Static)
         chapter_progress.update(
             self._format_chapter_progress(
                 total_chapters=chapter_count,
@@ -322,7 +326,7 @@ class BaseScreen(Screen):
             running=bool(state_for_indicator and state_for_indicator.get("status") == "running"),
             stale=self._is_run_stale(state_for_indicator, events),
         )
-        self._refresh_header_pass()
+        self._refresh_status_pass()
 
     def _refresh_live_progress(self) -> None:
         if not self._fast_refresh_active():
@@ -330,12 +334,19 @@ class BaseScreen(Screen):
         events = self._recent_events_for_refresh()
         state = self._cached_run_state_for_refresh() or {}
         chapter_count = self._cached_chapter_count_for_refresh()
-        self._update_header(state=state, events=events, chapter_count=chapter_count)
+        self._update_status(state=state, events=events, chapter_count=chapter_count)
         self._update_footer(state=state, events=events)
 
-    def _refresh_header_pass(self) -> None:
+    def _render_tab_bar(self) -> None:
+        info = screen_info_for_class_name(self.__class__.__name__)
+        bar = self.query_one_optional("#tab-bar", Static)
+        if bar is None:
+            return
+        bar.update(format_tab_bar(info))
+
+    def _refresh_status_pass(self) -> None:
         indicator = getattr(self, "_header_pass_indicator", HeaderPassIndicator())
-        pass_widget = self.query_one_optional("#header-pass", Static)
+        pass_widget = self.query_one_optional("#status-pass", Static)
         if pass_widget is None:
             return
         if indicator.stale:
@@ -727,7 +738,13 @@ class BaseScreen(Screen):
         checkpoint: dict[str, Any] | None,
     ) -> str:
         current = cls._chapter_index_from_checkpoint(checkpoint)
-        return f"Ch {current}/{max(0, total_chapters)}"
+        bar_width = 10
+        if current == 0 or total_chapters == 0:
+            bar = cls._PROGRESS_EMPTY * bar_width
+        else:
+            filled = int((current / max(1, total_chapters)) * bar_width)
+            bar = cls._PROGRESS_FILLED * filled + cls._PROGRESS_EMPTY * (bar_width - filled)
+        return f"{bar} Ch {current}/{max(0, total_chapters)}"
 
     @staticmethod
     def _event_type_matches(event_type: str, suffix: str) -> bool:
@@ -1000,32 +1017,33 @@ class BaseScreen(Screen):
             )
         return models
 
-    @staticmethod
-    def _render_scoped_bar(model: StageProgress, status: str) -> str:
+    @classmethod
+    def _render_scoped_bar(cls, model: StageProgress, status: str) -> str:
         width = 20
         total = max(1, model.total or 0)
         completed = min(max(0, model.completed), total)
         if completed >= total:
-            return "[green]\u2501" + "\u2501" * (width - 1) + "[/]"
+            return f"[green]{cls._PROGRESS_FILLED * width}[/]"
         filled = int((completed / total) * width)
         has_active = model.active_chapter is not None or status == "running"
-        marker = "\u257a" if has_active else "\u2500"
+        marker = cls._PROGRESS_ACTIVE if has_active else cls._PROGRESS_EMPTY
         empty = max(0, width - filled - (1 if has_active else 0))
         color = "cyan" if status == "running" or has_active else "comment"
-        filled_text = "\u2501" * filled
+        filled_text = cls._PROGRESS_FILLED * filled
         marker_text = marker if has_active else ""
-        empty_text = "\u2500" * empty
+        empty_text = cls._PROGRESS_EMPTY * empty
         return f"[{color}]{filled_text}{marker_text}{empty_text}[/]"
 
-    @staticmethod
-    def _static_bar(*, color: str, fill: str, width: int = 20) -> str:
-        return f"[{color}]{fill * width}[/]"
+    @classmethod
+    def _static_bar(cls, *, color: str, fill: str | None = None, width: int = 20) -> str:
+        char = fill or cls._PROGRESS_FILLED
+        return f"[{color}]{char * width}[/]"
 
-    @staticmethod
-    def _running_bar(*, color: str, width: int = 20) -> str:
-        filled = "\u2501" * 8
-        marker = "\u257a"
-        remaining = "\u2500" * (width - len(filled) - 1)
+    @classmethod
+    def _running_bar(cls, *, color: str, width: int = 20) -> str:
+        filled = cls._PROGRESS_FILLED * 8
+        marker = cls._PROGRESS_ACTIVE
+        remaining = cls._PROGRESS_EMPTY * (width - 9)
         return f"[{color}]{filled}{marker}{remaining}[/]"
 
     @classmethod
@@ -1131,8 +1149,14 @@ class BaseScreen(Screen):
         warnings = sum(1 for event in events if event.severity == "warning")
         failures = sum(1 for event in events if event.severity == "error")
         elapsed = cls._format_elapsed(state, now=now)
+        total_blocks = max(len(seen_blocks), 1)
+        bar_width = 16
+        completed_count = len(completed_blocks)
+        seen_count = len(seen_blocks)
+        filled = int((completed_count / total_blocks) * bar_width)
+        bar = cls._PROGRESS_FILLED * filled + cls._PROGRESS_EMPTY * (bar_width - filled)
         return {
-            "block_progress": f"{len(completed_blocks)}/{len(seen_blocks)} blocks",
+            "block_progress": f"{bar} {completed_count}/{seen_count} blk",
             "warnings": f"Warn {warnings}",
             "failures": f"Fail {failures}",
             "elapsed": elapsed,

@@ -24,8 +24,10 @@ PREPRO_STAGE_KEYS = [
 
 class PreprocessingScreen(BaseScreen):
     BINDINGS = [
-        Binding("g", "launch_glossary", "Glossary"),
-        Binding("s", "launch_summaries", "Summaries"),
+        Binding("d", "launch_glossary_discover", "Disc"),
+        Binding("t", "launch_glossary_translate", "Trans"),
+        Binding("p", "launch_glossary_promote", "Prom"),
+        Binding("s", "launch_summaries", "Sum"),
         Binding("i", "launch_idioms", "Idioms"),
         Binding("r", "launch_graph", "Graph"),
         Binding("b", "launch_packets", "Packets"),
@@ -53,14 +55,14 @@ class PreprocessingScreen(BaseScreen):
         stage_list = self.query_one("#preprocessing-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
 
-        self._update_status()
+        self._refresh_screen_status()
         self._update_event_tail()
 
     def _refresh_preprocessing(self) -> None:
         state = self._run_state_for_refresh()
         stage_list = self.query_one("#preprocessing-stage-list", Static)
         stage_list.update(self._build_stage_progress(state))
-        self._update_status()
+        self._refresh_screen_status()
         self._update_event_tail()
 
     def _build_stage_progress(self, state: dict | None = None) -> str:
@@ -139,7 +141,10 @@ class PreprocessingScreen(BaseScreen):
                         f"{phase_progress.completed}/{phase_progress.total}"
                     )
         lines.append("")
-        lines.append("[dim]g[/]=Glossary  [dim]s[/]=Summaries  [dim]i[/]=Idioms  [dim]r[/]=Graph  [dim]b[/]=Packets")
+        lines.append(
+            "[dim]d[/]=Disc  [dim]t[/]=Trans  [dim]p[/]=Prom  "
+            "[dim]s[/]=Sum  [dim]i[/]=Idioms  [dim]r[/]=Graph  [dim]b[/]=Packets"
+        )
         return "\n".join(lines)
 
     @classmethod
@@ -205,15 +210,15 @@ class PreprocessingScreen(BaseScreen):
             lines.append(f"  [{color}]{marker}[/] {label:<14} {bar}  [{color}]{status:<7}[/]")
         return "\n".join(lines)
 
-    @staticmethod
-    def _render_stage_bar(status: str) -> str:
+    @classmethod
+    def _render_stage_bar(cls, status: str) -> str:
         if status == "DONE":
-            return BaseScreen._static_bar(color="green", fill="\u2501")
+            return cls._static_bar(color="green")
         if status == "RUNNING":
-            return BaseScreen._running_bar(color="cyan")
-        return BaseScreen._static_bar(color="comment", fill="\u2500")
+            return cls._running_bar(color="cyan")
+        return cls._static_bar(color="comment", fill=cls._PROGRESS_EMPTY)
 
-    def _update_status(self) -> None:
+    def _refresh_screen_status(self) -> None:
         snapshot = self._snapshot()
         widget = self.query_one("#preprocessing-status", Static)
         parts: list[str] = []
@@ -282,8 +287,14 @@ class PreprocessingScreen(BaseScreen):
 
         self.app.push_screen(ConfirmDialog("Confirm", message), on_confirm)
 
-    def action_launch_glossary(self) -> None:
-        self._confirm_then_launch("preprocess-glossary", "Start Glossary preprocessing?")
+    def action_launch_glossary_discover(self) -> None:
+        self._confirm_then_launch("preprocess-glossary", "Start Glossary discover?")
+
+    def action_launch_glossary_translate(self) -> None:
+        self._confirm_then_launch("preprocess-glossary", "Start Glossary translate?")
+
+    def action_launch_glossary_promote(self) -> None:
+        self._confirm_then_launch("preprocess-glossary", "Start Glossary promote?")
 
     def action_launch_summaries(self) -> None:
         self._confirm_then_launch("preprocess-summaries", "Start Summaries preprocessing?")
