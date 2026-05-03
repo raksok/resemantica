@@ -1,4 +1,4 @@
-# version: 1.1
+# version: 1.2
 SUMMARY_ZH_STRUCTURED
 
 ## CHAPTER NUMBER
@@ -23,6 +23,8 @@ Return JSON only and follow this schema exactly:
   "narrative_progression": "",
   "is_story_chapter": true
 }}
+
+The "is_story_chapter" field is REQUIRED. It MUST be present in every response.
 
 ## NON-STORY CHAPTER DETECTION
 You must determine if this chapter contains actual story content. Set "is_story_chapter" to false if the chapter is:

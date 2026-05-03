@@ -39,8 +39,19 @@ class GeneratedChapterSummary:
 
 
 def _parse_summary(raw_output: str) -> dict[str, Any] | None:
+    text = raw_output.strip()
+    if text.startswith("```"):
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1 :]
+        else:
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3].strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
     try:
-        parsed = json.loads(raw_output)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
@@ -179,6 +190,7 @@ def _generate_structured_summary(
             parsed = _parse_summary(raw_output)
         if parsed is None:
             return None, raw_output
+        parsed["chapter_number"] = chapter_number
         parsed_chunks.append(parsed)
 
     if len(parsed_chunks) == 1:
