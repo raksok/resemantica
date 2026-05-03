@@ -14,6 +14,7 @@ class ModelsConfig:
     analyst_context_window: int | None = None
     analyst_max_context_ratio: float | None = None
     embedding_name: str = "bge-M3"
+    pruning_threshold: float = 0.3
 
     def effective_context_window(self, role: str, global_window: int) -> int:
         if role == "translator":
@@ -111,10 +112,12 @@ class DerivedPaths:
     glossary_dir: Path
     glossary_candidates_path: Path
     glossary_conflicts_path: Path
+    glossary_review_path: Path
     idioms_dir: Path
     idiom_candidates_path: Path
     idiom_policies_path: Path
     idiom_conflicts_path: Path
+    idiom_review_path: Path
     summaries_dir: Path
     graph_dir: Path
     graph_snapshot_path: Path
@@ -233,6 +236,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             embedding_name=_as_str(
                 models.get("embedding_name", ModelsConfig().embedding_name),
                 "models.embedding_name",
+            ),
+            pruning_threshold=_as_float(
+                models.get("pruning_threshold", ModelsConfig().pruning_threshold),
+                "models.pruning_threshold",
             ),
         ),
         llm=LLMConfig(
@@ -353,6 +360,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
     if config.translation.pass2_concurrency < 1:
         raise ValueError("translation.pass2_concurrency must be >= 1.")
+    if config.models.pruning_threshold < 0 or config.models.pruning_threshold > 1:
+        raise ValueError("models.pruning_threshold must be in [0.0, 1.0].")
     if config.events.progress_sample_every <= 0:
         raise ValueError("events.progress_sample_every must be > 0.")
     for role in ("translator", "analyst"):
@@ -394,10 +403,12 @@ def derive_paths(
         glossary_dir=release_root / "glossary",
         glossary_candidates_path=release_root / "glossary" / "candidates.json",
         glossary_conflicts_path=release_root / "glossary" / "conflicts.json",
+        glossary_review_path=release_root / "glossary" / "review.json",
         idioms_dir=release_root / "idioms",
         idiom_candidates_path=release_root / "idioms" / "candidates.json",
         idiom_policies_path=release_root / "idioms" / "policies.json",
         idiom_conflicts_path=release_root / "idioms" / "conflicts.json",
+        idiom_review_path=release_root / "idioms" / "review.json",
         summaries_dir=release_root / "summaries",
         graph_dir=release_root / "graph",
         graph_snapshot_path=release_root / "graph" / "snapshot.json",

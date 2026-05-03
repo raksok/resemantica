@@ -6,6 +6,37 @@ from typing import Sequence
 from resemantica.db.sqlite import ensure_schema
 from resemantica.idioms.models import IdiomCandidate, IdiomConflict, IdiomPolicy
 
+_IDIOM_UPSERT_SQL = """
+INSERT INTO idiom_candidates(
+    candidate_id, release_id, source_text, normalized_source_text,
+    meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+    first_seen_chapter, last_seen_chapter, appearance_count,
+    evidence_snippet, detection_run_id, candidate_status,
+    validation_status, conflict_reason, analyst_model_name,
+    analyst_prompt_version, translation_run_id, translator_model_name,
+    translator_prompt_version, schema_version, updated_at
+)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(release_id, normalized_source_text)
+DO UPDATE SET
+    source_text = excluded.source_text,
+    meaning_zh = idiom_candidates.meaning_zh,
+    meaning_en = idiom_candidates.meaning_en,
+    preferred_rendering_en = excluded.preferred_rendering_en,
+    usage_notes = excluded.usage_notes,
+    first_seen_chapter = MIN(idiom_candidates.first_seen_chapter, excluded.first_seen_chapter),
+    last_seen_chapter = MAX(idiom_candidates.last_seen_chapter, excluded.last_seen_chapter),
+    appearance_count = idiom_candidates.appearance_count + excluded.appearance_count,
+    evidence_snippet = excluded.evidence_snippet,
+    detection_run_id = excluded.detection_run_id,
+    candidate_status = excluded.candidate_status,
+    validation_status = excluded.validation_status,
+    conflict_reason = excluded.conflict_reason,
+    analyst_model_name = excluded.analyst_model_name,
+    analyst_prompt_version = excluded.analyst_prompt_version,
+    updated_at = CURRENT_TIMESTAMP
+"""
+
 
 def ensure_idiom_schema(conn: sqlite3.Connection) -> None:
     ensure_schema(conn, "idioms")
@@ -81,40 +112,7 @@ def upsert_discovered_candidates(
         return
     with conn:
         conn.executemany(
-            """
-            INSERT INTO idiom_candidates(
-                candidate_id, release_id, source_text, normalized_source_text,
-                meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
-                first_seen_chapter, last_seen_chapter, appearance_count,
-                evidence_snippet, detection_run_id, candidate_status,
-                validation_status, conflict_reason, analyst_model_name,
-                analyst_prompt_version, translation_run_id, translator_model_name,
-                translator_prompt_version, schema_version, updated_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(candidate_id)
-            DO UPDATE SET
-                source_text = excluded.source_text,
-                normalized_source_text = excluded.normalized_source_text,
-                meaning_zh = excluded.meaning_zh,
-                preferred_rendering_en = excluded.preferred_rendering_en,
-                usage_notes = excluded.usage_notes,
-                first_seen_chapter = excluded.first_seen_chapter,
-                last_seen_chapter = excluded.last_seen_chapter,
-                appearance_count = excluded.appearance_count,
-                evidence_snippet = excluded.evidence_snippet,
-                detection_run_id = excluded.detection_run_id,
-                candidate_status = excluded.candidate_status,
-                validation_status = excluded.validation_status,
-                conflict_reason = excluded.conflict_reason,
-                analyst_model_name = excluded.analyst_model_name,
-                analyst_prompt_version = excluded.analyst_prompt_version,
-                translation_run_id = excluded.translation_run_id,
-                translator_model_name = excluded.translator_model_name,
-                translator_prompt_version = excluded.translator_prompt_version,
-                schema_version = excluded.schema_version,
-                updated_at = CURRENT_TIMESTAMP
-            """,
+            _IDIOM_UPSERT_SQL,
             [
                 (
                     candidate.candidate_id,
@@ -220,6 +218,30 @@ def save_idiom_translation(
 
 
 def list_candidates_for_promotion(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+) -> list[IdiomCandidate]:
+    rows = conn.execute(
+        """
+        SELECT candidate_id, release_id, source_text, normalized_source_text,
+               meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+               first_seen_chapter, last_seen_chapter, appearance_count,
+               evidence_snippet, detection_run_id,
+               translation_run_id, candidate_status, validation_status, conflict_reason,
+                 analyst_model_name, analyst_prompt_version, translator_model_name,
+                 translator_prompt_version, schema_version
+        FROM idiom_candidates
+        WHERE release_id = ?
+          AND candidate_status = 'translated'
+        ORDER BY first_seen_chapter, candidate_id
+        """,
+        (release_id,),
+    ).fetchall()
+    return [_candidate_from_row(row) for row in rows]
+
+
+def list_candidates_for_review(
     conn: sqlite3.Connection,
     *,
     release_id: str,

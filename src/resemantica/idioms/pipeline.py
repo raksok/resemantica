@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +13,7 @@ from resemantica.db.idiom_repo import (
     insert_conflicts,
     list_candidates,
     list_candidates_for_promotion,
+    list_candidates_for_review,
     list_candidates_for_translation,
     list_conflicts,
     list_policies,
@@ -21,6 +25,7 @@ from resemantica.db.idiom_repo import (
 )
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.idioms.extractor import extract_idioms
+from resemantica.idioms.models import IdiomCandidate
 from resemantica.idioms.validators import normalize_idiom_source, validate_idiom_policy
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt, render_named_sections
@@ -92,6 +97,15 @@ def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -
     )
 
 
+def _clean_llm_response(text: str) -> str:
+    text = re.sub(
+        r'^(?:Category|Translation|Term|Evidence|Output|Result)\s*:\s*',
+        '', text, flags=re.IGNORECASE | re.MULTILINE
+    ).strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else text
+
+
 def translate_idiom_candidates(
     *,
     conn: sqlite3.Connection,
@@ -139,7 +153,8 @@ def translate_idiom_candidates(
         rendered = translator_client.generate_text(
             model_name=translator_model_name,
             prompt=rendering_prompt,
-        ).strip()
+        )
+        rendered = _clean_llm_response(rendered)
 
         # Call 2: meaning translation
         meaning_prompt = render_named_sections(
@@ -151,7 +166,8 @@ def translate_idiom_candidates(
         meaning = translator_client.generate_text(
             model_name=translator_model_name,
             prompt=meaning_prompt,
-        ).strip()
+        )
+        meaning = _clean_llm_response(meaning)
 
         save_idiom_translation(
             conn,
@@ -368,6 +384,263 @@ def preprocess_idioms(
             usage_payload_delta(analyst_client, combined_usage_before["analyst"]),
             usage_payload_delta(translator_client, combined_usage_before["translator"]),
         ),
+    }
+
+
+def _is_add_idiom_entry(entry: dict[str, Any]) -> bool:
+    return entry.get("action") == "add" and bool(entry.get("source_text"))
+
+
+def _apply_idiom_review_overrides(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    review_data: dict[str, Any],
+) -> list[IdiomCandidate]:
+    from hashlib import sha256 as _sha256
+
+    if not isinstance(review_data.get("entries"), list):
+        raise ValueError("review_data must contain an 'entries' list")
+
+    entry_by_id: dict[str, dict[str, Any]] = {}
+    add_entries: list[dict[str, Any]] = []
+    for entry in review_data["entries"]:
+        cid = entry.get("candidate_id")
+        if cid:
+            entry_by_id[cid] = entry
+        elif _is_add_idiom_entry(entry):
+            add_entries.append(entry)
+
+    all_candidates = {c.candidate_id: c for c in list_candidates(conn, release_id=release_id)}
+    applied_ids: set[str] = set()
+
+    for cid, review_entry in entry_by_id.items():
+        if review_entry.get("action") == "delete":
+            continue
+        candidate = all_candidates.get(cid)
+        if candidate is None:
+            continue
+        new_rendering = str(review_entry.get("rendering", "")).strip()
+        old_rendering = candidate.preferred_rendering_en.strip()
+        if new_rendering and new_rendering != old_rendering:
+            conn.execute(
+                """
+                UPDATE idiom_candidates
+                SET preferred_rendering_en = ?,
+                    translation_run_id = 'review',
+                    candidate_status = 'translated',
+                    validation_status = 'pending',
+                    conflict_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                """,
+                (new_rendering, cid),
+            )
+        applied_ids.add(cid)
+
+    if add_entries:
+        new_cands: list[IdiomCandidate] = []
+        for entry in add_entries:
+            source_text = str(entry.get("source_text", "")).strip()
+            rendering = str(entry.get("rendering", "")).strip()
+            if not source_text or not rendering:
+                continue
+            normalized_source = normalize_idiom_source(source_text)
+            digest = _sha256(f"{release_id}:review:{source_text}".encode()).hexdigest()[:24]
+            candidate = IdiomCandidate(
+                candidate_id=f"ican_review_{digest}",
+                release_id=release_id,
+                source_text=source_text,
+                normalized_source_text=normalized_source,
+                meaning_zh=str(entry.get("meaning_zh", "")),
+                meaning_en="",
+                preferred_rendering_en=rendering,
+                usage_notes=str(entry.get("usage_notes") or ""),
+                first_seen_chapter=1,
+                last_seen_chapter=1,
+                appearance_count=1,
+                evidence_snippet="",
+                detection_run_id="review",
+                candidate_status="translated",
+                validation_status="pending",
+                conflict_reason=None,
+                analyst_model_name="human",
+                analyst_prompt_version="review",
+                translation_run_id="review",
+                translator_model_name="human",
+                translator_prompt_version="review",
+                schema_version=1,
+            )
+            new_cands.append(candidate)
+        if new_cands:
+            upsert_discovered_candidates(conn, candidates=new_cands)
+            for c in new_cands:
+                all_candidates[c.candidate_id] = c
+                applied_ids.add(c.candidate_id)
+
+    deleted_ids = {cid for cid, re in entry_by_id.items() if re.get("action") == "delete"}
+    result = []
+    for cid in applied_ids:
+        if cid in deleted_ids:
+            continue
+        candidate = all_candidates.get(cid)
+        if candidate is not None and candidate.preferred_rendering_en.strip():
+            result.append(candidate)
+    return result
+
+
+def review_idiom_candidates(
+    *,
+    release_id: str,
+    run_id: str,
+    config: AppConfig | None = None,
+    project_root: Path | None = None,
+) -> dict[str, Any]:
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "idioms")
+    try:
+        candidates = list_candidates_for_review(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    entries = [
+        {
+            "candidate_id": c.candidate_id,
+            "source_text": c.source_text,
+            "meaning_zh": c.meaning_zh,
+            "rendering": c.preferred_rendering_en,
+            "action": "keep",
+        }
+        for c in candidates
+    ]
+    review_data = {
+        "review_schema_version": 1,
+        "release_id": release_id,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "instructions": (
+            "Edit 'rendering' to override an idiom's English translation. "
+            "Set 'action' to 'delete' to remove an entry. "
+            "Add new entries with 'action': 'add' "
+            "(omit candidate_id, provide source_text, meaning_zh, rendering)."
+        ),
+        "entries": entries,
+    }
+    _write_json(paths.idiom_review_path, review_data)
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.review.completed",
+        entries_written=len(entries),
+        review_path=str(paths.idiom_review_path),
+    )
+    return {
+        "status": "success",
+        "release_id": release_id,
+        "run_id": run_id,
+        "entries_written": len(entries),
+        "review_path": str(paths.idiom_review_path),
+    }
+
+
+def promote_idiom_candidates(
+    *,
+    release_id: str,
+    run_id: str,
+    config: AppConfig | None = None,
+    project_root: Path | None = None,
+    review_file_path: Path | None = None,
+    stop_token: StopToken | None = None,
+) -> dict[str, Any]:
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "idioms")
+    try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"promote_completed": False},
+            message="Idiom promotion stopped before starting",
+        )
+        _emit(run_id, release_id, f"{_STAGE_NAME}.promote.started")
+
+        if review_file_path is not None:
+            if not review_file_path.exists():
+                raise FileNotFoundError(f"Review file not found: {review_file_path}")
+            review_data = json.loads(review_file_path.read_text(encoding="utf-8"))
+            if review_data.get("review_schema_version") != 1:
+                raise ValueError(
+                    f"Unsupported review schema version: {review_data.get('review_schema_version')}"
+                )
+            pending_candidates = _apply_idiom_review_overrides(
+                conn, release_id=release_id, review_data=review_data
+            )
+        else:
+            pending_candidates = list_candidates_for_promotion(conn, release_id=release_id)
+
+        existing_policies = list_policies(conn, release_id=release_id)
+        validation = validate_idiom_policy(
+            candidates=pending_candidates,
+            existing_policies=existing_policies,
+            approval_run_id=run_id,
+        )
+        insert_conflicts(conn, conflicts=validation.conflicts)
+        promote_policies(conn, policies=validation.promotion_entries)
+
+        reasons_by_candidate: dict[str, list[str]] = {}
+        for conflict in validation.conflicts:
+            reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
+        for candidate_id, reasons in reasons_by_candidate.items():
+            mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
+        for candidate_id in validation.promoted_candidate_ids:
+            if candidate_id in reasons_by_candidate:
+                continue
+            mark_candidate_promoted(conn, candidate_id=candidate_id)
+
+        _write_candidate_snapshot(
+            conn,
+            release_id=release_id,
+            output_path=paths.idiom_candidates_path,
+        )
+        _write_policy_snapshot(
+            conn,
+            release_id=release_id,
+            output_path=paths.idiom_policies_path,
+        )
+        _write_conflict_snapshot(
+            conn,
+            release_id=release_id,
+            output_path=paths.idiom_conflicts_path,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.promote.completed",
+            promoted_count=len(validation.promotion_entries),
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "promote_completed": True,
+                "promoted_count": len(validation.promotion_entries),
+            },
+            message="Idiom preprocess stopped after promotion",
+        )
+    finally:
+        conn.close()
+
+    return {
+        "status": "success",
+        "release_id": release_id,
+        "run_id": run_id,
+        "promoted_count": len(validation.promotion_entries),
+        "conflict_count": len(validation.conflicts),
+        "candidates_artifact": str(paths.idiom_candidates_path),
+        "policies_artifact": str(paths.idiom_policies_path),
+        "conflicts_artifact": str(paths.idiom_conflicts_path),
     }
 
 

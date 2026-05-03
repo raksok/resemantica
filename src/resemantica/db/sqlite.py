@@ -77,6 +77,7 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             candidate_status TEXT NOT NULL,
             validation_status TEXT NOT NULL,
             conflict_reason TEXT,
+            critic_score REAL,
             translator_model_name TEXT,
             translator_prompt_version TEXT,
             analyst_model_name TEXT,
@@ -185,7 +186,8 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             translator_model_name TEXT,
             translator_prompt_version TEXT,
             schema_version INTEGER NOT NULL DEFAULT 1,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (release_id, normalized_source_text)
         );
 
         CREATE TABLE IF NOT EXISTS idiom_policies (

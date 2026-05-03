@@ -17,6 +17,58 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _ASCII_ALPHA_RE = re.compile(r"[A-Za-z]")
 
+# Chinese date/time patterns — matches both numeric and CJK forms
+_DATE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\d+[\.\-\/]\d+[\.\-\/]\d+"),                        # 2024.1.1, 01-15, 5/3
+    re.compile(r"二十[一二三四五六七八九十][年]"),                        # 二十一年
+    re.compile(r"[零一二三四五六七八九十\d]+[年月日号]"),                  # 三月, 5月, 十五日, 2024年
+    re.compile(r"[零一二三四五六七八九十\d]+月[零一二三四五六七八九十\d]+[日号]"),  # 二月二, 三月十五
+    re.compile(r"[零一二三四五六七八九十\d]+[月][初旬][一二三四五六七八九十\d]*"),  # 三月初, 五月中旬
+    re.compile(r"[今年明后去]年"),                                      # 今年, 明年, 去年
+    re.compile(r"[春夏秋冬][天季节]"),                                   # 春天, 夏季, 秋天
+    re.compile(r"[上中下][午旬][年月日]?"),                              # 上午, 中午, 下旬
+]
+
+# Common Chinese nouns/expressions frequently misidentified as glossary terms
+_COMMON_STOPLIST: set[str] = {
+    "时候", "时间", "地方", "学校", "家里", "面前", "身后",
+    "眼前", "心中", "手上", "脚下", "身上",
+    "这时", "那时", "此时", "此刻",
+    "突然", "忽然", "虽然", "但是", "因为", "所以", "如果",
+    "已经", "还是", "就是", "这个", "那个", "什么", "怎么",
+    "我们", "你们", "他们", "自己", "别人",
+    "知道", "发现", "觉得", "想到", "看到", "听到", "说道",
+    "起来", "出来", "过来", "回来",
+    "没有", "不是", "可以", "能够", "应该",
+}
+
+
+def _match_date_pattern(term: str) -> bool:
+    for pattern in _DATE_PATTERNS:
+        if pattern.fullmatch(term):
+            return True
+    return False
+
+
+def _match_stoplist(term: str) -> bool:
+    return term in _COMMON_STOPLIST
+
+
+def apply_deterministic_filter(candidates: list[GlossaryCandidate]) -> list[GlossaryCandidate]:
+    for candidate in candidates:
+        if candidate.candidate_status != "discovered":
+            continue
+        reasons: list[str] = []
+        if _match_date_pattern(candidate.source_term):
+            reasons.append("date_pattern")
+        if _match_stoplist(candidate.source_term):
+            reasons.append("stop_list")
+        if reasons:
+            candidate.candidate_status = "filtered"
+            candidate.validation_status = "pending"
+            candidate.conflict_reason = f"deterministic_filter: {'|'.join(reasons)}"
+    return candidates
+
 
 def normalize_term(term: str) -> str:
     normalized = _WHITESPACE_RE.sub(" ", term.strip())

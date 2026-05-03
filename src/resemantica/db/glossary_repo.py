@@ -12,6 +12,7 @@ def ensure_glossary_schema(conn: sqlite3.Connection) -> None:
 
 
 def _candidate_from_row(row: sqlite3.Row) -> GlossaryCandidate:
+    raw_critic = row["critic_score"]
     return GlossaryCandidate(
         candidate_id=str(row["candidate_id"]),
         release_id=str(row["release_id"]),
@@ -34,6 +35,7 @@ def _candidate_from_row(row: sqlite3.Row) -> GlossaryCandidate:
         candidate_status=str(row["candidate_status"]),
         validation_status=str(row["validation_status"]),
         conflict_reason=(None if row["conflict_reason"] is None else str(row["conflict_reason"])),
+        critic_score=(float(raw_critic) if raw_critic is not None else None),
         analyst_model_name=(
             None if row["analyst_model_name"] is None else str(row["analyst_model_name"])
         ),
@@ -98,11 +100,11 @@ def upsert_discovered_candidates(
                 category, source_language, first_seen_chapter, last_seen_chapter,
                 appearance_count, evidence_snippet, candidate_translation_en,
                 normalized_target_term, discovery_run_id, translation_run_id,
-                candidate_status, validation_status, conflict_reason,
+                candidate_status, validation_status, conflict_reason, critic_score,
                 analyst_model_name, analyst_prompt_version,
                 translator_model_name, translator_prompt_version, schema_version, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(release_id, normalized_source_term, category)
             DO UPDATE SET
                 source_term = excluded.source_term,
@@ -110,6 +112,10 @@ def upsert_discovered_candidates(
                 last_seen_chapter = MAX(excluded.last_seen_chapter, last_seen_chapter),
                 appearance_count = appearance_count + excluded.appearance_count,
                 evidence_snippet = excluded.evidence_snippet,
+                candidate_status = excluded.candidate_status,
+                validation_status = excluded.validation_status,
+                conflict_reason = excluded.conflict_reason,
+                critic_score = excluded.critic_score,
                 discovery_run_id = excluded.discovery_run_id,
                 analyst_model_name = excluded.analyst_model_name,
                 analyst_prompt_version = excluded.analyst_prompt_version,
@@ -134,6 +140,7 @@ def upsert_discovered_candidates(
                     candidate.candidate_status,
                     candidate.validation_status,
                     candidate.conflict_reason,
+                    candidate.critic_score,
                     candidate.analyst_model_name,
                     candidate.analyst_prompt_version,
                     candidate.translator_model_name,
@@ -152,7 +159,7 @@ def list_candidates(conn: sqlite3.Connection, *, release_id: str) -> list[Glossa
                source_language, first_seen_chapter, last_seen_chapter, appearance_count,
                evidence_snippet, candidate_translation_en, normalized_target_term,
                discovery_run_id, translation_run_id, candidate_status, validation_status,
-               conflict_reason, analyst_model_name, analyst_prompt_version,
+               conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
                translator_model_name, translator_prompt_version, schema_version
         FROM glossary_candidates
         WHERE release_id = ?
@@ -174,7 +181,7 @@ def list_candidates_for_translation(
                source_language, first_seen_chapter, last_seen_chapter, appearance_count,
                evidence_snippet, candidate_translation_en, normalized_target_term,
                discovery_run_id, translation_run_id, candidate_status, validation_status,
-               conflict_reason, analyst_model_name, analyst_prompt_version,
+               conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
                translator_model_name, translator_prompt_version, schema_version
         FROM glossary_candidates
         WHERE release_id = ?
@@ -197,13 +204,36 @@ def list_candidates_for_promotion(
                source_language, first_seen_chapter, last_seen_chapter, appearance_count,
                evidence_snippet, candidate_translation_en, normalized_target_term,
                discovery_run_id, translation_run_id, candidate_status, validation_status,
-               conflict_reason, analyst_model_name, analyst_prompt_version,
+               conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
                translator_model_name, translator_prompt_version, schema_version
         FROM glossary_candidates
         WHERE release_id = ?
           AND candidate_translation_en IS NOT NULL
           AND candidate_translation_en != ''
           AND candidate_status != 'promoted'
+        ORDER BY first_seen_chapter, normalized_source_term, category
+        """,
+        (release_id,),
+    ).fetchall()
+    return [_candidate_from_row(row) for row in rows]
+
+
+def list_candidates_for_review(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+) -> list[GlossaryCandidate]:
+    rows = conn.execute(
+        """
+        SELECT candidate_id, release_id, source_term, normalized_source_term, category,
+               source_language, first_seen_chapter, last_seen_chapter, appearance_count,
+               evidence_snippet, candidate_translation_en, normalized_target_term,
+               discovery_run_id, translation_run_id, candidate_status, validation_status,
+               conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
+               translator_model_name, translator_prompt_version, schema_version
+        FROM glossary_candidates
+        WHERE release_id = ?
+          AND candidate_status = 'translated'
         ORDER BY first_seen_chapter, normalized_source_term, category
         """,
         (release_id,),

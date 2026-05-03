@@ -1,8 +1,7 @@
-# version: 1.0
+# version: 2.0
 
-CATEGORY: {CATEGORY}
-EVIDENCE: {EVIDENCE_SNIPPET}
+CONTEXT: {EVIDENCE_SNIPPET}
 
-Translate the following zh into en with no extra commentary.
+This is text of {CATEGORY}, Translate the following `zh` into `en` with no extra explanation.
 
 {SOURCE_TERM}

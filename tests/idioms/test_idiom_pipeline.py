@@ -347,12 +347,20 @@ def test_duplicate_conflict_rejects_policy_promotion(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "m5-duplicate-conflict"
+
+    # Write two chapters with the same idiom to test upsert merge
     _write_extracted_chapter(
         release_id=release_id,
         chapter_number=1,
         source_text="他想一箭双雕。",
     )
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=2,
+        source_text="此计可谓一箭双雕。",
+    )
 
+    # Both chapters detect the same idiom — should merge into one candidate
     llm = ScriptedIdiomLLM(
         {
             1: [
@@ -360,11 +368,13 @@ def test_duplicate_conflict_rejects_policy_promotion(
                     "source_text": "一箭双雕",
                     "meaning_zh": "一举两得",
                 },
+            ],
+            2: [
                 {
                     "source_text": "一箭双雕",
-                    "meaning_zh": "双重好处",
+                    "meaning_zh": "一举两得",
                 },
-            ]
+            ],
         }
     )
     translator = ScriptedTranslatorLLM("kill two birds with one stone")
@@ -376,8 +386,7 @@ def test_duplicate_conflict_rejects_policy_promotion(
     )
 
     assert result["status"] == "success"
-    assert result["promoted_count"] == 0
-    assert result["conflict_count"] == 2
+    assert result["promoted_count"] == 1
 
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
@@ -385,9 +394,11 @@ def test_duplicate_conflict_rejects_policy_promotion(
     ensure_idiom_schema(conn)
     try:
         policies = list_policies(conn, release_id=release_id)
-        conflicts = list_conflicts(conn, release_id=release_id)
-        assert policies == []
-        assert all(conflict.conflict_type == "duplicate_conflict" for conflict in conflicts)
+        assert len(policies) == 1
+        policy = policies[0]
+        assert policy.normalized_source_text == "一箭双雕"
+        # appearance_count should be summed across chapters
+        assert policy.appearance_count == 2
     finally:
         conn.close()
 

@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 2.0
 
 ## TASK
 GLOSSARY_DISCOVER
@@ -26,6 +26,10 @@ For each term, provide:
 - evidence_snippet: the surrounding context (roughly 40 characters around the term)
 
 Exclude common vocabulary, generic verbs, common adjectives, and ordinary nouns. Focus on proper nouns and setting-specific terminology.
+For example, these are NOT glossary-worthy:
+- 二月二 — calendar date, not a proper noun
+- 乡塾 — common noun ("village school"), not setting-specific
+- 这时 — temporal conjunction, not a glossary term
 
 ## OUTPUT FORMAT
 Return JSON only. Either a list or an object with key "glossary_terms".

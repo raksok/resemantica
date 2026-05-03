@@ -1,7 +1,7 @@
-# version: 1.1
+# version: 2.0
 
-EVIDENCE: {EVIDENCE_SNIPPET}
+CONTEXT: {EVIDENCE_SNIPPET}
 
-Use above as context, Translate the following Chinese idiom into natural English with no extra commentary.
+Translate the idiom `{SOURCE_TEXT}` into natural English. Return ONLY the translation.
 
 {SOURCE_TEXT}

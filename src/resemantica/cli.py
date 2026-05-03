@@ -344,12 +344,23 @@ Milestone M3 step 1. Scans extracted chapter text for Chinese terms not yet
 in the locked glossary. Writes candidate entries with frequency counts and
 context snippets to candidates.json.
 
+Applies deterministic filters (date patterns, stop-list) and BGE-M3
+embedding critic to prune non-glossary terms. Use --pruning-threshold 0
+for evaluation-only mode (scores stored, no pruning).
+
 Requires: epub-roundtrip (extracted chapters).
 
 Outputs:
   artifacts/releases/<release>/glossary/candidates.json""",
     )
     _add_common_release_args(glossary_discover, default_run="glossary-discover")
+    glossary_discover.add_argument(
+        "--pruning-threshold",
+        required=False,
+        type=float,
+        default=None,
+        help="BGE-M3 critic pruning threshold (0-1, default: from config). Set 0 for eval-only.",
+    )
 
     glossary_translate = preprocess_subparsers.add_parser(
         "glossary-translate",
@@ -365,6 +376,27 @@ Outputs: updated artifacts/releases/<release>/glossary/candidates.json""",
     )
     _add_common_release_args(glossary_translate, default_run="glossary-translate")
 
+    glossary_review = preprocess_subparsers.add_parser(
+        "glossary-review",
+        help="Generate a human-editable review file for translated candidates.",
+        description="""\
+Milestone M3 review step. Reads all translated glossary candidates and writes
+a JSON review file to artifacts/releases/<release>/glossary/review.json.
+
+The user edits the file to:
+  - Override translations
+  - Mark entries for deletion
+  - Add new entries
+
+Then run glossary-promote --review-file <path> to apply changes.
+
+Requires: glossary-translate.
+
+Outputs:
+  artifacts/releases/<release>/glossary/review.json""",
+    )
+    _add_common_release_args(glossary_review, default_run="glossary-review")
+
     glossary_promote = preprocess_subparsers.add_parser(
         "glossary-promote",
         help="Validate and promote glossary candidates into locked glossary.",
@@ -373,13 +405,25 @@ Milestone M3 step 3. Validates translated candidates (no empty terms, no
 duplicates, no conflicts), promotes them to the locked glossary, and writes
 any unresolvable conflicts to conflicts.json for manual review.
 
-Requires: glossary-translate.
+With --review-file, reads a previously generated review file, applies
+user overrides (translation edits, deletions, additions), then runs
+standard validation and promotion.
+
+Requires: glossary-translate (or glossary-review if --review-file is used).
 
 Outputs:
   Locked rows added to resemantica.db (glossary tables)
   artifacts/releases/<release>/glossary/conflicts.json""",
     )
     _add_common_release_args(glossary_promote, default_run="glossary-promote")
+    glossary_promote.add_argument(
+        "--review-file",
+        required=False,
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to a review.json file from glossary-review. Applies user edits before promotion.",
+    )
 
     summaries = preprocess_subparsers.add_parser(
         "summaries",
@@ -413,6 +457,54 @@ Requires: epub-roundtrip. Strongly recommended: locked glossary (M3).
 Outputs: rows added to resemantica.db (idiom tables).""",
     )
     _add_common_release_args(idioms, default_run="idioms")
+
+    idiom_review = preprocess_subparsers.add_parser(
+        "idiom-review",
+        help="Generate a human-editable review file for translated idiom candidates.",
+        description="""\
+Milestone M5 review step. Reads all translated idiom candidates and writes
+a JSON review file to artifacts/releases/<release>/idioms/review.json.
+
+The user edits the file to:
+  - Override idiom renderings
+  - Mark entries for deletion
+  - Add new entries
+
+Then run idiom-promote --review-file <path> to apply changes.
+
+Requires: preprocess idioms (at least through translation phase).
+
+Outputs:
+  artifacts/releases/<release>/idioms/review.json""",
+    )
+    _add_common_release_args(idiom_review, default_run="idiom-review")
+
+    idiom_promote = preprocess_subparsers.add_parser(
+        "idiom-promote",
+        help="Validate and promote idiom candidates into idiom policies.",
+        description="""\
+Milestone M5 promote step. Validates translated idiom candidates and promotes
+them into the authoritative idiom policy store.
+
+With --review-file, reads a previously generated review file, applies
+user overrides (rendering edits, deletions, additions), then runs
+standard validation and promotion.
+
+Requires: preprocess idioms (at least through translation phase).
+
+Outputs:
+  Locked rows added to resemantica.db (idiom tables)
+  artifacts/releases/<release>/idioms/conflicts.json""",
+    )
+    _add_common_release_args(idiom_promote, default_run="idiom-promote")
+    idiom_promote.add_argument(
+        "--review-file",
+        required=False,
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to a review.json file from idiom-review. Applies user edits before promotion.",
+    )
 
     graph = preprocess_subparsers.add_parser(
         "graph",
@@ -796,6 +888,7 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
+                    pruning_threshold=getattr(args, "pruning_threshold", None),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -805,6 +898,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 130
             print(f"status={result['status']}")
             print(f"candidates_written={result['candidates_written']}")
+            print(f"filtered_count={result.get('filtered_count', 0)}")
+            print(f"pruned_count={result.get('pruned_count', 0)}")
             return 0
 
         if args.preprocess_command == "glossary-translate":
@@ -825,12 +920,30 @@ def main(argv: list[str] | None = None) -> int:
             print(f"candidates_artifact={result['candidates_artifact']}")
             return 0
 
+        if args.preprocess_command == "glossary-review":
+            from resemantica.glossary.pipeline import review_glossary_candidates
+            result = _with_cli_progress(
+                lambda: review_glossary_candidates(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                ),
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={result['status']}")
+            print(f"entries_written={result['entries_written']}")
+            print(f"review_path={result['review_path']}")
+            return 0
+
         if args.preprocess_command == "glossary-promote":
             result = _with_cli_progress(
                 lambda: promote_glossary_candidates(
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
+                    review_file_path=getattr(args, "review_file", None),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -877,6 +990,46 @@ def main(argv: list[str] | None = None) -> int:
             print(f"status={_status_text(stage_result)}")
             print(f"message={stage_result.message}")
             return _exit_code(stage_result)
+
+        if args.preprocess_command == "idiom-review":
+            from resemantica.idioms.pipeline import review_idiom_candidates
+            result = _with_cli_progress(
+                lambda: review_idiom_candidates(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                ),
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={result['status']}")
+            print(f"entries_written={result['entries_written']}")
+            print(f"review_path={result['review_path']}")
+            return 0
+
+        if args.preprocess_command == "idiom-promote":
+            from resemantica.idioms.pipeline import promote_idiom_candidates
+            result = _with_cli_progress(
+                lambda: promote_idiom_candidates(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                    review_file_path=getattr(args, "review_file", None),
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={result['status']}")
+            print(f"promoted_count={result['promoted_count']}")
+            print(f"conflict_count={result['conflict_count']}")
+            print(f"candidates_artifact={result['candidates_artifact']}")
+            print(f"policies_artifact={result['policies_artifact']}")
+            print(f"conflicts_artifact={result['conflicts_artifact']}")
+            return 0
 
         if args.preprocess_command == "graph":
             stage_result = _with_cli_progress(

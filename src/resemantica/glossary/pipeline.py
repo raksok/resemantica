@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,7 @@ from resemantica.db.glossary_repo import (
     insert_conflicts,
     list_candidates,
     list_candidates_for_promotion,
+    list_candidates_for_review,
     list_candidates_for_translation,
     list_conflicts,
     list_locked_entries,
@@ -19,8 +22,14 @@ from resemantica.db.glossary_repo import (
     upsert_discovered_candidates,
 )
 from resemantica.db.sqlite import ensure_schema, open_connection
+from resemantica.glossary.critic import compute_critic_scores
 from resemantica.glossary.discovery import discover_candidates_from_extracted
-from resemantica.glossary.validators import normalize_term, validate_candidates_for_promotion
+from resemantica.glossary.models import GlossaryCandidate
+from resemantica.glossary.validators import (
+    apply_deterministic_filter,
+    normalize_term,
+    validate_candidates_for_promotion,
+)
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
@@ -88,6 +97,7 @@ def discover_glossary_candidates(
     llm_client: LLMClient | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
+    pruning_threshold: float | None = None,
     stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
@@ -135,6 +145,18 @@ def discover_glossary_candidates(
         stop_token=stop_token,
     )
 
+    threshold = pruning_threshold if pruning_threshold is not None else config_obj.models.pruning_threshold
+
+    # Tier 1: deterministic filter
+    discovered = apply_deterministic_filter(discovered)
+    # Tier 3: BGE-M3 embedding critic (skipped if threshold is 0 and we want eval-only,
+    # but still score — handled inside compute_critic_scores)
+    discovered = compute_critic_scores(
+        discovered,
+        model_name=config_obj.models.embedding_name,
+        pruning_threshold=threshold,
+    )
+
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
     try:
@@ -147,11 +169,15 @@ def discover_glossary_candidates(
     finally:
         conn.close()
 
+    filtered_count = sum(1 for c in discovered if c.candidate_status == "filtered")
+    pruned_count = sum(1 for c in discovered if c.candidate_status == "pruned")
     _emit(
         run_id,
         release_id,
         f"{_STAGE_NAME}.discover.completed",
         discovered_count=len(discovered),
+        filtered_count=filtered_count,
+        pruned_count=pruned_count,
         **usage_payload_delta(client, usage_before),
     )
     raise_if_stop_requested(
@@ -165,6 +191,8 @@ def discover_glossary_candidates(
         "release_id": release_id,
         "run_id": run_id,
         "candidates_written": len(discovered),
+        "filtered_count": filtered_count,
+        "pruned_count": pruned_count,
         "candidates_artifact": str(paths.glossary_candidates_path),
         **usage_payload_delta(client, usage_before),
     }
@@ -303,6 +331,7 @@ def promote_glossary_candidates(
     run_id: str,
     config: AppConfig | None = None,
     project_root: Path | None = None,
+    review_file_path: Path | None = None,
     stop_token: StopToken | None = None,
     llm_usage_payload: dict[str, int] | None = None,
 ) -> dict[str, Any]:
@@ -318,7 +347,21 @@ def promote_glossary_candidates(
             message="Glossary promotion stopped before starting",
         )
         _emit(run_id, release_id, f"{_STAGE_NAME}.promote.started")
-        promotable_candidates = list_candidates_for_promotion(conn, release_id=release_id)
+
+        if review_file_path is not None:
+            if not review_file_path.exists():
+                raise FileNotFoundError(f"Review file not found: {review_file_path}")
+            review_data = json.loads(review_file_path.read_text(encoding="utf-8"))
+            if review_data.get("review_schema_version") != 1:
+                raise ValueError(
+                    f"Unsupported review schema version: {review_data.get('review_schema_version')}"
+                )
+            promotable_candidates = _apply_review_overrides(
+                conn, release_id=release_id, review_data=review_data
+            )
+        else:
+            promotable_candidates = list_candidates_for_promotion(conn, release_id=release_id)
+
         existing_entries = list_locked_entries(conn, release_id=release_id)
         promotion_entries, conflicts = validate_candidates_for_promotion(
             candidates=promotable_candidates,
@@ -390,6 +433,170 @@ def promote_glossary_candidates(
         "candidates_artifact": str(paths.glossary_candidates_path),
         "conflicts_artifact": str(paths.glossary_conflicts_path),
         **(llm_usage_payload or {}),
+    }
+
+
+def _is_add_entry(entry: dict[str, Any]) -> bool:
+    return entry.get("action") == "add" and bool(entry.get("source_term"))
+
+
+def _apply_review_overrides(
+    conn: Any,
+    *,
+    release_id: str,
+    review_data: dict[str, Any],
+) -> list[GlossaryCandidate]:
+    from hashlib import sha256 as _sha256
+
+    from resemantica.db.glossary_repo import list_candidates as _list_candidates
+
+    if not isinstance(review_data.get("entries"), list):
+        raise ValueError("review_data must contain an 'entries' list")
+
+    entry_by_id: dict[str, dict[str, Any]] = {}
+    add_entries: list[dict[str, Any]] = []
+    for entry in review_data["entries"]:
+        cid = entry.get("candidate_id")
+        if cid:
+            entry_by_id[cid] = entry
+        elif _is_add_entry(entry):
+            add_entries.append(entry)
+
+    all_candidates = {c.candidate_id: c for c in _list_candidates(conn, release_id=release_id)}
+    applied_ids: set[str] = set()
+
+    for cid, review_entry in entry_by_id.items():
+        if review_entry.get("action") == "delete":
+            continue
+        candidate = all_candidates.get(cid)
+        if candidate is None:
+            continue
+        new_translation = str(review_entry.get("translation", "")).strip()
+        old_translation = (candidate.candidate_translation_en or "").strip()
+        if new_translation and new_translation != old_translation:
+            normalized = normalize_term(new_translation)
+            conn.execute(
+                """
+                UPDATE glossary_candidates
+                SET candidate_translation_en = ?,
+                    normalized_target_term = ?,
+                    candidate_status = 'translated',
+                    validation_status = 'pending',
+                    conflict_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE candidate_id = ?
+                """,
+                (new_translation, normalized, cid),
+            )
+        applied_ids.add(cid)
+
+    if add_entries:
+        new_cands: list[GlossaryCandidate] = []
+        for entry in add_entries:
+            source_term = str(entry.get("source_term", "")).strip()
+            category = str(entry.get("category", "generic_role")).strip()
+            translation = str(entry.get("translation", "")).strip()
+            if not source_term or not translation:
+                continue
+            normalized_source = normalize_term(source_term)
+            digest = _sha256(f"{release_id}:review:{source_term}:{category}".encode()).hexdigest()[:24]
+            candidate = GlossaryCandidate(
+                candidate_id=f"gcan_review_{digest}",
+                release_id=release_id,
+                source_term=source_term,
+                normalized_source_term=normalized_source,
+                category=category,
+                source_language="zh",
+                first_seen_chapter=1,
+                last_seen_chapter=1,
+                appearance_count=1,
+                evidence_snippet=str(entry.get("evidence_snippet", "")),
+                candidate_translation_en=translation,
+                normalized_target_term=normalize_term(translation),
+                discovery_run_id="review",
+                translation_run_id="review",
+                candidate_status="translated",
+                validation_status="pending",
+                conflict_reason=None,
+                critic_score=None,
+                analyst_model_name=None,
+                analyst_prompt_version=None,
+                translator_model_name="human",
+                translator_prompt_version="review",
+                schema_version=1,
+            )
+            new_cands.append(candidate)
+        if new_cands:
+            upsert_discovered_candidates(conn, candidates=new_cands)
+            for c in new_cands:
+                all_candidates[c.candidate_id] = c
+                applied_ids.add(c.candidate_id)
+
+    deleted_ids = {cid for cid, re in entry_by_id.items() if re.get("action") == "delete"}
+    result = []
+    for cid in applied_ids:
+        if cid in deleted_ids:
+            continue
+        candidate = all_candidates.get(cid)
+        if candidate is not None and (candidate.candidate_translation_en or "").strip():
+            result.append(candidate)
+    return result
+
+
+def review_glossary_candidates(
+    *,
+    release_id: str,
+    run_id: str,
+    config: AppConfig | None = None,
+    project_root: Path | None = None,
+) -> dict[str, Any]:
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "glossary")
+    try:
+        candidates = list_candidates_for_review(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    entries = [
+        {
+            "candidate_id": c.candidate_id,
+            "source_term": c.source_term,
+            "category": c.category,
+            "translation": c.candidate_translation_en or "",
+            "evidence_snippet": c.evidence_snippet,
+            "action": "keep",
+        }
+        for c in candidates
+    ]
+    review_data = {
+        "review_schema_version": 1,
+        "release_id": release_id,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "instructions": (
+            "Edit 'translation' to override a term's English rendering. "
+            "Set 'action' to 'delete' to remove an entry. "
+            "Add new entries with 'action': 'add' "
+            "(omit candidate_id, provide source_term, category, translation, evidence_snippet)."
+        ),
+        "entries": entries,
+    }
+    _write_json(paths.glossary_review_path, review_data)
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.review.completed",
+        entries_written=len(entries),
+        review_path=str(paths.glossary_review_path),
+    )
+    return {
+        "status": "success",
+        "release_id": release_id,
+        "run_id": run_id,
+        "entries_written": len(entries),
+        "review_path": str(paths.glossary_review_path),
     }
 
 

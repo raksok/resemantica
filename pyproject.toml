@@ -26,6 +26,9 @@ dev = [
     "pytest>=8.4.2",
     "ruff>=0.14.3",
 ]
+critic = [
+    "sentence-transformers>=3.4.0",
+]
 
 [project.scripts]
 rsem = "resemantica.cli:main"

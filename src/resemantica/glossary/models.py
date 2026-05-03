@@ -18,7 +18,7 @@ GlossaryCategory = Literal[
     "idiom",
 ]
 
-CandidateStatus = Literal["discovered", "translated", "conflict", "promoted"]
+CandidateStatus = Literal["discovered", "filtered", "pruned", "translated", "conflict", "promoted"]
 ValidationStatus = Literal["pending", "approved", "conflict"]
 LockedGlossaryStatus = Literal["approved"]
 
@@ -42,6 +42,7 @@ class GlossaryCandidate:
     candidate_status: str
     validation_status: str
     conflict_reason: str | None
+    critic_score: float | None = None
     analyst_model_name: str | None = None
     analyst_prompt_version: str | None = None
     translator_model_name: str | None = None

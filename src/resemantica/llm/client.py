@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -138,7 +139,17 @@ class LLMClient:
                 "EVIDENCE_SNIPPET": evidence_snippet,
             },
         )
-        return self.generate_text(model_name=model_name, prompt=prompt).strip()
+        translated = self.generate_text(model_name=model_name, prompt=prompt).strip()
+        # Strip common label prefixes that LLMs sometimes echo back
+        translated = re.sub(
+            r'^(Category|Translation|Term|Evidence|Output|Result)\s*:\s*',
+            '', translated, flags=re.IGNORECASE | re.MULTILINE
+        ).strip()
+        # Take last non-empty line (defense against chain-of-thought before answer)
+        lines = [ln.strip() for ln in translated.splitlines() if ln.strip()]
+        if lines:
+            translated = lines[-1]
+        return translated
 
     def _record_response_usage(self, response: Any) -> None:
         usage = getattr(response, "usage", None)
