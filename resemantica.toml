@@ -12,6 +12,7 @@ analyst_name = "Qwen3.5-9B-GLM5.1"
 # analyst_context_window = 240000
 # analyst_max_context_ratio = 0.75
 embedding_name = "bge-M3"
+pruning_threshold = 0.3
 
 [paths]
 artifact_root = "artifacts"

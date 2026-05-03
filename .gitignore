@@ -43,6 +43,7 @@ tests/test_epub/
 
 # Tool artifact directories
 .codex/
+.qodo/
 
 # Local databases and event traces
 *.db
