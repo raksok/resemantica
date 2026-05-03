@@ -35,12 +35,24 @@ from resemantica.utils import _chapter_number_from_path
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
 
 _VALID_ENTITY_TYPES: set[str] = {
     "character", "alias", "title_honorific", "faction", "location",
     "technique", "item_artifact", "realm_concept", "creature_race",
     "generic_role", "event",
 }
+
+
+def _detect_language(text: str) -> str:
+    if not text:
+        return "zh"
+    if _CJK_RE.search(text):
+        return "zh"
+    if _LATIN_RE.search(text):
+        return "en"
+    return "zh"
 
 
 @dataclass(slots=True)
@@ -553,6 +565,24 @@ def extract_entities(
             if not normalized_source:
                 continue
 
+            if _LATIN_RE.search(llm_ent.source_term):
+                if event_callback is not None:
+                    event_callback(
+                        "warning_emitted",
+                        chapter_number,
+                        {"warning": f"entity '{llm_ent.source_term}' contains Latin characters, skipping"},
+                    )
+                continue
+
+            if llm_ent.source_term not in source_text:
+                if event_callback is not None:
+                    event_callback(
+                        "warning_emitted",
+                        chapter_number,
+                        {"warning": f"entity '{llm_ent.source_term}' not found in chapter text, skipping"},
+                    )
+                continue
+
             glossary_key = (llm_ent.entity_type, normalized_source)
             glossary_entry = glossary_idx.get(glossary_key)
 
@@ -691,7 +721,7 @@ def extract_entities(
                     release_id=release_id,
                     entity_id=eid,
                     alias_text=alias_text,
-                    alias_language="zh",
+                    alias_language=_detect_language(alias_text),
                     first_seen_chapter=chapter_number,
                     last_seen_chapter=chapter_number,
                     revealed_chapter=chapter_number,
