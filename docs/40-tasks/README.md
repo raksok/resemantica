@@ -55,3 +55,4 @@ Always follow the milestone sequence below.
 | M26 | task-26 | M25, M19 | Global Observability & Event Granularity |
 | M27 | task-34 | M25, M11 | Cleanup Wizard TUI Screen |
 | M28 | task-37 | M25, M27 | CLI–TUI Feature Parity |
+| M29 | task-38 | M28, M10 | Resume Preserves Chapter Scope |

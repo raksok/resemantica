@@ -223,7 +223,12 @@ class OrchestrationRunner:
             result = StageResult(success=False, stage_name=stage_name, message=str(exc))
 
         status = "stopped" if result.stopped else "completed" if result.success else "failed"
-        self._update_run_state(stage_name, status, result.checkpoint or {})
+        saved_checkpoint = dict(result.checkpoint or {})
+        if chapter_start is not None:
+            saved_checkpoint["chapter_start"] = chapter_start
+        if chapter_end is not None:
+            saved_checkpoint["chapter_end"] = chapter_end
+        self._update_run_state(stage_name, status, saved_checkpoint)
         event_type = (
             f"{stage_name}.stopped"
             if result.stopped

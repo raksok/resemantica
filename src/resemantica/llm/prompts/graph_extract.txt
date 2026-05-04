@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 2.0
 
 ## TASK
 GRAPH_EXTRACT
@@ -17,7 +17,7 @@ Identify all significant entities and the relationships among them from the sour
 
 ### Entities
 For each entity, provide:
-- source_term: the exact Chinese text as it appears
+- source_term: the exact Chinese text as it appears in the source (NEVER translate or transliterate names into English — Chinese only)
 - entity_type: one of [character, alias, title_honorific, faction, location, technique, item_artifact, realm_concept, creature_race, generic_role, event]
 - aliases: list of alternate names/titles used for this entity in this chapter
 - evidence_snippet: roughly 40 characters of surrounding context
@@ -27,12 +27,16 @@ Exclude common vocabulary, generic verbs, and ordinary nouns. Focus on proper no
 ### Relationships
 For meaningful relationships between entities, provide:
 - type: one of [ALIAS_OF, APPEARS_IN, MEMBER_OF, DISCIPLE_OF, MASTER_OF, ALLY_OF, ENEMY_OF, LOCATED_IN, OWNS, USES_TECHNIQUE, PART_OF_ARC, NEXT_CHAPTER]
-- source_term: the entity playing the source role (for ALIAS_OF: the alias, for MEMBER_OF: the member, for LOCATED_IN: what is located, etc.)
-- target_term: the entity playing the target role (for ALIAS_OF: the canonical entity, for MEMBER_OF: the group, for LOCATED_IN: the location, etc.)
+- source_term: the entity name in Chinese, exactly as it appears in the source
+- target_term: the entity name in Chinese, exactly as it appears in the source
 - evidence_snippet: the sentence or phrase that supports this relationship
 - confidence: a float between 0.0 and 1.0
 - lore_text: include only if the sentence suggests hidden lore or a secret identity (e.g. "actually", "in truth", "real identity")
 - is_masked_identity: true only if the relationship reveals a disguised or secret identity
+
+Every extracted entity should participate in at least one relationship.
+In cultivation/wuxia novels, a character who uses a technique or item MUST have a USES_TECHNIQUE or OWNS relationship linking them.
+Missing a relationship is worse than including a speculative one — extract the relationship whenever you have textual evidence.
 
 Relationship types explained:
 - ALIAS_OF: a name/title is an alias for an entity
@@ -48,10 +52,13 @@ Relationship types explained:
 - PART_OF_ARC: a chapter is part of a story arc (if arc context is known)
 - NEXT_CHAPTER: sequential chapter linking (do not use within a single chapter)
 
-Only propose relationships you have clear textual evidence for.
-
 ## OUTPUT FORMAT
 Return a JSON object with two keys: "entities" and "relationships".
+
+ALL text fields must be in the original Chinese from the source text. NEVER translate or transliterate names into English.
+
+If no entities or relationships are found, return {{"entities": [], "relationships": []}}.
+Do NOT wrap JSON in markdown code fences. Return raw JSON only.
 
 Entities schema:
 {{

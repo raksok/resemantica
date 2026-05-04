@@ -499,6 +499,34 @@ persistence.""",
     )
     _add_chapter_scope_args(tui_cmd)
 
+    set_chapter_flag = subparsers.add_parser(
+        "set-chapter-flag", aliases=["scf"],
+        help="Manually override a chapter's story/non-story classification.",
+        description="""\
+Override the LLM's is_story_chapter classification for a specific chapter.
+Use --story to mark a chapter as narrative content (e.g. when the LLM
+mistakenly flagged a real story chapter as non-story). Use --non-story to
+mark a chapter as non-narrative (e.g. author's commentary, afterword).""",
+    )
+    set_chapter_flag.add_argument(
+        "-r", "--release", required=True,
+        help="Release identifier.",
+    )
+    set_chapter_flag.add_argument(
+        "-C", "--chapter", required=True, type=int,
+        help="Chapter number to reclassify.",
+    )
+    flag_group = set_chapter_flag.add_mutually_exclusive_group(required=True)
+    flag_group.add_argument(
+        "--story", action="store_true", dest="is_story",
+        help="Mark chapter as story/narrative content.",
+    )
+    flag_group.add_argument(
+        "--non-story", action="store_false", dest="is_story",
+        help="Mark chapter as non-story (front-matter, copyright, author's note, etc.).",
+    )
+    _add_verbose_arg(set_chapter_flag)
+
     run = subparsers.add_parser(
         "run",
         help="Orchestration run commands.",
@@ -603,6 +631,7 @@ _ALIAS_MAP: dict[str, str] = {
     "sum": "summaries",
     "idi-review": "idiom-review",
     "idi-promote": "idiom-promote",
+    "scf": "set-chapter-flag",
     "prod": "production",
     "cln-plan": "cleanup-plan",
     "cln-apply": "cleanup-apply",
@@ -921,9 +950,18 @@ def main(argv: list[str] | None = None) -> int:
             return _exit_code(result)
 
         if args.run_command == "resume":
-            resume_result = resume_run(
-                args.release, args.run, from_stage=args.from_stage
+            stop_token = StopToken()
+            resume_result = _with_cli_progress(
+                lambda: resume_run(
+                    args.release, args.run,
+                    from_stage=args.from_stage,
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
             )
+            if resume_result is _INTERRUPTED_STOP:
+                return 130
             if not resume_result.success:
                 print(f"Resume failed: {resume_result.message}")
                 return 1
@@ -995,6 +1033,29 @@ def main(argv: list[str] | None = None) -> int:
             chapter_end=args.end,
         )
         app.run()
+        return 0
+
+    if args.command == "set-chapter-flag":
+        config = load_config(args.config)
+        from resemantica.db.sqlite import ensure_schema, open_connection
+        from resemantica.db.summary_repo import set_chapter_story_flag
+        from resemantica.settings import derive_paths
+        paths = derive_paths(config, release_id=args.release)
+        conn = open_connection(paths.db_path)
+        ensure_schema(conn, "summaries")
+        updated = set_chapter_story_flag(
+            conn,
+            release_id=args.release,
+            chapter_number=args.chapter,
+            is_story=args.is_story,
+        )
+        conn.close()
+        label = "story" if args.is_story else "non-story"
+        if updated:
+            print(f"Chapter {args.chapter}: is_story_chapter set to {label}")
+        else:
+            print(f"Chapter {args.chapter}: no existing draft found to update")
+            return 1
         return 0
 
     parser.print_help()

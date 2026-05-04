@@ -77,7 +77,7 @@ def _parse_detected_terms(raw: str) -> list[_DetectedTerm]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        source_term = str(row.get("source_term", "")).strip()
+        source_term = str(row.get("source_term", "")).strip().strip("《》")
         category = str(row.get("category", "generic_role")).strip()
         evidence = str(row.get("evidence_snippet", "")).strip()
         if not source_term:

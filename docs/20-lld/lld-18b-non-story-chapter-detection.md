@@ -84,6 +84,14 @@ This creates a "Summary-First" dependency where running summary preprocessing pr
 6. `preprocess_summaries` records the chapter as `{"status": "skipped", "reason": "non_story_chapter"}`.
 7. `preprocess_idioms` / `preprocess_graph` / `packets-build` query `is_non_story_chapter()`, see the flag, and skip the chapter gracefully.
 
+## Bug Fixes (See LLD 18e)
+
+### Control Flow Bug
+The original implementation had dead code at `generator.py:312-320`: the non-story check ran **after** validation, but validation caught `is_story_chapter: false` first (adding `non_story_chapter_flagged`) and returned early, leaving the draft with `validation_status="failed"` instead of the intended `"non_story_chapter"`. Fixed in LLD 18e / Task 18e by moving the non-story check before validation.
+
+### No Guardrail Against LLM Hallucination
+The original implementation had no safeguard when the LLM incorrectly set `is_story_chapter: false` for a real story chapter. Fixed in LLD 18e / Task 18e by adding a source-text length guardrail.
+
 ## Out of Scope
 - Automatic regex generation for filenames based on LLM findings.
 - Retrospective cleanup of previously processed junk summaries (manual reset required).

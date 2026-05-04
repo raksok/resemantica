@@ -23,6 +23,7 @@ class TestCliDispatch:
             "rebuild", "reb",
             "run",
             "tui",
+            "set-chapter-flag", "scf",
         }
         assert commands == expected, f"Missing: {expected - commands}, Extra: {commands - expected}"
 
@@ -91,6 +92,12 @@ class TestCliDispatch:
         assert args.run_command == "cleanup-apply"
         assert args.force is True
 
+    def test_set_chapter_flag_alias(self):
+        args = _parse_and_resolve(["scf", "--release", "r1", "--chapter", "5", "--story"])
+        assert args.command == "set-chapter-flag"
+        assert args.chapter == 5
+        assert args.is_story is True
+
     def test_preprocess_subcommands(self):
         parser = _build_parser()
         args = parser.parse_args(["preprocess", "glossary-discover", "--release", "r1"])
@@ -138,9 +145,10 @@ class TestCliDispatch:
     def test_top_level_run_production(self):
         parser = _build_parser()
         args = parser.parse_args(
-            ["run-production", "--release", "r1", "--dry-run", "--start", "2", "--end", "4"]
+            ["run", "production", "--release", "r1", "--dry-run", "--start", "2", "--end", "4"]
         )
-        assert args.command == "run-production"
+        assert args.command == "run"
+        assert args.run_command == "production"
         assert args.dry_run is True
         assert args.start == 2
         assert args.end == 4
@@ -173,32 +181,32 @@ class TestCliDispatch:
     def test_epub_roundtrip(self):
         parser = _build_parser()
         args = parser.parse_args([
-            "epub-roundtrip", "--input", "test.epub", "--release", "r1"
+            "extract", "--input", "test.epub", "--release", "r1"
         ])
-        assert args.command == "epub-roundtrip"
+        assert args.command == "extract"
         assert args.input.name == "test.epub"
 
     def test_translate_chapter(self):
         parser = _build_parser()
         args = parser.parse_args([
-            "translate-chapter", "--release", "r1", "--chapter", "3", "--run", "test-run"
+            "translate", "--release", "r1", "--chapter", "3", "--run", "test-run"
         ])
-        assert args.command == "translate-chapter"
+        assert args.command == "translate"
         assert args.chapter == 3
 
     def test_rebuild_epub(self):
         parser = _build_parser()
-        args = parser.parse_args(["rebuild-epub", "--release", "r1", "--run-id", "run-1"])
-        assert args.command == "rebuild-epub"
-        assert args.run_id == "run-1"
+        args = parser.parse_args(["rebuild", "--release", "r1", "--run", "run-1"])
+        assert args.command == "rebuild"
+        assert args.run == "run-1"
 
     def test_translate_range(self):
         parser = _build_parser()
         args = parser.parse_args([
-            "translate-range", "--release", "r1", "--run", "test-run",
+            "translate", "--release", "r1", "--run", "test-run",
             "--start", "1", "--end", "10", "-v"
         ])
-        assert args.command == "translate-range"
+        assert args.command == "translate"
         assert args.start == 1
         assert args.end == 10
         assert args.verbose == 1
@@ -283,7 +291,7 @@ class TestCliDispatch:
         )
 
         result = cli_mod.main(
-            ["translate-range", "--release", "r1", "--run", "run-1", "--start", "1", "--end", "1", "-vvv"]
+            ["translate", "--release", "r1", "--run", "run-1", "--start", "1", "--end", "1", "-vvv"]
         )
 
         assert result == 0

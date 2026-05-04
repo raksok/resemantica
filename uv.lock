@@ -2498,6 +2498,11 @@ dev = [
     { name = "ruff" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "ebooklib", specifier = ">=0.18" },
@@ -2515,6 +2520,9 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.9.0" },
 ]
 provides-extras = ["dev", "critic"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.3" }]
 
 [[package]]
 name = "rich"

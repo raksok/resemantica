@@ -185,7 +185,13 @@ def _parse_llm_response(raw: str) -> tuple[list[_LLMEntity], list[_LLMRelationsh
             lines = lines[:-1]
         raw = "\n".join(lines).strip()
 
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        if "{" not in raw and "}" not in raw:
+            return [], []
+        raise
+
     if not isinstance(parsed, dict):
         raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
 

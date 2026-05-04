@@ -72,7 +72,7 @@ def apply_deterministic_filter(candidates: list[GlossaryCandidate]) -> list[Glos
 
 def normalize_term(term: str) -> str:
     normalized = _WHITESPACE_RE.sub(" ", term.strip())
-    return normalized.casefold()
+    return normalized.strip("《》").casefold()
 
 
 def _conflict_id(

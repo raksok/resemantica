@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from resemantica.db.summary_repo import (
     SummaryDraftRecord,
     ValidatedSummaryZhRecord,
@@ -27,6 +29,8 @@ from resemantica.settings import AppConfig, load_config
 from resemantica.summaries._context import _format_glossary_context
 from resemantica.summaries.validators import validate_chinese_summary
 from resemantica.validators import ValidationResult
+
+_NON_STORY_GUARDRAIL_LENGTH = 500
 
 
 @dataclass(slots=True)
@@ -270,7 +274,34 @@ def generate_chapter_summary(
         return None
 
     is_story_chapter = parsed.get("is_story_chapter", True)
+
+    if is_story_chapter is False and len(source_text_zh) > _NON_STORY_GUARDRAIL_LENGTH:
+        logger.warning(
+            "Guardrail: overrode non-story flag for chapter {} "
+            "(source_text_zh length={}, threshold={})",
+            chapter_number,
+            len(source_text_zh),
+            _NON_STORY_GUARDRAIL_LENGTH,
+        )
+        is_story_chapter = True
+
     is_story = 0 if is_story_chapter is False else 1
+
+    if is_story == 0:
+        save_summary_draft(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="chapter_summary_zh_structured",
+            content=parsed,
+            chapter_source_hash=chapter_source_hash,
+            model_name=model_name,
+            prompt_version=prompt_version,
+            run_id=run_id,
+            validation_status="non_story_chapter",
+            is_story_chapter=0,
+        )
+        return None
 
     draft_record = save_summary_draft(
         conn,
@@ -283,7 +314,7 @@ def generate_chapter_summary(
         prompt_version=prompt_version,
         run_id=run_id,
         validation_status="pending",
-        is_story_chapter=is_story,
+        is_story_chapter=1,
     )
 
     validation = validate_chinese_summary(
@@ -305,17 +336,7 @@ def generate_chapter_summary(
             prompt_version=prompt_version,
             run_id=run_id,
             validation_status="failed",
-            is_story_chapter=is_story,
-        )
-        return None
-
-    if is_story == 0:
-        set_summary_draft_status(
-            conn,
-            release_id=release_id,
-            chapter_number=chapter_number,
-            summary_type="chapter_summary_zh_structured",
-            validation_status="non_story_chapter",
+            is_story_chapter=1,
         )
         return None
 

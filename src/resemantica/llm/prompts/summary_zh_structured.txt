@@ -32,6 +32,7 @@ You must determine if this chapter contains actual story content. Set "is_story_
 - Copyright page or publication information
 - Table of contents
 - Index or appendix
+- Author's commentary, afterword, or end-of-book notes
 - Any non-narrative content
 
 When "is_story_chapter" is false:

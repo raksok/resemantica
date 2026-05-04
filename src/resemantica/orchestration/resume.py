@@ -7,6 +7,7 @@ from resemantica.tracking.repo import ensure_tracking_db, load_run_state
 from .events import emit_event
 from .models import STAGE_ORDER, StageResult, next_stage
 from .runner import run_stage
+from .stop import StopToken
 
 
 def resume_run(
@@ -14,6 +15,7 @@ def resume_run(
     run_id: str,
     *,
     from_stage: Optional[str] = None,
+    stop_token: StopToken | None = None,
 ) -> StageResult:
     conn = ensure_tracking_db(release_id)
     try:
@@ -42,6 +44,9 @@ def resume_run(
         )
         return StageResult(success=False, stage_name=start_stage, message=msg)
 
+    chapter_start = state.checkpoint.get("chapter_start")
+    chapter_end = state.checkpoint.get("chapter_end")
+
     emit_event(
         run_id, release_id, "resume.started",
         start_stage,
@@ -53,7 +58,10 @@ def resume_run(
     while current is not None:
         result = run_stage(
             release_id, run_id, current,
-            checkpoint=state.checkpoint if current == start_stage else None
+            checkpoint=state.checkpoint if current == start_stage else None,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+            stop_token=stop_token,
         )
         if not result.success:
             emit_event(

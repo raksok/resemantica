@@ -646,12 +646,6 @@ def build_chapter_packet(
         if trimmed_sections:
             packet.warnings = [f"trimmed:{key}" for key in trimmed_sections]
 
-        packet_hash = _packet_hash(packet)
-        packet.packet_id = f"pkt_{packet_hash[:24]}"
-
-        packet_path = paths.packets_dir / f"chapter-{chapter_number}-{packet.packet_id}.json"
-        bundle_path = paths.packets_dir / f"chapter-{chapter_number}-{packet.packet_id}-bundles.json"
-
         bundles: list[ParagraphBundle] = []
         bundle_warnings: list[str] = []
         for row in sorted(records, key=_record_sort_key):
@@ -666,6 +660,12 @@ def build_chapter_packet(
                 bundle_warnings.append(f"bundle_skip: block={row.get('block_id', '?')}: {exc}")
         if bundle_warnings:
             packet.warnings.extend(bundle_warnings)
+
+        packet_hash = _packet_hash(packet)
+        packet.packet_id = f"pkt_{packet_hash[:24]}"
+
+        packet_path = paths.packets_dir / f"chapter-{chapter_number}-{packet.packet_id}.json"
+        bundle_path = paths.packets_dir / f"chapter-{chapter_number}-{packet.packet_id}-bundles.json"
 
         packet_payload = packet.to_json_dict()
         bundle_payload = {

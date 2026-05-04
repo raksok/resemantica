@@ -680,3 +680,123 @@ def test_non_story_chapter_pipeline_skipped(tmp_path: Path, monkeypatch) -> None
     processed = [r for r in result["chapter_artifacts"] if r.get("status") != "skipped"]
     assert len(processed) == 2
     assert {r["chapter_number"] for r in processed} == {1, 3}
+
+    conn = open_connection(derive_paths(load_config(), release_id=release_id).db_path)
+    ensure_summary_schema(conn)
+    row = conn.execute(
+        "SELECT validation_status, is_story_chapter FROM summary_drafts "
+        "WHERE release_id = ? AND chapter_number = 2 AND summary_type = 'chapter_summary_zh_structured'",
+        (release_id,),
+    ).fetchone()
+    assert row is not None, "draft should exist for the non-story chapter"
+    assert int(row["is_story_chapter"]) == 0
+    assert row["validation_status"] == "non_story_chapter"
+    conn.close()
+
+
+def test_guardrail_overrides_non_story(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m4-guardrail"
+
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="第1章内容。" + "叙述内容。" * 200,  # > 500 chars
+        chapter_source_hash="hash-ch1",
+    )
+
+    class HallucinatingLLM:
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            if "SUMMARY_ZH_STRUCTURED" in prompt:
+                return json.dumps({
+                    "chapter_number": 1,
+                    "characters_mentioned": [],
+                    "key_events": [],
+                    "new_terms": [],
+                    "relationships_changed": [],
+                    "setting": "",
+                    "tone": "",
+                    "narrative_progression": "Non-story chapter",
+                    "is_story_chapter": False,
+                }, ensure_ascii=False)
+            if "SUMMARY_EN_DERIVE" in prompt:
+                return "EN::content"
+            if "SUMMARY_ZH_VALIDATE" in prompt:
+                return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
+            raise RuntimeError("Unexpected prompt")
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=HallucinatingLLM(),
+    )
+    assert result["status"] == "success"
+
+    skipped = [r for r in result["chapter_artifacts"] if r.get("status") == "skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["chapter_number"] == 1
+    assert "non_story_chapter" not in skipped[0].get("reason", "")
+
+    conn = open_connection(derive_paths(load_config(), release_id=release_id).db_path)
+    ensure_summary_schema(conn)
+    row = conn.execute(
+        "SELECT validation_status, is_story_chapter FROM summary_drafts "
+        "WHERE release_id = ? AND chapter_number = 1 AND summary_type = 'chapter_summary_zh_structured'",
+        (release_id,),
+    ).fetchone()
+    assert row is not None
+    assert int(row["is_story_chapter"]) == 1, "guardrail should have overridden to story"
+    conn.close()
+
+
+def test_set_chapter_story_flag(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "test-flag"
+
+    from resemantica.db.summary_repo import save_summary_draft, set_chapter_story_flag
+
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+
+    save_summary_draft(
+        conn,
+        release_id=release_id,
+        chapter_number=1,
+        summary_type="chapter_summary_zh_structured",
+        content={"test": True},
+        chapter_source_hash="h",
+        model_name="m",
+        prompt_version="1",
+        run_id="r",
+        validation_status="approved",
+        is_story_chapter=1,
+    )
+
+    assert set_chapter_story_flag(
+        conn, release_id=release_id, chapter_number=1, is_story=False,
+    )
+    row = conn.execute(
+        "SELECT is_story_chapter, validation_status FROM summary_drafts "
+        "WHERE release_id = ? AND chapter_number = 1",
+        (release_id,),
+    ).fetchone()
+    assert int(row["is_story_chapter"]) == 0
+    assert row["validation_status"] == "non_story_chapter"
+
+    assert set_chapter_story_flag(
+        conn, release_id=release_id, chapter_number=1, is_story=True,
+    )
+    row = conn.execute(
+        "SELECT is_story_chapter, validation_status FROM summary_drafts "
+        "WHERE release_id = ? AND chapter_number = 1",
+        (release_id,),
+    ).fetchone()
+    assert int(row["is_story_chapter"]) == 1
+    assert row["validation_status"] == "pending"
+
+    assert not set_chapter_story_flag(
+        conn, release_id=release_id, chapter_number=99, is_story=True,
+    )
+    conn.close()

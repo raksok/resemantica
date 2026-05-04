@@ -476,3 +476,27 @@ def is_non_story_chapter(
     if row is None:
         return False
     return int(row["is_story_chapter"]) == 0
+
+
+def set_chapter_story_flag(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    chapter_number: int,
+    is_story: bool,
+) -> bool:
+    validation_status = "non_story_chapter" if not is_story else "pending"
+    is_story_int = 1 if is_story else 0
+    cursor = conn.execute(
+        """
+        UPDATE summary_drafts
+        SET is_story_chapter = ?,
+            validation_status = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE release_id = ?
+          AND chapter_number = ?
+          AND summary_type = 'chapter_summary_zh_structured'
+        """,
+        (is_story_int, validation_status, release_id, chapter_number),
+    )
+    return cursor.rowcount > 0
