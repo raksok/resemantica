@@ -1,5 +1,5 @@
-# version: 1.0
+# version: 2.1
 
-Translate the following zh into en with no extra commentary.
+Translate the following term in `zh` to `en` with no extra explanation:
 
 {MEANING_ZH}

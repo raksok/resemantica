@@ -58,11 +58,12 @@ class CliProgressSubscriber:
                 BarColumn(complete_style="green", finished_style="blue"),
                 TaskProgressColumn(show_speed=False),
             )
+            self._placeholder_task_id = self.progress.add_task("running...", total=None)
             _width = max(shutil.get_terminal_size().columns, 100)
             self._live = Live(
                 get_renderable=self._render_layout,
                 console=Console(stderr=True, width=_width),
-                refresh_per_second=4,
+                refresh_per_second=10,
                 vertical_overflow="visible",
             )
             self._live.__enter__()
@@ -140,6 +141,15 @@ class CliProgressSubscriber:
             if total is not None:
                 self.progress.update(task_id, total=total)
             return task_id
+
+        placeholder = getattr(self, "_placeholder_task_id", None)
+        if placeholder is not None:
+            try:
+                self.progress.remove_task(placeholder)
+            except Exception:
+                pass
+            self._placeholder_task_id = None
+
         task_id = self.progress.add_task(stage, total=total)
         self.tasks_by_stage[stage] = task_id
         return task_id
@@ -148,7 +158,9 @@ class CliProgressSubscriber:
         task_id = self.tasks_by_stage.get(stage)
         if task_id is None:
             return
-        task = self.progress.tasks[task_id]
+        task = next((t for t in self.progress.tasks if t.id == task_id), None)
+        if task is None:
+            return
         if task.total is None:
             total = max(int(task.completed), 1)
             self.progress.update(task_id, total=total, completed=total)

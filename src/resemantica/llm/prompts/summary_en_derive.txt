@@ -1,10 +1,9 @@
 # version: 1.0
 SUMMARY_EN_DERIVE
 
-## LOCKED GLOSSARY
+Refer to translation below:
 {LOCKED_GLOSSARY}
 
-## INSTRUCTIONS
-Translate the following Chinese summary into concise English, preserve formatting, no addintional explanation.
+Translate the following summary in `zh` to `en`, preserve formatting, no addintional explanation:
 
 {SOURCE_TEXT_ZH}

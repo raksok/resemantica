@@ -147,13 +147,14 @@ def _unix_interrupt(_signum: int, _frame: object, stop_token: StopToken) -> None
 
 
 def _with_cli_progress(fn, *, stop_token: StopToken | None = None, verbosity: int = 0):
+    progress_verbosity = max(verbosity, 1)
     if stop_token is None:
-        with CliProgressSubscriber(verbosity=verbosity):
+        with CliProgressSubscriber(verbosity=progress_verbosity):
             return fn()
 
     _install_interrupt_handlers(stop_token)
     try:
-        with CliProgressSubscriber(verbosity=verbosity):
+        with CliProgressSubscriber(verbosity=progress_verbosity):
             return fn()
     except StopRequested as exc:
         print(f"status=stopped\nmessage={exc.message}")

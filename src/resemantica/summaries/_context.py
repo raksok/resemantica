@@ -7,6 +7,6 @@ def _format_glossary_context(entries: list[LockedGlossaryEntry]) -> str:
     if not entries:
         return "(empty)"
     return "\n".join(
-        f"- {entry.source_term} => {entry.target_term} ({entry.category})"
+        f"- {entry.source_term} => {entry.target_term}"
         for entry in entries
     )

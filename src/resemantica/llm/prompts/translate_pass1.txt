@@ -1,19 +1,14 @@
 # version: 2.0
 PASS1
 
-## GLOSSARY
-{GLOSSARY}
-
-## ALIAS RESOLUTIONS
-{ALIAS_RESOLUTIONS}
-
-## IDIOMS
+Refer to translation below:
+{GLOSSARY},
 {MATCHED_IDIOMS}
 
-## CONTINUITY NOTES
+and this information below:
+{ALIAS_RESOLUTIONS},
 {CONTINUITY_NOTES}
 
-## INSTRUCTIONS
-Use the context provided. Preserve all placeholders exactly as provided. Translate the following zh text into en with no explanation.
+Refer to information above, Preserve all placeholders exactly as provided. Translate the following `zh` text to `en` with no explanation:
 
 {SOURCE_TEXT}

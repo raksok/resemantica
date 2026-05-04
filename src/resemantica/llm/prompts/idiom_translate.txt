@@ -1,7 +1,7 @@
-# version: 2.0
+# version: 2.1
 
 CONTEXT: {EVIDENCE_SNIPPET}
 
-Translate the idiom `{SOURCE_TEXT}` into natural English. Return ONLY the translation.
+Refer to information above, translate the `zh` idiom to `en` with no extra commentary:
 
 {SOURCE_TEXT}

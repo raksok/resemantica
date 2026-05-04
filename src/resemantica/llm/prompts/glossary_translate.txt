@@ -1,7 +1,7 @@
-# version: 2.0
+# version: 2.1
 
 CONTEXT: {EVIDENCE_SNIPPET}
 
-This is text of {CATEGORY}, Translate the following `zh` into `en` with no extra explanation.
+Refer to information above, translate the following term in `zh` to `en` with no extra explanation:
 
 {SOURCE_TERM}
