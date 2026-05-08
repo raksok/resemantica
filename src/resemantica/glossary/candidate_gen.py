@@ -275,6 +275,59 @@ def merge_candidates(candidates: list[RawCandidate]) -> list[RawCandidate]:
     return list(merged.values())
 
 
+def merge_across_chapters(
+    accumulator: dict[str, RawCandidate],
+    chapter_candidates: list[RawCandidate],
+) -> dict[str, RawCandidate]:
+    """
+    Incremental merge: update accumulator with candidates from one chapter.
+    Same merge logic as merge_candidates() but operates on a persistent dict
+    owned by the caller. Call once per chapter.
+
+    Returns the accumulator dict for convenience.
+    """
+    type_priority = {
+        CAT_CHARACTER: 10,
+        CAT_LOCATION: 9,
+        CAT_FACTION: 8,
+        CAT_TECHNIQUE: 7,
+        CAT_ITEM: 6,
+        CAT_CONCEPT: 5,
+        CAT_OTHER: 0,
+    }
+
+    for c in chapter_candidates:
+        norm = c.normalized_form
+        if norm not in accumulator:
+            accumulator[norm] = RawCandidate(
+                surface_form=c.surface_form,
+                normalized_form=norm,
+                pos_tags=c.pos_tags,
+                ner_label=c.ner_label,
+                type_prior=c.type_prior,
+                strategies=set(c.strategies),
+                appearances=c.appearances,
+                context_snippets=list(c.context_snippets),
+            )
+        else:
+            existing = accumulator[norm]
+            existing.appearances += c.appearances
+            existing.strategies.update(c.strategies)
+
+            for snip in c.context_snippets:
+                if snip not in existing.context_snippets:
+                    existing.context_snippets.append(snip)
+            existing.context_snippets = existing.context_snippets[:3]
+
+            if type_priority.get(c.type_prior, 0) > type_priority.get(existing.type_prior, 0):
+                existing.type_prior = c.type_prior
+
+            if not existing.ner_label and c.ner_label:
+                existing.ner_label = c.ner_label
+
+    return accumulator
+
+
 def generate_chapter_candidates(text: str) -> list[RawCandidate]:
     """
     Orchestrate full candidate generation for a single chapter text.

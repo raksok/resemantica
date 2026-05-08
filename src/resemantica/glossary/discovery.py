@@ -10,12 +10,11 @@ from resemantica.chapters.manifest import ChapterRef
 from resemantica.glossary.candidate_gen import (
     RawCandidate,
     generate_chapter_candidates,
-    merge_candidates,
+    merge_across_chapters,
 )
-from resemantica.glossary.corpus_stats import compute_corpus_stats, score_candidates
+from resemantica.glossary.corpus_stats import CorpusStats, score_candidates
 from resemantica.glossary.models import GlossaryCandidate
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
-
 
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
 
@@ -78,8 +77,12 @@ def discover_candidates_from_extracted(
     Deterministic Chapter-by-Chapter extraction + Corpus-level scoring.
     Replaces the old LLM-driven discovery loop.
     """
-    # 1. Stage 1: Per-chapter extraction
-    per_chapter_raw: dict[int, list[RawCandidate]] = {}
+    # 1. Stage 1: Per-chapter extraction with incremental accumulation
+    merged_accumulator: dict[str, RawCandidate] = {}
+    term_freq: dict[str, int] = {}
+    doc_freq: dict[str, int] = {}
+    total_chapters = 0
+    total_tokens = 0
 
     # Track first/last seen chapter
     first_seen: dict[str, int] = {}
@@ -103,28 +106,41 @@ def discover_candidates_from_extracted(
 
         # Extract candidates for this chapter
         raw_candidates = generate_chapter_candidates(text)
-        per_chapter_raw[chapter_number] = raw_candidates
 
+        # Incremental merge into single accumulator dict
+        merge_across_chapters(merged_accumulator, raw_candidates)
+
+        # Incremental corpus stats
+        chapter_terms: set[str] = set()
         for rc in raw_candidates:
-            # Key used to track first/last seen (matches models.py ON CONFLICT)
+            term_freq[rc.normalized_form] = term_freq.get(rc.normalized_form, 0) + rc.appearances
+            total_tokens += rc.appearances
+            chapter_terms.add(rc.normalized_form)
+        for norm in chapter_terms:
+            doc_freq[norm] = doc_freq.get(norm, 0) + 1
+        total_chapters += 1
+
+        # Track first/last seen chapter
+        for rc in raw_candidates:
             key = f"{rc.normalized_form}:{rc.type_prior}"
             if key not in first_seen or chapter_number < first_seen[key]:
                 first_seen[key] = chapter_number
             if key not in last_seen or chapter_number > last_seen[key]:
                 last_seen[key] = chapter_number
 
+        # raw_candidates goes out of scope — GC reclaims per-chapter objects
         if event_callback:
             event_callback("chapter_completed", chapter_number, {"term_count": len(raw_candidates)})
 
     # 2. Stage 2: Corpus Aggregation & Scoring
-    stats = compute_corpus_stats(per_chapter_raw)
+    stats = CorpusStats(
+        term_frequency=term_freq,
+        document_frequency=doc_freq,
+        total_chapters=total_chapters,
+        total_tokens=total_tokens,
+    )
 
-    # Merge all into a flat list of RawCandidates for global scoring
-    all_raw_list: list[RawCandidate] = []
-    for raw_list in per_chapter_raw.values():
-        all_raw_list.extend(raw_list)
-    global_raw = merge_candidates(all_raw_list)
-
+    global_raw = list(merged_accumulator.values())
     scored_list = score_candidates(global_raw, stats)
 
     # 3. Convert to GlossaryCandidate
@@ -146,8 +162,8 @@ def discover_candidates_from_extracted(
                 normalized_source_term=rc.normalized_form,
                 category=rc.type_prior,
                 source_language="zh",
-                first_seen_chapter=first_seen[key],
-                last_seen_chapter=last_seen[key],
+                first_seen_chapter=first_seen.get(key, 0),
+                last_seen_chapter=last_seen.get(key, 0),
                 appearance_count=stats.term_frequency.get(rc.normalized_form, 0),
                 evidence_snippet=rc.context_snippets[0] if rc.context_snippets else "",
                 candidate_translation_en=None,

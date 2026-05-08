@@ -11,6 +11,7 @@ from resemantica.glossary.candidate_gen import (
     extract_ner_candidates,
     extract_pos_noun_phrases,
     extract_webnovel_dict,
+    merge_across_chapters,
     merge_candidates,
 )
 from resemantica.glossary.segmenter import SegmentedToken
@@ -94,3 +95,45 @@ def test_merge_candidates():
     assert merged[0].appearances == 2
     assert "ner" in merged[0].strategies
     assert "pos_np" in merged[0].strategies
+
+
+def test_merge_across_chapters():
+    c1_ch1 = RawCandidate("李明", "李明", ["NR", "NR"], "PERSON", CAT_CHARACTER, {"ner"}, appearances=2)
+    c2_ch1 = RawCandidate("宗门", "宗门", ["NN"], None, CAT_OTHER, {"ngram"}, appearances=1)
+
+    c1_ch2 = RawCandidate("李明", "李明", ["NR", "NR"], None, CAT_OTHER, {"pos_np"}, appearances=3)
+    c3_ch2 = RawCandidate("紫霄宗", "紫霄宗", ["NN"], None, CAT_FACTION, {"heuristic"}, appearances=1)
+
+    c1_ch3 = RawCandidate("李小明", "李小明", ["NR", "NR", "NR"], "PERSON", CAT_CHARACTER, {"ner"}, appearances=1)
+
+    accumulator: dict[str, RawCandidate] = {}
+    merge_across_chapters(accumulator, [c1_ch1, c2_ch1])
+    merge_across_chapters(accumulator, [c1_ch2, c3_ch2])
+    merge_across_chapters(accumulator, [c1_ch3])
+
+    merged_list = list(accumulator.values())
+
+    # Same as batch merge_candidates
+    batch = merge_candidates([c1_ch1, c2_ch1, c1_ch2, c3_ch2, c1_ch3])
+    batch_map = {c.normalized_form: c for c in batch}
+    assert len(merged_list) == len(batch) == 4
+
+    for c in merged_list:
+        bc = batch_map[c.normalized_form]
+        assert c.surface_form == bc.surface_form
+        assert c.type_prior == bc.type_prior
+        assert c.ner_label == bc.ner_label
+        assert c.appearances == bc.appearances
+        assert c.strategies == bc.strategies
+
+    # Verify type_prior priority: CHARACTER > OTHER
+    assert accumulator["李明"].type_prior == CAT_CHARACTER
+    assert accumulator["李明"].ner_label == "PERSON"
+    assert accumulator["李明"].appearances == 5
+
+    # Verify standalone entry preserved
+    assert accumulator["紫霄宗"].type_prior == CAT_FACTION
+    assert accumulator["紫霄宗"].appearances == 1
+
+    assert accumulator["李小明"].type_prior == CAT_CHARACTER
+    assert accumulator["李小明"].appearances == 1
