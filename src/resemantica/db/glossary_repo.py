@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from typing import Sequence
 
 from resemantica.db.sqlite import ensure_schema
-from resemantica.glossary.models import GlossaryCandidate, GlossaryConflict, LockedGlossaryEntry
+from resemantica.glossary.models import AliasCluster, GlossaryCandidate, GlossaryConflict, LockedGlossaryEntry
 
 
 def ensure_glossary_schema(conn: sqlite3.Connection) -> None:
@@ -51,6 +53,17 @@ def _candidate_from_row(row: sqlite3.Row) -> GlossaryCandidate:
             else str(row["translator_prompt_version"])
         ),
         schema_version=int(row["schema_version"]),
+        pos_tags=(None if row["pos_tags"] is None else str(row["pos_tags"])),
+        ner_label=(None if row["ner_label"] is None else str(row["ner_label"])),
+        type_prior=(None if row["type_prior"] is None else str(row["type_prior"])),
+        source_strategies=(None if row["source_strategies"] is None else str(row["source_strategies"])),
+        chapter_coverage=(None if row["chapter_coverage"] is None else int(row["chapter_coverage"])),
+        corpus_score=(None if row["corpus_score"] is None else float(row["corpus_score"])),
+        context_snippets=(None if row["context_snippets"] is None else str(row["context_snippets"])),
+        llm_keep=(None if row["llm_keep"] is None else int(row["llm_keep"])),
+        llm_type=(None if row["llm_type"] is None else str(row["llm_type"])),
+        llm_reason_code=(None if row["llm_reason_code"] is None else str(row["llm_reason_code"])),
+        llm_confidence=(None if row["llm_confidence"] is None else float(row["llm_confidence"])),
     )
 
 
@@ -102,9 +115,15 @@ def upsert_discovered_candidates(
                 normalized_target_term, discovery_run_id, translation_run_id,
                 candidate_status, validation_status, conflict_reason, critic_score,
                 analyst_model_name, analyst_prompt_version,
-                translator_model_name, translator_prompt_version, schema_version, updated_at
+                translator_model_name, translator_prompt_version, schema_version,
+                pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+                corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence,
+                updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES(
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+            )
             ON CONFLICT(release_id, normalized_source_term, category)
             DO UPDATE SET
                 source_term = excluded.source_term,
@@ -119,6 +138,17 @@ def upsert_discovered_candidates(
                 discovery_run_id = excluded.discovery_run_id,
                 analyst_model_name = excluded.analyst_model_name,
                 analyst_prompt_version = excluded.analyst_prompt_version,
+                pos_tags = excluded.pos_tags,
+                ner_label = excluded.ner_label,
+                type_prior = excluded.type_prior,
+                source_strategies = excluded.source_strategies,
+                chapter_coverage = excluded.chapter_coverage,
+                corpus_score = excluded.corpus_score,
+                context_snippets = excluded.context_snippets,
+                llm_keep = excluded.llm_keep,
+                llm_type = excluded.llm_type,
+                llm_reason_code = excluded.llm_reason_code,
+                llm_confidence = excluded.llm_confidence,
                 updated_at = CURRENT_TIMESTAMP
             """,
             [
@@ -146,6 +176,17 @@ def upsert_discovered_candidates(
                     candidate.translator_model_name,
                     candidate.translator_prompt_version,
                     candidate.schema_version,
+                    candidate.pos_tags,
+                    candidate.ner_label,
+                    candidate.type_prior,
+                    candidate.source_strategies,
+                    candidate.chapter_coverage,
+                    candidate.corpus_score,
+                    candidate.context_snippets,
+                    candidate.llm_keep,
+                    candidate.llm_type,
+                    candidate.llm_reason_code,
+                    candidate.llm_confidence,
                 )
                 for candidate in candidates
             ],
@@ -160,7 +201,9 @@ def list_candidates(conn: sqlite3.Connection, *, release_id: str) -> list[Glossa
                evidence_snippet, candidate_translation_en, normalized_target_term,
                discovery_run_id, translation_run_id, candidate_status, validation_status,
                conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
-               translator_model_name, translator_prompt_version, schema_version
+               translator_model_name, translator_prompt_version, schema_version,
+               pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+               corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
         FROM glossary_candidates
         WHERE release_id = ?
         ORDER BY first_seen_chapter, normalized_source_term, category
@@ -182,7 +225,9 @@ def list_candidates_for_translation(
                evidence_snippet, candidate_translation_en, normalized_target_term,
                discovery_run_id, translation_run_id, candidate_status, validation_status,
                conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
-               translator_model_name, translator_prompt_version, schema_version
+               translator_model_name, translator_prompt_version, schema_version,
+               pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+               corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
         FROM glossary_candidates
         WHERE release_id = ?
           AND (candidate_translation_en IS NULL OR candidate_translation_en = '')
@@ -205,7 +250,9 @@ def list_candidates_for_promotion(
                evidence_snippet, candidate_translation_en, normalized_target_term,
                discovery_run_id, translation_run_id, candidate_status, validation_status,
                conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
-               translator_model_name, translator_prompt_version, schema_version
+               translator_model_name, translator_prompt_version, schema_version,
+               pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+               corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
         FROM glossary_candidates
         WHERE release_id = ?
           AND candidate_translation_en IS NOT NULL
@@ -230,7 +277,9 @@ def list_candidates_for_review(
                evidence_snippet, candidate_translation_en, normalized_target_term,
                discovery_run_id, translation_run_id, candidate_status, validation_status,
                conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
-               translator_model_name, translator_prompt_version, schema_version
+               translator_model_name, translator_prompt_version, schema_version,
+               pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+               corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
         FROM glossary_candidates
         WHERE release_id = ?
           AND candidate_status = 'translated'
@@ -438,4 +487,85 @@ def find_exact_locked_entry(
     if row is None:
         return None
     return _locked_from_row(row)
+
+
+def _cluster_id(release_id: str, canonical_id: str) -> str:
+    digest = hashlib.sha256(f"{release_id}:{canonical_id}".encode("utf-8")).hexdigest()[:24]
+    return f"gclus_{digest}"
+
+
+def upsert_alias_clusters(
+    conn: sqlite3.Connection,
+    *,
+    clusters: Sequence[AliasCluster],
+    release_id: str,
+    discovery_run_id: str,
+) -> None:
+    if not clusters:
+        return
+    with conn:
+        conn.executemany(
+            """
+            INSERT INTO glossary_alias_clusters(
+                cluster_id, release_id, canonical_candidate_id, canonical_term,
+                aliases_json, member_ids_json, similarity_score, existing_glossary_match,
+                discovery_run_id, schema_version
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(release_id, canonical_candidate_id)
+            DO UPDATE SET
+                canonical_term = excluded.canonical_term,
+                aliases_json = excluded.aliases_json,
+                member_ids_json = excluded.member_ids_json,
+                similarity_score = excluded.similarity_score,
+                existing_glossary_match = excluded.existing_glossary_match,
+                discovery_run_id = excluded.discovery_run_id
+            """,
+            [
+                (
+                    _cluster_id(release_id, c.canonical_id),
+                    release_id,
+                    c.canonical_id,
+                    c.canonical_term,
+                    json.dumps(c.aliases, ensure_ascii=False),
+                    json.dumps(c.member_ids, ensure_ascii=False),
+                    c.similarity_score,
+                    c.existing_glossary_match,
+                    discovery_run_id,
+                    1,
+                )
+                for c in clusters
+            ]
+        )
+
+
+def list_alias_clusters(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+) -> list[AliasCluster]:
+    rows = conn.execute(
+        """
+        SELECT canonical_candidate_id, canonical_term, aliases_json,
+               member_ids_json, similarity_score, existing_glossary_match
+        FROM glossary_alias_clusters
+        WHERE release_id = ?
+        ORDER BY similarity_score DESC
+        """,
+        (release_id,),
+    ).fetchall()
+
+    return [
+        AliasCluster(
+            canonical_id=str(row["canonical_candidate_id"]),
+            canonical_term=str(row["canonical_term"]),
+            aliases=json.loads(row["aliases_json"]),
+            member_ids=json.loads(row["member_ids_json"]),
+            similarity_score=float(row["similarity_score"]),
+            existing_glossary_match=(
+                None if row["existing_glossary_match"] is None else str(row["existing_glossary_match"])
+            ),
+        )
+        for row in rows
+    ]
 

@@ -89,6 +89,15 @@ class EventsConfig:
 
 
 @dataclass(slots=True)
+class GlossaryConfig:
+    min_term_length: int = 2
+    max_term_length: int = 20
+    min_corpus_score: float = 0.1
+    eval_batch_size: int = 50
+    dedup_similarity_threshold: float = 0.85
+
+
+@dataclass(slots=True)
 class AppConfig:
     models: ModelsConfig = field(default_factory=ModelsConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -97,6 +106,7 @@ class AppConfig:
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
     events: EventsConfig = field(default_factory=EventsConfig)
+    glossary: GlossaryConfig = field(default_factory=GlossaryConfig)
 
 
 @dataclass(slots=True)
@@ -206,6 +216,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     translation = _table(raw, "translation")
     summaries = _table(raw, "summaries")
     events = _table(raw, "events")
+    glossary = _table(raw, "glossary")
 
     config = AppConfig(
         models=ModelsConfig(
@@ -331,6 +342,28 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 "events.progress_sample_every",
             ),
         ),
+        glossary=GlossaryConfig(
+            min_term_length=_as_int(
+                glossary.get("min_term_length", GlossaryConfig().min_term_length),
+                "glossary.min_term_length",
+            ),
+            max_term_length=_as_int(
+                glossary.get("max_term_length", GlossaryConfig().max_term_length),
+                "glossary.max_term_length",
+            ),
+            min_corpus_score=_as_float(
+                glossary.get("min_corpus_score", GlossaryConfig().min_corpus_score),
+                "glossary.min_corpus_score",
+            ),
+            eval_batch_size=_as_int(
+                glossary.get("eval_batch_size", GlossaryConfig().eval_batch_size),
+                "glossary.eval_batch_size",
+            ),
+            dedup_similarity_threshold=_as_float(
+                glossary.get("dedup_similarity_threshold", GlossaryConfig().dedup_similarity_threshold),
+                "glossary.dedup_similarity_threshold",
+            ),
+        ),
     )
     validate_config(config)
     return config
@@ -371,6 +404,17 @@ def validate_config(config: AppConfig) -> None:
         r = getattr(config.models, f"{role}_max_context_ratio")
         if r is not None and not (0 < r <= 1):
             raise ValueError(f"models.{role}_max_context_ratio must be in (0, 1] when set")
+
+    if config.glossary.min_term_length < 1:
+        raise ValueError("glossary.min_term_length must be >= 1.")
+    if config.glossary.max_term_length < config.glossary.min_term_length:
+        raise ValueError("glossary.max_term_length must be >= glossary.min_term_length.")
+    if config.glossary.min_corpus_score < 0:
+        raise ValueError("glossary.min_corpus_score must be >= 0.")
+    if config.glossary.eval_batch_size < 1:
+        raise ValueError("glossary.eval_batch_size must be >= 1.")
+    if not (0 <= config.glossary.dedup_similarity_threshold <= 1):
+        raise ValueError("glossary.dedup_similarity_threshold must be in [0.0, 1.0].")
 
     if not config.paths.artifact_root.strip():
         raise ValueError("paths.artifact_root must not be empty.")

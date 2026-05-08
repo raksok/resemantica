@@ -1,4 +1,8 @@
 # LLD 03: Canonical Glossary
+> [!WARNING]
+> The **Discovery Stage** (Stage A) of this LLD is superseded by [LLD 39: Deterministic Glossary Discovery](file:///d:/Project/resemantica/docs/20-lld/lld-39-deterministic-glossary-discovery.md).
+> The pipeline now uses a 5-stage deterministic architecture instead of LLM-only discovery.
+> Translation, Promotion, and Review workflows remain relevant as described below.
 
 ## Summary
 

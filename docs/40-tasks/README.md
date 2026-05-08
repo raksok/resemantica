@@ -56,3 +56,4 @@ Always follow the milestone sequence below.
 | M27 | task-34 | M25, M11 | Cleanup Wizard TUI Screen |
 | M28 | task-37 | M25, M27 | CLI–TUI Feature Parity |
 | M29 | task-38 | M28, M10 | Resume Preserves Chapter Scope |
+| M39 | task-39 | M3 | Deterministic Glossary Discovery |

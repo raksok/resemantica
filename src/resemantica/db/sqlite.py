@@ -83,8 +83,34 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             analyst_model_name TEXT,
             analyst_prompt_version TEXT,
             schema_version INTEGER NOT NULL DEFAULT 1,
+            pos_tags TEXT,
+            ner_label TEXT,
+            type_prior TEXT,
+            source_strategies TEXT,
+            chapter_coverage INTEGER,
+            corpus_score REAL,
+            context_snippets TEXT,
+            llm_keep INTEGER,
+            llm_type TEXT,
+            llm_reason_code TEXT,
+            llm_confidence REAL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (release_id, normalized_source_term, category)
+        );
+
+        CREATE TABLE IF NOT EXISTS glossary_alias_clusters (
+            cluster_id TEXT PRIMARY KEY,
+            release_id TEXT NOT NULL,
+            canonical_candidate_id TEXT NOT NULL,
+            canonical_term TEXT NOT NULL,
+            aliases_json TEXT NOT NULL,
+            member_ids_json TEXT NOT NULL,
+            similarity_score REAL NOT NULL,
+            existing_glossary_match TEXT,
+            discovery_run_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (release_id, canonical_candidate_id)
         );
 
         CREATE TABLE IF NOT EXISTS locked_glossary (
@@ -316,6 +342,30 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS schema_migrations;
         """
     )
+
+    # Schema Evolution: Add columns to glossary_candidates if they don't exist
+    new_columns = [
+        ("pos_tags", "TEXT"),
+        ("ner_label", "TEXT"),
+        ("type_prior", "TEXT"),
+        ("source_strategies", "TEXT"),
+        ("chapter_coverage", "INTEGER"),
+        ("corpus_score", "REAL"),
+        ("context_snippets", "TEXT"),
+        ("llm_keep", "INTEGER"),
+        ("llm_type", "TEXT"),
+        ("llm_reason_code", "TEXT"),
+        ("llm_confidence", "REAL"),
+    ]
+    for col_name, col_type in new_columns:
+        try:
+            conn.execute(f"ALTER TABLE glossary_candidates ADD COLUMN {col_name} {col_type};")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                pass
+            else:
+                raise
+
     conn.commit()
 
 

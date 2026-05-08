@@ -1,0 +1,173 @@
+import math
+from dataclasses import dataclass
+
+from resemantica.glossary.candidate_gen import RawCandidate
+
+
+@dataclass(slots=True)
+class CorpusStats:
+    term_frequency: dict[str, int]
+    document_frequency: dict[str, int]
+    total_chapters: int
+    total_tokens: int
+
+
+@dataclass(slots=True)
+class ScoredCandidate:
+    raw: RawCandidate
+    tf_idf: float
+    c_value: float
+    composite_score: float
+
+
+def compute_corpus_stats(per_chapter_candidates: dict[int, list[RawCandidate]]) -> CorpusStats:
+    """
+    Aggregate per-chapter candidate occurrences into corpus-level counts.
+    Note: total_tokens is a rough estimate since we only have candidates here,
+    we can just use the sum of all term frequencies as a proxy, or it can be passed in.
+    For tf-idf, we don't necessarily need total_tokens if we just use raw TF.
+    """
+    term_freq: dict[str, int] = {}
+    doc_freq: dict[str, int] = {}
+    total_chapters = len(per_chapter_candidates)
+    total_tokens = 0
+
+    for _, candidates in per_chapter_candidates.items():
+        chapter_terms = set()
+        for c in candidates:
+            norm = c.normalized_form
+            # Since RawCandidate within a chapter already has appearances aggregated
+            # for that chapter, we add it to term_freq.
+            term_freq[norm] = term_freq.get(norm, 0) + c.appearances
+            total_tokens += c.appearances
+            chapter_terms.add(norm)
+
+        for term in chapter_terms:
+            doc_freq[term] = doc_freq.get(term, 0) + 1
+
+    return CorpusStats(
+        term_frequency=term_freq,
+        document_frequency=doc_freq,
+        total_chapters=total_chapters,
+        total_tokens=total_tokens
+    )
+
+
+def compute_c_value(
+    candidates: list[RawCandidate],
+    term_freq: dict[str, int]
+) -> dict[str, float]:
+    """
+    Compute C-value for multi-word terms.
+    C-value = log2(|term|) * ( freq - (1/c) * sum(freq_of_superstrings) )
+    where |term| is length of term (in characters for Chinese, or tokens).
+    c is number of unique superstrings.
+    If no superstrings, C-value = log2(|term|) * freq.
+    """
+    # First, map terms to their frequencies
+    c_values: dict[str, float] = {}
+
+    # Sort terms by length descending to easily find superstrings
+    terms = sorted([c.normalized_form for c in candidates], key=len, reverse=True)
+
+    # Track superstrings for each term: term -> (sum_of_superstring_freqs, count_of_superstrings)
+    super_info: dict[str, tuple[int, int]] = {t: (0, 0) for t in terms}
+
+    for i, term in enumerate(terms):
+        length = len(term)
+        freq = term_freq.get(term, 0)
+
+        # Find substrings of `term` that are also candidates
+        # We can just check all shorter terms, but checking if shorter term in `term` is faster
+        for j in range(i + 1, len(terms)):
+            sub = terms[j]
+            if sub in term:
+                sum_freq, count = super_info[sub]
+                super_info[sub] = (sum_freq + freq, count + 1)
+
+    for term in terms:
+        length = len(term)
+        if length < 2:
+            c_values[term] = 0.0
+            continue
+
+        freq = term_freq.get(term, 0)
+        sum_freq, count = super_info[term]
+
+        # log2(length) * freq if no superstrings
+        if count == 0:
+            val = math.log2(length) * freq
+        else:
+            val = math.log2(length) * (freq - (1.0 / count) * sum_freq)
+
+        c_values[term] = max(0.0, val) # C-value shouldn't be negative
+
+    return c_values
+
+
+def score_candidates(
+    candidates: list[RawCandidate],
+    stats: CorpusStats,
+) -> list[ScoredCandidate]:
+    """
+    Compute TF-IDF and C-value for each candidate.
+
+    Composite score formula:
+      composite = 0.3 * norm_tf_idf + 0.3 * norm_c_value + 0.2 * strategy_count + 0.2 * coverage_ratio
+
+    where:
+      norm_tf_idf = tf_idf / max(tf_idf across all candidates)
+      norm_c_value = c_value / max(c_value) for len >= 2, else 0
+      strategy_count = len(source_strategies) / max_strategies
+      coverage_ratio = document_frequency / total_chapters
+    """
+    if not candidates:
+        return []
+
+    c_values = compute_c_value(candidates, stats.term_frequency)
+
+    # Compute TF-IDF
+    tf_idfs = {}
+    for c in candidates:
+        norm = c.normalized_form
+        tf = stats.term_frequency.get(norm, 0)
+        df = stats.document_frequency.get(norm, 0)
+        idf = math.log(stats.total_chapters / (df + 1e-9)) if stats.total_chapters > 0 else 0
+        tf_idfs[norm] = tf * idf
+
+    # Normalize TF-IDF and C-Value
+    max_tf_idf = max(tf_idfs.values()) if tf_idfs else 1.0
+    if max_tf_idf <= 0:
+        max_tf_idf = 1.0
+
+    max_c_value = max(c_values.values()) if c_values else 1.0
+    if max_c_value <= 0:
+        max_c_value = 1.0
+
+    max_strategies = 5.0 # We have ~5 main strategies
+
+    scored = []
+    for c in candidates:
+        norm = c.normalized_form
+        tf_idf = tf_idfs[norm]
+        c_val = c_values[norm]
+
+        norm_tf_idf = tf_idf / max_tf_idf
+        norm_c_value = c_val / max_c_value
+        strategy_count = len(c.strategies) / max_strategies
+        coverage_ratio = stats.document_frequency.get(norm, 0) / stats.total_chapters if stats.total_chapters > 0 else 0
+
+        composite = 0.3 * norm_tf_idf + 0.3 * norm_c_value + 0.2 * strategy_count + 0.2 * coverage_ratio
+
+        scored.append(
+            ScoredCandidate(
+                raw=c,
+                tf_idf=tf_idf,
+                c_value=c_val,
+                composite_score=composite
+            )
+        )
+
+    # Sort descending by composite score
+    scored.sort(key=lambda x: x.composite_score, reverse=True)
+    return scored

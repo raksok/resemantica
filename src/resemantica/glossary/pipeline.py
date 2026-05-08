@@ -19,10 +19,12 @@ from resemantica.db.glossary_repo import (
     mark_candidate_promoted,
     promote_locked_entries,
     save_candidate_translation,
+    upsert_alias_clusters,
     upsert_discovered_candidates,
 )
 from resemantica.db.sqlite import ensure_schema, open_connection
-from resemantica.glossary.critic import compute_critic_scores
+from resemantica.glossary.critic import deduplicate_and_cluster
+from resemantica.glossary.evaluator import evaluate_candidate_batch
 from resemantica.glossary.discovery import discover_candidates_from_extracted
 from resemantica.glossary.models import GlossaryCandidate
 from resemantica.glossary.validators import (
@@ -98,11 +100,13 @@ def discover_glossary_candidates(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     pruning_threshold: float | None = None,
+    eval_batch_size: int | None = None,
+    skip_llm_eval: bool = False,
+    dedup_threshold: float | None = None,
     stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
-    prompt = load_prompt("glossary_discover.txt")
     client = _build_llm_client(config_obj, llm_client)
     chapter_refs = list_extracted_chapters(
         paths,
@@ -124,17 +128,8 @@ def discover_glossary_candidates(
     )
     discovered = discover_candidates_from_extracted(
         release_id=release_id,
-        extracted_chapters_dir=paths.extracted_chapters_dir,
         discovery_run_id=run_id,
-        llm_client=client,
-        model_name=config_obj.models.analyst_name,
-        prompt_template=prompt.template,
-        prompt_version=prompt.version,
-        chapter_start=chapter_start,
-        chapter_end=chapter_end,
-        config=config_obj,
         chapter_refs=chapter_refs,
-        cache_root=paths.release_root / "cache" / "llm",
         event_callback=lambda event_name, chapter_number, payload: _emit(
             run_id,
             release_id,
@@ -145,22 +140,74 @@ def discover_glossary_candidates(
         stop_token=stop_token,
     )
 
-    threshold = pruning_threshold if pruning_threshold is not None else config_obj.models.pruning_threshold
-
-    # Tier 1: deterministic filter
-    discovered = apply_deterministic_filter(discovered)
-    # Tier 3: BGE-M3 embedding critic (skipped if threshold is 0 and we want eval-only,
-    # but still score — handled inside compute_critic_scores)
-    discovered = compute_critic_scores(
+    # Stage 3: Deterministic Filtering
+    discovered = apply_deterministic_filter(
         discovered,
-        model_name=config_obj.models.embedding_name,
-        pruning_threshold=threshold,
+        config=config_obj.glossary,
+        min_score_override=pruning_threshold,
     )
+
+    # Stage 4: LLM Batch Evaluation
+    if not skip_llm_eval:
+        pending_eval = [c for c in discovered if c.candidate_status == "discovered"]
+        if pending_eval:
+            eval_prompt = load_prompt("glossary_evaluate.txt")
+            batch_sz = (
+                eval_batch_size if eval_batch_size is not None else config_obj.glossary.eval_batch_size
+            )
+            eval_results = evaluate_candidate_batch(
+                candidates=pending_eval,
+                llm_client=client,
+                model_name=config_obj.models.analyst_name,
+                prompt_template=eval_prompt.template,
+                prompt_version=eval_prompt.version,
+                batch_size=batch_sz,
+                cache_root=paths.release_root / "cache" / "llm",
+                event_callback=lambda event, payload: _emit(
+                    run_id, release_id, f"{_STAGE_NAME}.eval.{event}", **payload
+                ),
+            )
+            # Apply eval results
+            eval_map = {res.candidate_id: res for res in eval_results}
+            for c in discovered:
+                if c.candidate_id in eval_map:
+                    res = eval_map[c.candidate_id]
+                    c.llm_keep = 1 if res.keep else 0
+                    c.llm_type = res.term_type
+                    c.llm_reason_code = res.reason_code
+                    c.llm_confidence = res.confidence
+                    if not res.keep:
+                        c.candidate_status = "llm_rejected"
+
+    # Stage 5: Embedding-based Dedup / Alias Clustering
+    to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
+    clusters = []
+    if to_dedup:
+        conn_tmp = open_connection(paths.db_path)
+        existing_locked = list_locked_entries(conn_tmp, release_id=release_id)
+        conn_tmp.close()
+
+        sim_threshold = (
+            dedup_threshold
+            if dedup_threshold is not None
+            else config_obj.glossary.dedup_similarity_threshold
+        )
+
+        # Deduplicate and update candidates in-place
+        _, clusters = deduplicate_and_cluster(
+            candidates=to_dedup,
+            model_name=config_obj.models.embedding_name,
+            existing_entries=existing_locked,
+            similarity_threshold=sim_threshold,
+        )
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
     try:
         upsert_discovered_candidates(conn, candidates=discovered)
+        if clusters:
+            upsert_alias_clusters(conn, clusters=clusters)
+
         _write_candidate_snapshot(
             conn,
             release_id=release_id,
@@ -171,12 +218,17 @@ def discover_glossary_candidates(
 
     filtered_count = sum(1 for c in discovered if c.candidate_status == "filtered")
     pruned_count = sum(1 for c in discovered if c.candidate_status == "pruned")
+    llm_rejected_count = sum(1 for c in discovered if c.candidate_status == "llm_rejected")
+    alias_merged_count = sum(1 for c in discovered if c.candidate_status == "alias_merged")
+
     _emit(
         run_id,
         release_id,
         f"{_STAGE_NAME}.discover.completed",
         discovered_count=len(discovered),
         filtered_count=filtered_count,
+        llm_rejected_count=llm_rejected_count,
+        alias_merged_count=alias_merged_count,
         pruned_count=pruned_count,
         **usage_payload_delta(client, usage_before),
     )
@@ -192,6 +244,8 @@ def discover_glossary_candidates(
         "run_id": run_id,
         "candidates_written": len(discovered),
         "filtered_count": filtered_count,
+        "llm_rejected_count": llm_rejected_count,
+        "alias_merged_count": alias_merged_count,
         "pruned_count": pruned_count,
         "candidates_artifact": str(paths.glossary_candidates_path),
         **usage_payload_delta(client, usage_before),

@@ -18,7 +18,16 @@ GlossaryCategory = Literal[
     "idiom",
 ]
 
-CandidateStatus = Literal["discovered", "filtered", "pruned", "translated", "conflict", "promoted"]
+CandidateStatus = Literal[
+    "discovered",
+    "filtered",
+    "pruned",
+    "translated",
+    "conflict",
+    "promoted",
+    "llm_rejected",
+    "alias_merged",
+]
 ValidationStatus = Literal["pending", "approved", "conflict"]
 LockedGlossaryStatus = Literal["approved"]
 
@@ -48,6 +57,17 @@ class GlossaryCandidate:
     translator_model_name: str | None = None
     translator_prompt_version: str | None = None
     schema_version: int = 1
+    pos_tags: str | None = None
+    ner_label: str | None = None
+    type_prior: str | None = None
+    source_strategies: str | None = None
+    chapter_coverage: int | None = None
+    corpus_score: float | None = None
+    context_snippets: str | None = None
+    llm_keep: int | None = None
+    llm_type: str | None = None
+    llm_reason_code: str | None = None
+    llm_confidence: float | None = None
 
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -85,3 +105,15 @@ class GlossaryConflict:
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
 
+
+@dataclass(slots=True)
+class AliasCluster:
+    canonical_id: str
+    canonical_term: str
+    aliases: list[str]
+    member_ids: list[str]
+    similarity_score: float
+    existing_glossary_match: str | None
+
+    def to_json_dict(self) -> dict[str, object]:
+        return asdict(self)

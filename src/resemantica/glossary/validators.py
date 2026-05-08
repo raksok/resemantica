@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 
 from resemantica.glossary.models import GlossaryCandidate, GlossaryConflict, LockedGlossaryEntry
+from resemantica.settings import GlossaryConfig
 
 _GLOSSARY_CATEGORIES: set[str] = {
     "character", "alias", "title_honorific", "faction", "location",
@@ -42,6 +43,14 @@ _COMMON_STOPLIST: set[str] = {
     "没有", "不是", "可以", "能够", "应该",
 }
 
+try:
+    from resemantica.glossary.data import load_data_file
+    _COMMON_WORDS: set[str] = load_data_file("common_words.txt")
+except Exception:
+    _COMMON_WORDS = set()
+
+_PUNCT_NOISE_RE = re.compile(r"^[\s\d\W_]+$")
+
 
 def _match_date_pattern(term: str) -> bool:
     for pattern in _DATE_PATTERNS:
@@ -54,15 +63,54 @@ def _match_stoplist(term: str) -> bool:
     return term in _COMMON_STOPLIST
 
 
-def apply_deterministic_filter(candidates: list[GlossaryCandidate]) -> list[GlossaryCandidate]:
+def apply_deterministic_filter(
+    candidates: list[GlossaryCandidate],
+    *,
+    config: GlossaryConfig | None = None,
+    min_score_override: float | None = None,
+) -> list[GlossaryCandidate]:
+    min_length = config.min_term_length if config else 2
+    max_length = config.max_term_length if config else 20
+    min_score = min_score_override if min_score_override is not None else (config.min_corpus_score if config else 0.1)
+
     for candidate in candidates:
         if candidate.candidate_status != "discovered":
             continue
+
         reasons: list[str] = []
-        if _match_date_pattern(candidate.source_term):
+        term = candidate.source_term
+
+        if _match_date_pattern(term):
             reasons.append("date_pattern")
-        if _match_stoplist(candidate.source_term):
-            reasons.append("stop_list")
+
+        if _match_stoplist(term) or term in _COMMON_WORDS:
+            reasons.append("common_word")
+
+        if len(term) < min_length:
+            reasons.append("min_length")
+
+        if len(term) > max_length:
+            reasons.append("max_length")
+
+        if _PUNCT_NOISE_RE.match(term):
+            reasons.append("punctuation_noise")
+
+        if candidate.pos_tags:
+            # Parse pos_tags from string if it's stored as JSON or string repr
+            import json
+            try:
+                # the field pos_tags is typically saved as a string, e.g., '["VV", "AD"]'
+                # if it starts with '[', parse it
+                pos_list = json.loads(candidate.pos_tags) if candidate.pos_tags.startswith("[") else []
+                # Check if all POS are generic
+                if pos_list and all(p in {"VV", "AD", "P", "CC"} for p in pos_list):
+                    reasons.append("pos_generic")
+            except Exception:
+                pass
+
+        if candidate.corpus_score is not None and candidate.corpus_score < min_score:
+            reasons.append("low_score")
+
         if reasons:
             candidate.candidate_status = "filtered"
             candidate.validation_status = "pending"

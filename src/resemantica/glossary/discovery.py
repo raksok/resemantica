@@ -2,36 +2,22 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
 from resemantica.chapters.manifest import ChapterRef
-from resemantica.glossary.models import GlossaryCandidate
-from resemantica.glossary.validators import normalize_term
-from resemantica.llm.budget import (
-    PromptBudgetError,
-    chunk_text_for_prompt,
-    ensure_prompt_within_budget,
+from resemantica.glossary.candidate_gen import (
+    RawCandidate,
+    generate_chapter_candidates,
+    merge_candidates,
 )
-from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
-from resemantica.llm.client import LLMClient, capture_usage_snapshot, record_cache_hit, usage_payload_delta
-from resemantica.llm.prompts import render_named_sections
-from resemantica.llm.tokens import count_tokens
+from resemantica.glossary.corpus_stats import compute_corpus_stats, score_candidates
+from resemantica.glossary.models import GlossaryCandidate
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
-from resemantica.settings import AppConfig, load_config
-from resemantica.utils import _chapter_number_from_path
 
-_CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
+
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
-
-
-@dataclass(slots=True)
-class _DetectedTerm:
-    source_term: str
-    category: str
-    evidence_snippet: str
 
 
 def _strip_placeholders(text: str) -> str:
@@ -57,63 +43,15 @@ def _collect_source_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _parse_detected_terms(raw: str) -> list[_DetectedTerm]:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
-    parsed = json.loads(raw)
-    rows: object = parsed
-    if isinstance(parsed, dict):
-        rows = parsed.get("glossary_terms", [])
-    if not isinstance(rows, list):
-        raise ValueError("glossary_discover output must be a list or {'glossary_terms': [...]} object")
-
-    detected: list[_DetectedTerm] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        source_term = str(row.get("source_term", "")).strip().strip("《》")
-        category = str(row.get("category", "generic_role")).strip()
-        evidence = str(row.get("evidence_snippet", "")).strip()
-        if not source_term:
-            continue
-        detected.append(
-            _DetectedTerm(
-                source_term=source_term,
-                category=category,
-                evidence_snippet=evidence,
-            )
-        )
-    return detected
-
-
-def _evidence_snippet(text: str, term: str) -> str:
-    position = text.find(term)
-    if position < 0:
-        return text[:120]
-    start = max(0, position - 30)
-    end = min(len(text), position + len(term) + 30)
-    return text[start:end]
-
-
 def _candidate_id(
     *,
     release_id: str,
     discovery_run_id: str,
-    chapter_number: int,
-    row_index: int,
     normalized_source_term: str,
     category: str,
 ) -> str:
     digest = sha256(
-        (
-            f"{release_id}:{discovery_run_id}:{chapter_number}:{row_index}:{normalized_source_term}:{category}"
-        ).encode("utf-8")
+        (f"{release_id}:{discovery_run_id}:{normalized_source_term}:{category}").encode("utf-8")
     ).hexdigest()[:24]
     return f"gcan_{digest}"
 
@@ -121,239 +59,116 @@ def _candidate_id(
 def discover_candidates_from_extracted(
     *,
     release_id: str,
-    extracted_chapters_dir: Path,
     discovery_run_id: str,
-    llm_client: LLMClient,
-    model_name: str,
-    prompt_template: str,
-    prompt_version: str,
-    chapter_start: int | None = None,
-    chapter_end: int | None = None,
-    config: AppConfig | None = None,
-    chapter_refs: list[ChapterRef] | None = None,
-    cache_root: Path | None = None,
+    chapter_refs: list[ChapterRef],
     event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
     stop_token: StopToken | None = None,
+    # The following parameters are kept for signature compatibility but ignored in deterministic mode
+    extracted_chapters_dir: Path | None = None,
+    llm_client: Any = None,
+    model_name: str | None = None,
+    prompt_template: str | None = None,
+    prompt_version: str | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
+    config: Any = None,
+    cache_root: Path | None = None,
 ) -> list[GlossaryCandidate]:
-    config_obj = config or load_config()
-    refs = chapter_refs
-    if refs is None:
-        chapter_files = sorted(
-            extracted_chapters_dir.glob("chapter-*.json"),
-            key=_chapter_number_from_path,
-        )
-        if chapter_start is not None or chapter_end is not None:
-            chapter_files = [
-                f for f in chapter_files
-                if (chapter_start is None or _chapter_number_from_path(f) >= chapter_start)
-                and (chapter_end is None or _chapter_number_from_path(f) <= chapter_end)
-            ]
-        refs = [
-            ChapterRef(
-                chapter_number=_chapter_number_from_path(path),
-                chapter_path=path,
-                placeholder_path=path,
-                source_document_path=None,
-                chapter_source_hash=None,
-            )
-            for path in chapter_files
-        ]
-    candidates: list[GlossaryCandidate] = []
+    """
+    Deterministic Chapter-by-Chapter extraction + Corpus-level scoring.
+    Replaces the old LLM-driven discovery loop.
+    """
+    # 1. Stage 1: Per-chapter extraction
+    per_chapter_raw: dict[int, list[RawCandidate]] = {}
 
-    for chapter_ref in refs:
-        chapter_file = chapter_ref.chapter_path
-        payload = json.loads(chapter_file.read_text(encoding="utf-8"))
-        chapter_number = int(payload.get("chapter_number", chapter_ref.chapter_number))
-        chapter_usage_before = capture_usage_snapshot(llm_client)
-        raise_if_stop_requested(
-            stop_token,
-            checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},
-            message="Glossary discovery stopped before next chapter",
-        )
-        if event_callback is not None:
+    # Track first/last seen chapter
+    first_seen: dict[str, int] = {}
+    last_seen: dict[str, int] = {}
+
+    for ref in chapter_refs:
+        chapter_number = ref.chapter_number
+        if event_callback:
             event_callback("chapter_started", chapter_number, {})
-        source_text_zh = _collect_source_text(payload)
-        analyst_budget = config_obj.models.effective_max_context_per_pass(
-            "analyst", config_obj.budget.max_context_per_pass, config_obj.llm.context_window
-        )
-        if not source_text_zh:
-            if event_callback is not None:
-                event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
+
+        raise_if_stop_requested(stop_token)
+
+        # Load chapter text
+        payload = json.loads(ref.chapter_path.read_text(encoding="utf-8"))
+        text = _collect_source_text(payload)
+
+        if not text:
+            if event_callback:
+                event_callback("chapter_skipped", chapter_number, {"reason": "empty_text"})
             continue
 
-        static_prompt = render_named_sections(
-            prompt_template,
-            {
-                "CHAPTER_NUMBER": str(chapter_number),
-                "SOURCE_TEXT_ZH": "",
-            },
-        )
-        try:
-            chunks = chunk_text_for_prompt(
-                source_text_zh,
-                config=config_obj,
-                static_prompt_tokens=count_tokens(static_prompt),
-                max_tokens=analyst_budget,
-            )
-        except PromptBudgetError:
-            if event_callback is not None:
-                event_callback("chapter_skipped", chapter_number, {"reason": "prompt_budget_exceeded"})
-            continue
+        # Extract candidates for this chapter
+        raw_candidates = generate_chapter_candidates(text)
+        per_chapter_raw[chapter_number] = raw_candidates
 
-        detected_rows: list[_DetectedTerm] = []
-        chapter_skipped = False
-        for chunk in chunks:
-            chunk_text = (
-                source_text_zh
-                if chunk.chunk_count == 1
-                else f"[Chunk {chunk.chunk_index}/{chunk.chunk_count}]\n{chunk.text}"
-            )
-            prompt = render_named_sections(
-                prompt_template,
-                {
-                    "CHAPTER_NUMBER": str(chapter_number),
-                    "SOURCE_TEXT_ZH": chunk_text,
-                },
-            )
-            try:
-                ensure_prompt_within_budget(
-                    prompt,
-                    config=config_obj,
-                    stage_name="preprocess-glossary.discover",
-                    chapter_number=chapter_number,
-                    max_tokens=analyst_budget,
-                )
-            except PromptBudgetError:
-                if event_callback is not None:
-                    event_callback("chapter_skipped", chapter_number, {"reason": "prompt_budget_exceeded"})
-                chapter_skipped = True
-                break
+        for rc in raw_candidates:
+            # Key used to track first/last seen (matches models.py ON CONFLICT)
+            key = f"{rc.normalized_form}:{rc.type_prior}"
+            if key not in first_seen or chapter_number < first_seen[key]:
+                first_seen[key] = chapter_number
+            if key not in last_seen or chapter_number > last_seen[key]:
+                last_seen[key] = chapter_number
 
-            identity = LLMCacheIdentity(
-                release_id=release_id,
-                chapter_number=chapter_number,
-                source_hash=str(payload.get("chapter_source_hash") or ""),
-                stage_name="preprocess-glossary.discover",
-                chunk_index=chunk.chunk_index,
-                model_name=model_name,
-                prompt_version=prompt_version,
-                prompt_hash=hash_prompt(prompt),
-            )
-            cached = load_cached_text(cache_root, identity) if cache_root is not None else None
-            if cached is not None:
-                record_cache_hit(llm_client)
-            raw = (
-                cached
-                if cached is not None
-                else llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-            )
-            if cache_root is not None and cached is None:
-                save_cached_text(cache_root, identity, raw)
-            try:
-                parsed_rows = _parse_detected_terms(raw)
-            except json.JSONDecodeError:
-                if cached is not None:
-                    assert cache_root is not None
-                    raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-                    save_cached_text(cache_root, identity, raw)
-                    try:
-                        parsed_rows = _parse_detected_terms(raw)
-                    except (json.JSONDecodeError, ValueError):
-                        print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
-                        if event_callback is not None:
-                            event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
-                        chapter_skipped = True
-                        break
-                    detected_rows.extend(parsed_rows)
-                    continue
-                print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
-                if event_callback is not None:
-                    event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
-                chapter_skipped = True
-                break
-            except ValueError:
-                if cached is not None:
-                    assert cache_root is not None
-                    raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-                    save_cached_text(cache_root, identity, raw)
-                    try:
-                        parsed_rows = _parse_detected_terms(raw)
-                    except (json.JSONDecodeError, ValueError):
-                        print(f"  WARN: chapter {chapter_number}: parse error, skipping")
-                        if event_callback is not None:
-                            event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
-                        chapter_skipped = True
-                        break
-                    detected_rows.extend(parsed_rows)
-                    continue
-                print(f"  WARN: chapter {chapter_number}: parse error, skipping")
-                if event_callback is not None:
-                    event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
-                chapter_skipped = True
-                break
-            detected_rows.extend(parsed_rows)
-        if chapter_skipped:
-            continue
+        if event_callback:
+            event_callback("chapter_completed", chapter_number, {"term_count": len(raw_candidates)})
 
-        for index, detected in enumerate(detected_rows):
-            normalized_source = normalize_term(detected.source_term)
-            if not normalized_source:
-                continue
-            if event_callback is not None:
-                event_callback(
-                    "term_found",
-                    chapter_number,
-                    {"term": detected.source_term, "category": detected.category},
-                )
-            appearance_count = max(1, source_text_zh.count(detected.source_term))
-            snippet = detected.evidence_snippet or _evidence_snippet(source_text_zh, detected.source_term)
-            candidates.append(
-                GlossaryCandidate(
-                    candidate_id=_candidate_id(
-                        release_id=release_id,
-                        discovery_run_id=discovery_run_id,
-                        chapter_number=chapter_number,
-                        row_index=index,
-                        normalized_source_term=normalized_source,
-                        category=detected.category,
-                    ),
+    # 2. Stage 2: Corpus Aggregation & Scoring
+    stats = compute_corpus_stats(per_chapter_raw)
+
+    # Merge all into a flat list of RawCandidates for global scoring
+    all_raw_list: list[RawCandidate] = []
+    for raw_list in per_chapter_raw.values():
+        all_raw_list.extend(raw_list)
+    global_raw = merge_candidates(all_raw_list)
+
+    scored_list = score_candidates(global_raw, stats)
+
+    # 3. Convert to GlossaryCandidate
+    candidates: list[GlossaryCandidate] = []
+    for sc in scored_list:
+        rc = sc.raw
+        key = f"{rc.normalized_form}:{rc.type_prior}"
+
+        candidates.append(
+            GlossaryCandidate(
+                candidate_id=_candidate_id(
                     release_id=release_id,
-                    source_term=detected.source_term,
-                    normalized_source_term=normalized_source,
-                    category=detected.category,
-                    source_language="zh",
-                    first_seen_chapter=chapter_number,
-                    last_seen_chapter=chapter_number,
-                    appearance_count=appearance_count,
-                    evidence_snippet=snippet,
-                    candidate_translation_en=None,
-                    normalized_target_term=None,
                     discovery_run_id=discovery_run_id,
-                    translation_run_id=None,
-                    candidate_status="discovered",
-                    validation_status="pending",
-                    conflict_reason=None,
-                    analyst_model_name=model_name,
-                    analyst_prompt_version=prompt_version,
-                    translator_model_name=None,
-                    translator_prompt_version=None,
-                    schema_version=1,
-                )
+                    normalized_source_term=rc.normalized_form,
+                    category=rc.type_prior,
+                ),
+                release_id=release_id,
+                source_term=rc.surface_form,
+                normalized_source_term=rc.normalized_form,
+                category=rc.type_prior,
+                source_language="zh",
+                first_seen_chapter=first_seen[key],
+                last_seen_chapter=last_seen[key],
+                appearance_count=stats.term_frequency.get(rc.normalized_form, 0),
+                evidence_snippet=rc.context_snippets[0] if rc.context_snippets else "",
+                candidate_translation_en=None,
+                normalized_target_term=None,
+                discovery_run_id=discovery_run_id,
+                translation_run_id=None,
+                candidate_status="discovered",
+                validation_status="pending",
+                conflict_reason=None,
+                critic_score=None,
+                pos_tags=",".join(rc.pos_tags) if rc.pos_tags else None,
+                ner_label=rc.ner_label,
+                type_prior=rc.type_prior,
+                source_strategies=",".join(sorted(rc.strategies)) if rc.strategies else None,
+                chapter_coverage=stats.document_frequency.get(rc.normalized_form, 0),
+                corpus_score=sc.composite_score,
+                context_snippets=json.dumps(rc.context_snippets, ensure_ascii=False)
+                if rc.context_snippets
+                else None,
+                schema_version=1,
             )
-        if event_callback is not None:
-            chapter_candidates = sum(1 for row in candidates if row.first_seen_chapter == chapter_number)
-            event_callback(
-                "chapter_completed",
-                chapter_number,
-                {
-                    "term_count": chapter_candidates,
-                    **usage_payload_delta(llm_client, chapter_usage_before),
-                },
-            )
-        raise_if_stop_requested(
-            stop_token,
-            checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},
-            message=f"Glossary discovery stopped after chapter {chapter_number}",
         )
 
     return candidates

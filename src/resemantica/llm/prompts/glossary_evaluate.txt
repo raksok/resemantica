@@ -1,0 +1,31 @@
+# version: 1.0
+
+## TASK
+GLOSSARY_EVALUATE
+
+## CANDIDATES
+{CANDIDATES_JSON}
+
+## INSTRUCTIONS
+You are evaluating candidate terms extracted from a Chinese web novel (玄幻/仙侠 genre).
+For each candidate, decide if it is a genuine glossary-worthy term that requires
+consistent translation across the novel.
+
+Glossary-worthy terms include: character names, aliases, titles/honorifics,
+faction/sect/clan names, location names, martial techniques, items/artifacts,
+cultivation realm concepts, creature/race names, and named events.
+
+NOT glossary-worthy: common words, generic nouns, dates/times, function words,
+generic verbs, common adjectives, measurement units, body parts.
+
+For each candidate, return:
+- candidate_id: the provided ID (string)
+- keep: true if glossary-worthy, false otherwise (boolean)
+- term_type: one of [character, alias, title_honorific, faction, location, technique, item_artifact, realm_concept, creature_race, generic_role, event, idiom]
+- reason_code: one of [proper_noun, setting_term, cultivation_term, common_word, date_time, generic_noun, generic_verb, ambiguous, insufficient_evidence]
+- confidence: 0.0 to 1.0 (float)
+
+## OUTPUT FORMAT
+Return a JSON array only. No markdown fences. No explanation text.
+Each element: {"candidate_id": "...", "keep": true/false, "term_type": "...", "reason_code": "...", "confidence": 0.9}
+If you cannot evaluate a candidate, set keep=false, reason_code="ambiguous", confidence=0.0.

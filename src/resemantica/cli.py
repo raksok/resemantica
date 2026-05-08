@@ -329,7 +329,22 @@ candidates.json with frequency counts and context snippets.""",
         required=False,
         type=float,
         default=None,
-        help="BGE-M3 critic pruning threshold (0-1, default: from config). Set 0 for eval-only.",
+        help="Min corpus score threshold for Stage 3 (default: from config).",
+    )
+    glossary_discover.add_argument(
+        "--eval-batch-size",
+        type=int,
+        help="Batch size for LLM evaluation (Stage 4).",
+    )
+    glossary_discover.add_argument(
+        "--skip-llm-eval",
+        action="store_true",
+        help="Skip LLM-based candidate evaluation.",
+    )
+    glossary_discover.add_argument(
+        "--dedup-threshold",
+        type=float,
+        help="Embedding similarity threshold for alias clustering (Stage 5).",
     )
 
     glossary_translate = preprocess_subparsers.add_parser(
@@ -726,7 +741,12 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
+                    chapter_start=args.start,
+                    chapter_end=args.end,
                     pruning_threshold=getattr(args, "pruning_threshold", None),
+                    eval_batch_size=getattr(args, "eval_batch_size", None),
+                    skip_llm_eval=bool(getattr(args, "skip_llm_eval", False)),
+                    dedup_threshold=getattr(args, "dedup_threshold", None),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
