@@ -24,8 +24,8 @@ from resemantica.db.glossary_repo import (
 )
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.glossary.critic import deduplicate_and_cluster
-from resemantica.glossary.evaluator import evaluate_candidate_batch
 from resemantica.glossary.discovery import discover_candidates_from_extracted
+from resemantica.glossary.evaluator import evaluate_candidate_batch
 from resemantica.glossary.models import GlossaryCandidate
 from resemantica.glossary.validators import (
     apply_deterministic_filter,
