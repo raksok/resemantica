@@ -84,7 +84,7 @@ class OrchestrationRunner:
         completed: list[str] = []
         for item in plan.stages:
             if self.stop_token is not None and self.stop_token.requested:
-                checkpoint = {"completed_stages": completed}
+                checkpoint: dict[str, object] = {"completed_stages": completed}
                 self._update_run_state("production", "stopped", checkpoint)
                 emit_event(
                     self.run_id,
@@ -486,7 +486,7 @@ class OrchestrationRunner:
             return StageResult(
                 bool(report.get("success", True)),
                 stage_name,
-                report.get("message", "Cleanup applied"),
+                str(report.get("message", "Cleanup applied")),
                 metadata=report,
             )
 

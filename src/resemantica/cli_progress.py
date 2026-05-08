@@ -3,9 +3,10 @@ from __future__ import annotations
 import shutil
 from collections import deque
 from threading import Lock
+from types import TracebackType
 from typing import Any
 
-from rich.console import Console, Group
+from rich.console import Console, ConsoleRenderable, Group, RichCast
 from rich.highlighter import ReprHighlighter
 from rich.live import Live
 from rich.panel import Panel
@@ -44,6 +45,12 @@ class CliProgressSubscriber:
         self._log_lock = Lock()
         self._live: Live | None = None
         self.progress: Progress | None = progress
+        self._placeholder_task_id: TaskID | None = None
+
+    def _progress(self) -> Progress:
+        if self.progress is None:
+            raise RuntimeError("CLI progress has not been started")
+        return self.progress
 
     def __enter__(self) -> CliProgressSubscriber:
         self.event_bus.subscribe("*", self._on_event)
@@ -58,7 +65,7 @@ class CliProgressSubscriber:
                 BarColumn(complete_style="green", finished_style="blue"),
                 TaskProgressColumn(show_speed=False),
             )
-            self._placeholder_task_id = self.progress.add_task("running...", total=None)
+            self._placeholder_task_id = self._progress().add_task("running...", total=None)
             _width = max(shutil.get_terminal_size().columns, 100)
             self._live = Live(
                 get_renderable=self._render_layout,
@@ -71,13 +78,19 @@ class CliProgressSubscriber:
 
         return self
 
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.event_bus.unsubscribe("*", self._on_event)
 
         if self._injected_progress:
-            self.progress.stop()
+            self._progress().stop()
         else:
-            self._live.__exit__(exc_type, exc_val, exc_tb)
+            if self._live is not None:
+                self._live.__exit__(exc_type, exc_val, exc_tb)
             restore_stderr_sink()
 
     def _counter_text(self) -> str:
@@ -117,8 +130,8 @@ class CliProgressSubscriber:
         return Panel(text, title="Log", border_style="dim")
 
     def _render_layout(self) -> Group:
-        components: list[object] = [
-            self.progress,
+        components: list[ConsoleRenderable | RichCast | str] = [
+            self._progress(),
             Rule(style="dim"),
             self._render_status(),
         ]
@@ -129,9 +142,10 @@ class CliProgressSubscriber:
             components.append(log_panel)
         return Group(*components)
 
-    def _log_sink(self, msg: str) -> None:
-        _, _, resolved = msg.partition(" | ")
-        display = resolved.strip() if resolved else msg.strip()
+    def _log_sink(self, msg: Any) -> None:
+        text = str(msg)
+        _, _, resolved = text.partition(" | ")
+        display = resolved.strip() if resolved else text.strip()
         with self._log_lock:
             self._log_buffer.append(display)
 
@@ -139,18 +153,18 @@ class CliProgressSubscriber:
         task_id = self.tasks_by_stage.get(stage)
         if task_id is not None:
             if total is not None:
-                self.progress.update(task_id, total=total)
+                self._progress().update(task_id, total=total)
             return task_id
 
         placeholder = getattr(self, "_placeholder_task_id", None)
         if placeholder is not None:
             try:
-                self.progress.remove_task(placeholder)
+                self._progress().remove_task(placeholder)
             except Exception:
                 pass
             self._placeholder_task_id = None
 
-        task_id = self.progress.add_task(stage, total=total)
+        task_id = self._progress().add_task(stage, total=total)
         self.tasks_by_stage[stage] = task_id
         return task_id
 
@@ -158,15 +172,15 @@ class CliProgressSubscriber:
         task_id = self.tasks_by_stage.get(stage)
         if task_id is None:
             return
-        task = next((t for t in self.progress.tasks if t.id == task_id), None)
+        task = next((t for t in self._progress().tasks if t.id == task_id), None)
         if task is None:
             return
         if task.total is None:
             total = max(int(task.completed), 1)
-            self.progress.update(task_id, total=total, completed=total)
+            self._progress().update(task_id, total=total, completed=total)
             return
         total = int(task.total)
-        self.progress.update(task_id, completed=total)
+        self._progress().update(task_id, completed=total)
 
     def _on_event(self, event: Event) -> None:
         if classify_event_level(event) > self._level:
@@ -198,8 +212,8 @@ class CliProgressSubscriber:
 
         if event_type.endswith(".chapter_completed"):
             stage = event_type.removesuffix(".chapter_completed")
-            self.progress.advance(self._ensure_task(stage), 1)
+            self._progress().advance(self._ensure_task(stage), 1)
             return
         if event_type.endswith(".paragraph_completed"):
             stage = event_type.removesuffix(".paragraph_completed")
-            self.progress.advance(self._ensure_task(stage), 1)
+            self._progress().advance(self._ensure_task(stage), 1)

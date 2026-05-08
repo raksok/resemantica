@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -15,8 +16,11 @@ def _chapter_number_from_path(path: Path) -> int:
     return int(digits)
 
 
-def _read_json(path: Path) -> dict[str, object]:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _read_json(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON object expected: {path}")
+    return payload
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:

@@ -48,7 +48,7 @@ def _get_model_and_embeddings(model_name: str):
     global _cached_model, _cached_ref_embeddings
     if _cached_model is not None and _cached_ref_embeddings is not None:
         return _cached_model, _cached_ref_embeddings
-    from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
+    from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
     _cached_model = SentenceTransformer(model_name)
     _cached_model.encode("x")  # warm up
     ref_texts = [f"{term} [common]" for term in _REFERENCE_VOCABULARY]

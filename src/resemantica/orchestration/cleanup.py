@@ -103,7 +103,7 @@ def plan_cleanup(
     *,
     scope: str = "run",
     dry_run: bool = True,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     plan_path = _get_cleanup_plan_path(release_id, scope=scope)
 
     deletable, preserved = _collect_scope_artifacts(release_id, run_id, scope)
@@ -119,7 +119,7 @@ def plan_cleanup(
             {"database": "resemantica.db", "table": "extracted_blocks", "run_id": run_id},
         ]
 
-    plan: dict[str, object] = {
+    plan: dict[str, Any] = {
         "release_id": release_id,
         "run_id": run_id,
         "scope": scope,
@@ -150,7 +150,7 @@ def apply_cleanup(
     *,
     scope: str = "run",
     force: bool = False,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     plan_path = _get_cleanup_plan_path(release_id, scope=scope)
 
     if not plan_path.exists():

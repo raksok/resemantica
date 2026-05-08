@@ -100,7 +100,10 @@ class TranslationScreen(BaseScreen):
         idx = self._block_to_index.get(key)
         if idx is not None:
             block_list = self.query_one("#translation-block-list", OptionList)
-            block_list.replace_option_at_index(idx, self._make_block_option(message.block_id, message.status))
+            block_list.replace_option_prompt_at_index(
+                idx,
+                self._make_block_option(message.block_id, message.status).prompt,
+            )
 
     def on_chapter_started(self, message: ChapterStarted) -> None:
         super().on_chapter_started(message)

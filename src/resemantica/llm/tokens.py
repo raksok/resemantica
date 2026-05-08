@@ -7,7 +7,7 @@ from typing import Any
 @lru_cache(maxsize=1)
 def _cl100k_encoding() -> Any:
     try:
-        import tiktoken  # type: ignore
+        import tiktoken
     except ImportError as exc:  # pragma: no cover - dependency/runtime concern
         raise RuntimeError(
             "tiktoken is required for packet and bundle token budgeting. "

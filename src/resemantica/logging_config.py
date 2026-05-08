@@ -57,9 +57,11 @@ def configure_logging(
     )
 
 
-def replace_stderr_sink(sink_fn: Callable[[str], object], fmt: str = "{message}") -> None:
+def replace_stderr_sink(sink_fn: Callable[[Any], None], fmt: str = "{message}") -> None:
     """Replace stderr handler with a callable sink (keeps same level threshold)."""
     global _stderr_config
+    if _stderr_config is None:
+        return
     if _stderr_config and _stderr_config.get("id") is not None:
         logger.remove(_stderr_config["id"])
     _stderr_config["id"] = logger.add(
@@ -72,6 +74,8 @@ def replace_stderr_sink(sink_fn: Callable[[str], object], fmt: str = "{message}"
 def restore_stderr_sink() -> None:
     """Remove custom sink and re-add raw stderr handler with original level and format."""
     global _stderr_config
+    if _stderr_config is None:
+        return
     if _stderr_config and _stderr_config.get("id") is not None:
         logger.remove(_stderr_config["id"])
     _stderr_config["id"] = logger.add(

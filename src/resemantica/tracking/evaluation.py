@@ -8,7 +8,10 @@ from typing import Any, Optional
 
 def _load_golden_set(path: Path) -> list[dict[str, Any]]:
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        payload = json.load(f)
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise ValueError(f"Golden set must be a JSON array of objects: {path}")
+    return payload
 
 
 def score_fidelity(translated: str, expected: str) -> float:

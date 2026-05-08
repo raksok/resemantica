@@ -97,7 +97,7 @@ class BaseScreen(Screen):
     }
 
     @property
-    def app(self) -> "ResemanticaApp":
+    def app(self) -> "ResemanticaApp":  # type: ignore[override]
         return cast("ResemanticaApp", super().app)
 
     def compose(self) -> ComposeResult:
@@ -197,7 +197,7 @@ class BaseScreen(Screen):
         recent_live_events = getattr(self.app, "recent_live_events", None)
         if not callable(recent_live_events):
             return []
-        return recent_live_events(limit=limit)
+        return cast("list[Event]", recent_live_events(limit=limit))
 
     def _combined_recent_events_for_refresh(
         self,

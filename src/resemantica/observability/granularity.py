@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TypedDict
 
 from resemantica.tracking.models import Event
 
-GRANULARITY_LEVELS: list[dict[str, Any]] = [
+
+class GranularityLevel(TypedDict):
+    level: int
+    name: str
+    patterns: list[str]
+
+
+GRANULARITY_LEVELS: list[GranularityLevel] = [
     {"level": 0, "name": "ERROR", "patterns": []},
     {
         "level": 1,

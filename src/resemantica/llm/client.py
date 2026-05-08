@@ -183,7 +183,7 @@ class LLMClient:
 
     def _build_openai_client(self) -> Any:
         try:
-            from openai import OpenAI  # type: ignore
+            from openai import OpenAI
         except ImportError as exc:  # pragma: no cover - dependency/runtime concern
             raise RuntimeError(
                 "openai package is required for runtime LLM calls. "
