@@ -51,19 +51,18 @@ Client:
 - API reference: https://docs.ladybugdb.com/client-apis/python
 - Embedded, serverless, Cypher query language
 
-### MLflow
+### Tracking DB
 
 Purpose:
 
-- run metadata
-- metrics
-- artifacts
-- run comparison
+- run state
+- event stream persistence
+- warning/error inspection
+- local quality summaries
 
 Backend:
 
-- SQLite tracking at `artifacts/mlflow.db`
-- Operator views via `mlflow ui --backend-store-uri sqlite:///artifacts/mlflow.db`
+- Per-release SQLite tracking at `artifacts/releases/{release_id}/tracking.db`
 
 Constraint:
 

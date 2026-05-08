@@ -2,9 +2,9 @@
 
 ## Summary
 
-The current event system has a flat `EventBus` with no granularity filtering, no extraction events, inconsistent event naming (dots vs underscores vs bare), dead MLflow tracking (subscribes to wrong event type strings), a CLI verbosity capped at 2 levels, and no abstraction layer between event producers and consumers.
+The current event system has a flat `EventBus` with no granularity filtering, no extraction events, inconsistent event naming (dots vs underscores vs bare), a CLI verbosity capped at 2 levels, and no abstraction layer between event producers and consumers.
 
-Task 26 builds an `ObservabilityAdapter` layer between `EventBus` and all consumers, defines 5 granularity levels, adds extraction events, fixes MLflow, extends CLI verbosity to 4 levels, and refactors the TUI `ObservabilityScreen` to use the adapter — with transparent backend switching between in-process live streaming and cross-process DB polling.
+Task 26 builds an `ObservabilityAdapter` layer between `EventBus` and all consumers, defines 5 granularity levels, adds extraction events, extends CLI verbosity to 4 levels, and refactors the TUI `ObservabilityScreen` to use the adapter — with transparent backend switching between in-process live streaming and cross-process DB polling.
 
 ## Architecture
 
@@ -19,8 +19,8 @@ Pipeline code → emit_event()
          DB persist   in-mem subscribers
                │     ┌───┼───────┐
                │     │   │       │
-            tracking  TUI  CLI   MLflow
-              DB     Obs   Prog  (broken)
+            tracking  TUI  CLI
+              DB     Obs   Prog
 ```
 
 ### After (proposed)
@@ -37,9 +37,9 @@ Pipeline code → emit_event()
                        │     filter by granularity
                        │     push to callbacks
                        │     ┌───┼───────┐
-                       │     │   │       │
-                       │    TUI  CLI   MLflow
-                       │    Obs  Prog  (fixed)
+                       │     │   │
+                       │    TUI  CLI
+                       │    Obs  Prog
                        │
                        └── PollAdapter (cross-process)
                              read tracking DB + Loguru
@@ -465,22 +465,6 @@ class CliProgressSubscriber:
             self._process(event)
 ```
 
-## MLflow Fix
-
-### Current (`tracking/mlflow.py`)
-
-Subscribes to `"stage.started"`, `"stage.completed"`, `"stage.failed"` — which are NEVER emitted.
-
-### New
-
-```python
-subscribe("orchestration.stage_started", ...)
-subscribe("orchestration.stage_completed", ...)
-subscribe("orchestration.stage_failed", ...)
-```
-
-Also keep the existing aliases `"stage_started"`/`"stage_completed"`/`"stage_failed"` through the backward-compatible alias mechanism.
-
 ## Loguru Structured Logging Integration
 
 ### Current
@@ -545,7 +529,6 @@ Using Loguru's `{extra}` formatting ensures these fields appear in the JSONL ser
 | `src/resemantica/orchestration/events.py` | MODIFY — add backward-compatible aliases, Loguru structured logging in emit_event() |
 | `src/resemantica/cli.py` | MODIFY — extend verbosity to 4 levels, remove clamp |
 | `src/resemantica/cli_progress.py` | MODIFY — use granularity filter instead of manual pattern matching |
-| `src/resemantica/tracking/mlflow.py` | MODIFY — fix event type subscription strings |
 | `src/resemantica/tui/screens/observability.py` | MODIFY — consume ObservabilityAdapter with auto-select backend |
 | `src/resemantica/tui/observability.py` | MODIFY — ensure build_snapshot() works with adapter event buffers |
 
@@ -571,22 +554,21 @@ Not modified (no changes needed): `screens/ingestion.py`, `screens/preprocessing
 8. `events.py` — add Loguru structured logging in emit_event()
 9. Tests: alias mechanism + Loguru bindings
 
-### Phase 4: MLflow + CLI
+### Phase 4: CLI
 
-10. `mlflow.py` — fix event type subscription strings to match runner
-11. `cli.py` — extend verbosity to 4 levels, remove clamp
-12. `cli_progress.py` — use granularity filter
-13. Tests: CLI verbosity mapping
+10. `cli.py` — extend verbosity to 4 levels, remove clamp
+11. `cli_progress.py` — use granularity filter
+12. Tests: CLI verbosity mapping
 
 ### Phase 5: PollAdapter + TUI
 
-14. `adapter.py` — PollAdapter implementation
-15. `screens/observability.py` — refactor to use ObservabilityAdapter with auto-select
-16. Tests: PollAdapter + TUI backend switching
+13. `adapter.py` — PollAdapter implementation
+14. `screens/observability.py` — refactor to use ObservabilityAdapter with auto-select
+15. Tests: PollAdapter + TUI backend switching
 
 ### Phase 6: Verify
 
-17. `ruff check`, `mypy`, `pytest`
+16. `ruff check`, `mypy`, `pytest`
 
 ## Tests
 
@@ -626,11 +608,6 @@ Not modified (no changes needed): `screens/ingestion.py`, `screens/preprocessing
 - `test_verbosity_2()` — -vv → granularity 2, console level INFO
 - `test_verbosity_3()` — -vvv → granularity 3, console level DEBUG
 - `test_verbosity_4()` — -vvvv → granularity 4, console level DEBUG
-
-### MLflow Tests
-
-- `test_mlflow_subscribes_orchestration_events()` — mlflow module subscribes to orchestration.stage_started/completed/failed
-- `test_mlflow_receives_events()` — when runner emits stage_started, mlflow callback fires
 
 ### TUI Adapter Tests
 

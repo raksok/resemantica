@@ -82,7 +82,7 @@ EPUB Input
   -> Final reports, artifacts, and translated EPUB
 
 Shared across all phases:
-  orchestration -> event stream -> CLI / TUI / MLflow
+  orchestration -> event stream -> CLI / TUI / tracking DB
 ```
 
 ## Logical Architecture
@@ -203,8 +203,8 @@ Operational workflows belong here, not inside scattered scripts or duplicated UI
 
 Responsibilities:
 
-- record metrics, parameters, and artifacts in MLflow
-- provide progress and warnings without requiring MLflow UI access
+- record metrics, parameters, and artifacts in local tracking storage
+- provide progress and warnings through CLI and TUI surfaces
 - power CLI verbose output and the Textual TUI from the same event stream
 
 ## Primary Data Flow
@@ -267,7 +267,7 @@ Flow:
 1. Select source input and run or release context.
 2. Determine whether preprocessing artifacts are valid or stale.
 3. Run translation for a chapter, range, or full production job.
-4. Expose progress, warnings, and artifacts through CLI, TUI, and MLflow.
+4. Expose progress, warnings, and artifacts through CLI, TUI, and local reports.
 5. Support scoped cleanup and safe restart workflows.
 
 ## State Model
@@ -435,7 +435,7 @@ Presentation layers should consume this shared stream:
 
 - CLI for direct commands and `--verbose` progress
 - Textual TUI for dashboards, inspection, and control surfaces
-- MLflow for run comparison, artifacts, metrics, and dashboards
+- local tracking DB/reports for run comparison, artifacts, metrics, and dashboards
 
 The TUI is a presentation layer over orchestration services. It must not implement an alternate execution model.
 

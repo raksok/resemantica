@@ -498,7 +498,7 @@ Formalize the instrumentation added earlier so runs are comparable, regressions 
 
 ### Action Items
 
-[ ] Extend `tracking/` with MLflow helpers for parameters, metrics, artifacts, and run summaries aligned to the data contract.
+[ ] Extend `tracking/` with local helpers for parameters, metrics, artifacts, and run summaries aligned to the data contract.
 [ ] Instrument preprocess, packet build, translation, validation, cleanup, and rebuild stages to emit consistent metrics and artifact registrations.
 [ ] Add evaluation dataset support for golden paragraphs or chapters covering idioms, honorific-heavy dialogue, identity concealment, relationship reversals, lore exposition, pronoun ambiguity, and XHTML-heavy cases.
 [ ] Implement local evaluation runners that can score fidelity, terminology consistency, structural integrity, and readability on benchmark data.

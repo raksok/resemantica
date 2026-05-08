@@ -43,7 +43,7 @@ TUI layout and screen specifications: `lld-12-tui-layout.md`
 3. TUI screens subscribe to orchestration events and read run metadata through presenters.
 4. Orchestration executes workflow behavior and emits status events.
 5. CLI and TUI render progress, warnings, failures, and artifact references from shared state.
-6. Both surfaces expose enough status that the operator does not need to open MLflow manually.
+6. Both surfaces expose enough status that the operator can inspect progress without an external tracking UI.
 
 ## Validation Ownership
 

@@ -13,7 +13,6 @@ dependencies = [
     "ladybug>=0.15.3",
     "loguru>=0.7.3",
     "lxml>=5.3",
-    "mlflow>=3.11.1",
     "openai>=2.32.0",
     "rich>=13.9",
     "textual>=2.0.0",

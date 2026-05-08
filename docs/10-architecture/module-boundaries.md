@@ -84,8 +84,10 @@ src/resemantica/
     cleanup.py
     resume.py
   tracking/
-    mlflow.py
-    artifacts.py
+    repo.py
+    evaluation.py
+    quality.py
+    models.py
   tui/
     app.py
     screens.py
@@ -104,7 +106,7 @@ src/resemantica/
 - `db/` owns SQLite access, generic models, and operational (run/checkpoint) repositories.
 - `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/`, and `translation/` own subsystem behavior, domain-specific repositories, and validators.
 - `orchestration/` owns stage ordering, retries, resume logic, cleanup, and event emission.
-- `tracking/` adapts orchestration events and artifacts to MLflow and artifact stores.
+- `tracking/` persists orchestration state/events and exposes local quality/evaluation helpers.
 - `tui/` renders operator state only.
 
 ## Public Interfaces

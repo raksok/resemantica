@@ -5,13 +5,13 @@
 
 ## Goal
 
-Implement local run observability, MLflow tracking, golden-set evaluation, and comparison-friendly quality reports.
+Implement local run observability, golden-set evaluation, and comparison-friendly quality reports.
 
 ## Scope
 
 In:
 
-- MLflow helpers for parameters, metrics, artifacts, and summaries
+- local tracking helpers for parameters, metrics, artifacts, and summaries
 - instrumentation of orchestration-visible stages
 - golden-set schema and evaluation runner
 - local reports or dashboards for warning and quality trends
@@ -31,12 +31,12 @@ Out:
 ## Interfaces To Satisfy
 
 - LLD: `../20-lld/lld-13-observability.md`
-- MLflow backend: `sqlite:///artifacts/mlflow.db`
+- Tracking backend: per-release `tracking.db`
 - data contract: event stream records and validation reports in `../../DATA_CONTRACT.md`
 
 ## Tests Or Smoke Checks
 
-- MLflow metadata and artifact logging with a local SQLite backend or mocked MLflow client
+- tracking metadata and event persistence with a local SQLite backend
 - golden-set fixture load and benchmark execution
 - metric calculation for fidelity, terminology, structure, and readability
 - instrumentation does not block core workflow success

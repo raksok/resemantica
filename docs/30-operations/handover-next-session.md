@@ -188,8 +188,8 @@ First M14 attempt with serial chapter-by-chapter translation caused ~30 s model 
 
 ### Implemented
 
-- **MLflow tracking** in `src/resemantica/tracking/mlflow.py`
+- **Local tracking** in `src/resemantica/tracking/repo.py`
 - **Golden-set evaluation** in `src/resemantica/tracking/evaluation.py`
 - **Quality summaries** in `src/resemantica/tracking/quality.py`
 - **Golden-set fixtures** in `tests/golden_set/paragraphs.json` (7 paragraphs)
-- **Tests**: 9 mlflow, 12 evaluation, 4 quality
+- **Tests**: evaluation and quality coverage under `tests/tracking/`

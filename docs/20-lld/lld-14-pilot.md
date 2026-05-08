@@ -15,7 +15,7 @@ Artifacts:
 
 - pilot validation report
 - final translated EPUB
-- MLflow run metadata
+- local run metadata
 - event stream
 
 ## Data Flow

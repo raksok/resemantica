@@ -8,7 +8,7 @@ Depends on: M25, M19
 
 ## Goal
 
-Upgrade the event tracking system from a flat publish-subscribe bus into a granularity-aware observability pipeline with standardized event taxonomy, an `ObservabilityAdapter` abstraction layer between `EventBus` and consumers, extraction-phase events, fixed MLflow tracking, and CLI verbosity extended beyond `-v`/`-vv`.
+Upgrade the event tracking system from a flat publish-subscribe bus into a granularity-aware observability pipeline with standardized event taxonomy, an `ObservabilityAdapter` abstraction layer between `EventBus` and consumers, extraction-phase events, and CLI verbosity extended beyond `-v`/`-vv`.
 
 The adapter must support two modes transparently: **in-process live streaming** (pipeline launched from TUI/cli.py) and **cross-process polling** (TUI monitoring an independently launched `resemantica.cli` run via tracking DB).
 
@@ -40,7 +40,6 @@ In:
   - `epub.extraction.chapter_completed`
   - `epub.extraction.chapter_skipped`
   - `epub.extraction.completed`
-- Fix MLflow tracking subscription to match actual event type strings emitted by the runner (`stage_started` not `stage.started`).
 - Add automatic Loguru extra-fields binding (`chapter_number`, `stage_name`, `block_id`, `event_type`) when `emit_event()` is called, so log records carry structured context.
 - Extend CLI verbosity from current clamped `0..2` to `0..4`, mapping to granularity levels.
 - Update `CliProgressSubscriber` to use granularity-aware filtering instead of manual event-type pattern matching.
@@ -63,7 +62,6 @@ Out:
 - `src/resemantica/orchestration/events.py` — add backward-compatible aliases, Loguru binding hook
 - `src/resemantica/cli.py` — extend verbosity to 4 levels, remove clamp
 - `src/resemantica/cli_progress.py` — use granularity-aware filtering
-- `src/resemantica/tracking/mlflow.py` — fix event type subscription strings
 - `src/resemantica/tui/screens/observability.py` — consume ObservabilityAdapter instead of direct EventBus + DB
 - `src/resemantica/tui/observability.py` — refactor into adapter-compatible shape
 - `tests/observability/` — NEW: test adapter, backends, granularity filtering
@@ -104,7 +102,6 @@ Out:
 - `LiveAdapter` and `PollAdapter` both implemented and passing tests.
 - TUI `ObservabilityScreen` auto-selects correct backend and renders events identically for both modes.
 - `extract_epub` emits per-chapter events visible on TUI Ingestion screen and Observability screen.
-- MLflow tracking receives events from the runner.
 - Loguru structured logs carry `chapter_number`, `stage_name`, `block_id`, `event_type` when emitted alongside `emit_event()`.
 - CLI supports `-vvv` and `-vvvv` mapping to paragraph and token granularity.
 - Existing `CliProgressSubscriber` uses granularity filtering (behavior unchanged).

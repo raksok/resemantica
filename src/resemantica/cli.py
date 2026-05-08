@@ -884,7 +884,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"message={stage_result.message}")
             return _exit_code(stage_result)
 
-        parser.print_help()
+        _build_parser().print_help()
         return 2
 
     if args.command == "packets":
@@ -906,7 +906,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"status={_status_text(stage_result)}")
             print(f"message={stage_result.message}")
             return _exit_code(stage_result)
-        parser.print_help()
+        _build_parser().print_help()
         return 2
 
     if args.command == "run":
@@ -1059,7 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
-    parser.print_help()
+    _build_parser().print_help()
     return 2
 
 

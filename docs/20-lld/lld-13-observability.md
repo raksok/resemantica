@@ -8,7 +8,8 @@ Formalize instrumentation, metric tracking, and evaluation runners to ensure tra
 
 Python modules:
 
-- `tracking.mlflow.track_run_metadata()`
+- `tracking.repo.ensure_tracking_db()`
+- `tracking.quality.get_metric_totals()`
 - `tracking.evaluation.run_benchmark()`
 - `tracking.evaluation.score_fidelity()`
 
@@ -23,10 +24,10 @@ Metrics:
 ## Data Flow
 
 1. Orchestration emits events for every major transition.
-2. `tracking.mlflow` captures these events and logs parameters, metrics, and artifacts to MLflow.
+2. The event bus persists selected events to the per-release `tracking.db`.
 3. For evaluation, the benchmark runner executes translation on a "Golden Set" of difficult paragraphs.
 4. Evaluation models score the outputs against the golden-set ground truth.
-5. Quality trends are visualized in MLflow or the TUI.
+5. Quality trends are visualized in local reports or the TUI.
 
 ## Validation Ownership
 
@@ -40,6 +41,6 @@ Metrics:
 
 ## Tests
 
-- MLflow logging of metadata and artifacts
+- tracking DB persistence of metadata and events
 - evaluation runner execution on dummy benchmark data
 - metric calculation accuracy (e.g., consistency rates)

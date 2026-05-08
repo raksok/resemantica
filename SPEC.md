@@ -113,7 +113,7 @@ Working state may guide validation or review but must not be silently treated as
 12. **Deterministic rules outrank fuzzy retrieval and reranking.**
 13. **Runtime translation should consume packet-derived context instead of heavy live graph queries.**
 14. **Operational workflows belong to a centralized orchestration layer.**
-15. **The operator must be able to see what the system is doing without opening MLflow manually.**
+15. **The operator must be able to see what the system is doing through local CLI/TUI observability.**
 16. **Cleanup/reset is a first-class workflow owned by orchestration.**
 17. **The TUI is an operator console on top of the orchestration/event system, not a separate execution model.**
 
@@ -146,7 +146,7 @@ Default config assignments:
 - `llama.cpp` for local inference (router mode with OpenAI-compatible API)
 - SQLite for structured storage, checkpoints, cache, glossary, summaries, and packet metadata
 - LadybugDB for graph-backed entity and relationship memory
-- MLflow for observability, artifacts, metrics, evaluation, and run comparison
+- Local tracking DB, structured logs, and TUI reports for observability, artifacts, metrics, evaluation, and run comparison
 - ebooklib + BeautifulSoup + lxml for EPUB/XHTML handling
 - Textual for the unified operator TUI
 - loguru for logs
@@ -871,10 +871,10 @@ The orchestration layer must emit a shared event stream that can power:
 
 - CLI console progress
 - `--verbose` step-by-step reporting
-- MLflow artifacts / metrics
+- local tracking artifacts / metrics
 - TUI live panels
 
-The operator should be able to see what is happening without manually opening MLflow.
+The operator should be able to see what is happening directly from the CLI or TUI.
 
 ### 18.5 Event stream concept
 
@@ -911,7 +911,7 @@ Reset / cleanup is an orchestration-owned workflow for starting fresh safely.
 - scoped cleanup of SQLite state
 - release-aware cleanup by run ID / release ID where possible
 - preservation of inputs, config, prompts, and manual overrides by default
-- structured event/logging integration with console and MLflow
+- structured event/logging integration with console and TUI
 
 ### 19.3 Design rule
 
@@ -925,7 +925,7 @@ The next unified UI is a **Textual** TUI sitting on top of orchestration, event 
 
 ### 20.1 Role of the TUI
 
-The TUI is an operator console, not a separate architecture. It should reuse the same orchestration services, events, state, and artifacts as CLI and MLflow.
+The TUI is an operator console, not a separate architecture. It should reuse the same orchestration services, events, state, and artifacts as the CLI.
 
 ### 20.2 TUI scope
 
@@ -1039,7 +1039,7 @@ src/resemantica/
 - `llm/` — model clients and prompt loading
 - `translation/` — pass1, pass2, pass3, validators, chapter runner, risk handling
 - `orchestration/` — states, preprocess graph, translation graph, production workflow, reset workflow, event bus/controllers
-- `tracking/` — MLflow helpers, metrics, artifact logging, run summaries
+- `tracking/` — event persistence, metrics, artifact metadata, run summaries
 - `tui/` — Textual app, screens, widgets, controllers/adapters
 - `db/` — SQLite schema, cache, checkpoints, repositories
 
@@ -1122,7 +1122,7 @@ Maintain a benchmark set of difficult paragraphs / chapters containing:
 
 ### 24.5 Dashboard / inspection views
 
-These may be presented in MLflow, exported reports, or the TUI:
+These may be presented in exported reports or the TUI:
 
 - chapter completion status
 - warning distribution

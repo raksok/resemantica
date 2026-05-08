@@ -869,7 +869,7 @@ Validation requirements:
 
 Purpose:
 
-Provide a shared visibility contract for CLI, TUI, and MLflow.
+Provide a shared visibility contract for CLI, TUI, and local tracking reports.
 
 Store:
 

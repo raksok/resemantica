@@ -32,7 +32,7 @@ Out:
 - Adding production launch controls.
 - Editing config, release id, run id, or chapter ranges from the TUI.
 - Changing Loguru handler behavior or CLI verbosity behavior.
-- Adding log rotation, retention, external log shipping, or MLflow UI integration.
+- Adding log rotation, retention, external log shipping, or external observability UI integration.
 - Replacing the TUI's visual design or screen map.
 
 ## Owned Files Or Modules

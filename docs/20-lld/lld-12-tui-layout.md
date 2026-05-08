@@ -541,7 +541,7 @@ Purpose: Display current configuration, model info, and budget values. Read-only
 │          │    artifact_root artifacts/                       │
 │          │    db_file       resemantica.db                   │
 │          │    graph_db      graph.ladybug                    │
-│          │    mlflow_db     mlflow.db                        │
+│          │    tracking_db   tracking.db                      │
 │          │                                                   │
 │          │  Config hash: a3f2c9e1                           │
 │          │                                                   │

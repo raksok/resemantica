@@ -54,5 +54,5 @@ def configure_logging(
 - CLI `-v`/`-vv` flag wiring (Task 19b).
 - EventBus subscriber or progress bars (Task 19b).
 - Pipeline event emissions (Task 19c).
-- MLflow or external log shipping.
+- External observability UI or log shipping.
 - Log rotation or retention policies.

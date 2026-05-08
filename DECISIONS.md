@@ -306,15 +306,14 @@ src/resemantica/llm/prompts/
 
 ---
 
-### C11. MLflow Setup
+### C11. Local Tracking Setup
 
 **Decision:**
 
-- Use MLflow with **SQLite backend tracking** (not file-based, per issue mlflow/mlflow#18534).
-- Tracking URI: `sqlite:///artifacts/mlflow.db`.
-- Operator views dashboards via: `mlflow ui --backend-store-uri sqlite:///artifacts/mlflow.db`.
+- Use the in-repo event bus plus per-release SQLite `tracking.db` files for run state, events, and local observability.
+- Keep tracking local-first and directly consumable by CLI/TUI screens.
 
-**Rationale:** SQLite backend is the modern recommended approach for MLflow local tracking. The database file sits alongside other project artifacts for easy cleanup.
+**Rationale:** The custom event stream and `tracking.db` are already wired into orchestration and the TUI. Keeping this path avoids a heavy unused observability dependency and prevents parallel tracking sources.
 
 ---
 
@@ -520,7 +519,7 @@ Each sub-score saturates at 1.0 based on count thresholds (e.g., 3+ idioms, 2+ a
 
 **Decision:** Use loguru with dual-format output.
 - Console: colored, human-readable.
-- File: JSON structured logs at `artifacts/logs/` for MLflow/TUI parsing.
+- File: JSON structured logs at `artifacts/logs/` for TUI parsing.
 - Rotation: 10MB per file, keep 5 files.
 
 **Rationale:** loguru is listed in the spec stack. Dual format serves both the operator (console) and observability (structured JSON). Rotation settings are conservative for local-first operation.
@@ -583,7 +582,7 @@ Example structure:
 | B8 | Prompt templates | Stubs now, fill per-milestone | Establishes convention, defers untestable content |
 | C9 | Graph store | LadybugDB (`import ladybug as lb`), embedded, Cypher | Graph-native, embedded, local-first |
 | C10 | Chain/graph orchestration frameworks | Dropped from stack | Simple state machines suffice |
-| C11 | MLflow | SQLite backend tracking at artifacts/mlflow.db | Modern recommended approach |
+| C11 | Local tracking | Event bus plus per-release SQLite `tracking.db` | Wired into CLI/TUI, avoids unused dependency |
 | D12 | Idiom placement | M5 (after summaries, before packets) | Matches spec Phase 0, satisfies M5 dependency |
 | D13 | Milestone reorder | 14 milestones, graph before packets | Eliminates retrofitting, cleaner dependency chain |
 | D14 | Resegmentation | Structural failure only; sequential Pass 2 with prior segment translations for coherence | Minimum viable, reactive, prevents cross-segment drift |
@@ -608,7 +607,7 @@ These decisions have been applied to the existing project documents:
 3. **DATA_CONTRACT.md** — contracts remain format-neutral and now have a clean ending.
 4. **IMPLEMENTATION_PLAN.md** — milestone order reflects idiom placement and packet integration merge.
 5. **docs/10-architecture/module-boundaries.md** — includes `llm/prompts/` and `db/migrations/`.
-6. **docs/10-architecture/storage-topology.md** — includes `artifacts/graph.ladybug` and `artifacts/mlflow.db`.
+6. **docs/10-architecture/storage-topology.md** — includes `artifacts/graph.ladybug` and per-release `tracking.db`.
 7. **docs/30-operations/repo-map.md** — notes that `src/resemantica/` does not yet exist.
 8. **Task briefs** — task numbering now follows milestone order; retired packet integration is no longer a claimable task.
 9. **docs/20-lld/** — LLD numbering now follows milestone order; retired packet integration is no longer a claimable LLD.

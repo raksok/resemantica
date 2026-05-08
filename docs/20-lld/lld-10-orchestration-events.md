@@ -68,4 +68,4 @@ Event model minimum fields:
 ## Out Of Scope
 
 - TUI widget design
-- MLflow-specific rendering logic
+- backend-specific dashboard rendering logic

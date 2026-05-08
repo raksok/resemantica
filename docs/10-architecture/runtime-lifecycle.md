@@ -67,7 +67,7 @@ Inputs:
 Outputs:
 
 - structured events
-- MLflow runs and artifacts
+- local run state and tracking artifacts
 - cleanup plans and reports
 
 ## Resume Model
