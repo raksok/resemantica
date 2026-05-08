@@ -126,17 +126,25 @@ class ScriptedLLMPass3:
                 return "You ⟦B_1⟧are really quite good⟦/B_1⟧!"
             return "Polished text."
 
-        if "## INSTRUCTIONS" in prompt:
+        if "PASS1" in prompt:
             self.pass1_calls += 1
             if "⟦B_1⟧" in prompt:
                 return "You ⟦B_1⟧good⟦/B_1⟧?"
             return "Draft text."
 
-        if "Correct the English" in prompt:
+        if "translation auditor" in prompt:
             self.pass2_calls += 1
             if "⟦B_1⟧" in prompt:
-                return "You ⟦B_1⟧really good⟦/B_1⟧?"
-            return "Corrected text."
+                corrected = "You ⟦B_1⟧really good⟦/B_1⟧?"
+            else:
+                corrected = "Corrected text."
+            return json.dumps(
+                {
+                    "fidelity_errors_found": True,
+                    "analysis": "scripted correction",
+                    "corrected_text": corrected,
+                }
+            )
 
         return "Unexpected."
 

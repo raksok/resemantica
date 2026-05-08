@@ -52,7 +52,9 @@ class PreprocessingScreen(BaseScreen):
         super()._refresh_live_progress()
 
         state = self._run_state_for_refresh()
-        stage_list = self.query_one("#preprocessing-stage-list", Static)
+        stage_list = self.query_one_optional("#preprocessing-stage-list", Static)
+        if stage_list is None:
+            return
         stage_list.update(self._build_stage_progress(state))
 
         self._refresh_screen_status()
@@ -220,7 +222,9 @@ class PreprocessingScreen(BaseScreen):
 
     def _refresh_screen_status(self) -> None:
         snapshot = self._snapshot()
-        widget = self.query_one("#preprocessing-status", Static)
+        widget = self.query_one_optional("#preprocessing-status", Static)
+        if widget is None:
+            return
         parts: list[str] = []
         if snapshot.active_action:
             sdef = next(
@@ -263,7 +267,10 @@ class PreprocessingScreen(BaseScreen):
 
     def _update_event_tail(self) -> None:
         events = self._screen_events_for_tail()
-        self.query_one("#preprocessing-event-tail", Static).update(
+        tail = self.query_one_optional("#preprocessing-event-tail", Static)
+        if tail is None:
+            return
+        tail.update(
             self._render_cached_event_tail(
                 events,
                 title="Preprocessing Events",

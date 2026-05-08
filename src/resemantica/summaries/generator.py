@@ -194,7 +194,6 @@ def _generate_structured_summary(
             parsed = _parse_summary(raw_output)
         if parsed is None:
             return None, raw_output
-        parsed["chapter_number"] = chapter_number
         parsed_chunks.append(parsed)
 
     if len(parsed_chunks) == 1:

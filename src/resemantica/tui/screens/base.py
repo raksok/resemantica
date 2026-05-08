@@ -292,15 +292,18 @@ class BaseScreen(Screen):
         events = self._load_recent_run_events() if events is None else events
         chapter_count = self._load_chapter_count() if chapter_count is None else chapter_count
 
-        pulse = self.query_one("#pulse-bar", Static)
+        pulse = self.query_one_optional("#pulse-bar", Static)
+        run_info = self.query_one_optional("#status-run-info", Static)
+        chapter_progress = self.query_one_optional("#status-chapter-progress", Static)
+        if pulse is None or run_info is None or chapter_progress is None:
+            return
+
         pulse.update(self._render_pulse_bar(state, events))
 
         run_id = self._get_run_id() or "--"
         release_id = self._get_release_id() or "--"
-        run_info = self.query_one("#status-run-info", Static)
         run_info.update(f"Run: {run_id}  Rel: {release_id}")
 
-        chapter_progress = self.query_one("#status-chapter-progress", Static)
         chapter_progress.update(
             self._format_chapter_progress(
                 total_chapters=chapter_count,
@@ -499,10 +502,19 @@ class BaseScreen(Screen):
         state = self._get_run_state() if state is None else state
         events = self._load_recent_run_events() if events is None else events
 
-        footer_block_progress = self.query_one("#footer-block-progress", Static)
-        footer_warnings = self.query_one("#footer-warnings", Static)
-        footer_failures = self.query_one("#footer-failures", Static)
-        footer_elapsed = self.query_one("#footer-elapsed", Static)
+        footer_block_progress = self.query_one_optional("#footer-block-progress", Static)
+        footer_warnings = self.query_one_optional("#footer-warnings", Static)
+        footer_failures = self.query_one_optional("#footer-failures", Static)
+        footer_elapsed = self.query_one_optional("#footer-elapsed", Static)
+        footer_keys = self.query_one_optional("#footer-keys", Static)
+        if (
+            footer_block_progress is None
+            or footer_warnings is None
+            or footer_failures is None
+            or footer_elapsed is None
+            or footer_keys is None
+        ):
+            return
 
         metrics = self._derive_footer_metrics(state, events)
         footer_block_progress.update(metrics["block_progress"])
@@ -510,7 +522,6 @@ class BaseScreen(Screen):
         footer_failures.update(metrics["failures"])
         footer_elapsed.update(metrics["elapsed"])
 
-        footer_keys = self.query_one("#footer-keys", Static)
         keys = format_footer_keys(screen_info_for_class_name(self.__class__.__name__))
         if getattr(self.app, "active_action", None) is not None:
             if getattr(self.app, "active_stop_requested", False):
