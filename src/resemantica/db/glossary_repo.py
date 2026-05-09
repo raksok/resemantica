@@ -6,7 +6,13 @@ import sqlite3
 from typing import Sequence
 
 from resemantica.db.sqlite import ensure_schema
-from resemantica.glossary.models import AliasCluster, GlossaryCandidate, GlossaryConflict, LockedGlossaryEntry
+from resemantica.glossary.models import (
+    AliasCluster,
+    GlossaryCandidate,
+    GlossaryConflict,
+    GlossaryTranslationVote,
+    LockedGlossaryEntry,
+)
 
 
 def ensure_glossary_schema(conn: sqlite3.Connection) -> None:
@@ -96,6 +102,27 @@ def _conflict_from_row(row: sqlite3.Row) -> GlossaryConflict:
         ),
         schema_version=int(row["schema_version"]),
     )
+
+
+def _vote_from_row(row: sqlite3.Row) -> GlossaryTranslationVote:
+    return GlossaryTranslationVote(
+        vote_id=str(row["vote_id"]),
+        candidate_id=str(row["candidate_id"]),
+        release_id=str(row["release_id"]),
+        translation_run_id=str(row["translation_run_id"]),
+        model_name=str(row["model_name"]),
+        prompt_version=str(row["prompt_version"]),
+        raw_output=str(row["raw_output"]),
+        cleaned_output=str(row["cleaned_output"]),
+        normalized_output=str(row["normalized_output"]),
+        resolution_status=str(row["resolution_status"]),
+        schema_version=int(row["schema_version"]),
+    )
+
+
+def _vote_id(candidate_id: str, translation_run_id: str, model_name: str) -> str:
+    digest = hashlib.sha256(f"{candidate_id}:{translation_run_id}:{model_name}".encode("utf-8")).hexdigest()[:24]
+    return f"gtrv_{digest}"
 
 
 def upsert_discovered_candidates(
@@ -282,12 +309,109 @@ def list_candidates_for_review(
                corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
         FROM glossary_candidates
         WHERE release_id = ?
-          AND candidate_status = 'translated'
+          AND (
+            candidate_status = 'translated'
+            OR EXISTS (
+                SELECT 1 FROM glossary_translation_votes v
+                WHERE v.candidate_id = glossary_candidates.candidate_id
+            )
+          )
         ORDER BY first_seen_chapter, normalized_source_term, category
         """,
         (release_id,),
     ).fetchall()
     return [_candidate_from_row(row) for row in rows]
+
+
+def upsert_translation_vote(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    release_id: str,
+    translation_run_id: str,
+    model_name: str,
+    prompt_version: str,
+    raw_output: str,
+    cleaned_output: str,
+    normalized_output: str,
+    resolution_status: str = "pending",
+) -> None:
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO glossary_translation_votes(
+                vote_id, candidate_id, release_id, translation_run_id,
+                model_name, prompt_version, raw_output, cleaned_output,
+                normalized_output, resolution_status, schema_version, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(candidate_id, translation_run_id, model_name)
+            DO UPDATE SET
+                raw_output = excluded.raw_output,
+                cleaned_output = excluded.cleaned_output,
+                normalized_output = excluded.normalized_output,
+                resolution_status = excluded.resolution_status,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                _vote_id(candidate_id, translation_run_id, model_name),
+                candidate_id,
+                release_id,
+                translation_run_id,
+                model_name,
+                prompt_version,
+                raw_output,
+                cleaned_output,
+                normalized_output,
+                resolution_status,
+            ),
+        )
+
+
+def set_translation_vote_resolution(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    translation_run_id: str,
+    resolution_status: str,
+) -> None:
+    with conn:
+        conn.execute(
+            """
+            UPDATE glossary_translation_votes
+            SET resolution_status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE candidate_id = ?
+              AND translation_run_id = ?
+            """,
+            (resolution_status, candidate_id, translation_run_id),
+        )
+
+
+def list_translation_votes(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    candidate_id: str | None = None,
+) -> list[GlossaryTranslationVote]:
+    params: tuple[str, ...]
+    where = "WHERE release_id = ?"
+    params = (release_id,)
+    if candidate_id is not None:
+        where += " AND candidate_id = ?"
+        params = (release_id, candidate_id)
+    rows = conn.execute(
+        f"""
+        SELECT vote_id, candidate_id, release_id, translation_run_id,
+               model_name, prompt_version, raw_output, cleaned_output,
+               normalized_output, resolution_status, schema_version
+        FROM glossary_translation_votes
+        {where}
+        ORDER BY candidate_id, created_at, model_name
+        """,
+        params,
+    ).fetchall()
+    return [_vote_from_row(row) for row in rows]
 
 
 def save_candidate_translation(

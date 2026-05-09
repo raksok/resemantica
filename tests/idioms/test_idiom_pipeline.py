@@ -12,6 +12,7 @@ from resemantica.db.idiom_repo import (
     list_candidates_for_translation,
     list_conflicts,
     list_policies,
+    list_translation_votes,
     promote_policies,
     save_idiom_translation,
     upsert_discovered_candidates,
@@ -19,11 +20,11 @@ from resemantica.db.idiom_repo import (
 from resemantica.db.sqlite import open_connection
 from resemantica.idioms.extractor import extract_idioms
 from resemantica.idioms.matching import match_idioms
-from resemantica.idioms.models import IdiomPolicy
-from resemantica.idioms.pipeline import preprocess_idioms, resolve_idiom_policy
+from resemantica.idioms.models import IdiomCandidate, IdiomPolicy
+from resemantica.idioms.pipeline import preprocess_idioms, resolve_idiom_policy, translate_idiom_candidates
 from resemantica.idioms.validators import normalize_idiom_source
 from resemantica.llm.prompts import load_prompt
-from resemantica.settings import derive_paths, load_config
+from resemantica.settings import AppConfig, derive_paths, load_config
 
 
 class ScriptedIdiomLLM:
@@ -62,6 +63,17 @@ class ScriptedTranslatorLLM:
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
         return self.response
+
+
+class ModelMappedIdiomTranslator:
+    def __init__(self, outputs: dict[tuple[str, str], str]) -> None:
+        self.outputs = outputs
+        self.calls: list[tuple[str, str]] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:
+        kind = "meaning" if "Translate the following term" in prompt else "rendering"
+        self.calls.append((model_name, kind))
+        return self.outputs[(model_name, kind)]
 
 
 def _write_extracted_chapter(
@@ -141,6 +153,43 @@ def _insert_policy(
         conn.close()
 
 
+def _insert_idiom_candidate(*, release_id: str) -> str:
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    candidate_id = "ican_m42"
+    try:
+        upsert_discovered_candidates(
+            conn,
+            candidates=[
+                IdiomCandidate(
+                    candidate_id=candidate_id,
+                    release_id=release_id,
+                    source_text="一箭双雕",
+                    normalized_source_text=normalize_idiom_source("一箭双雕"),
+                    meaning_zh="一举两得",
+                    meaning_en="",
+                    preferred_rendering_en="",
+                    usage_notes=None,
+                    first_seen_chapter=1,
+                    last_seen_chapter=1,
+                    appearance_count=1,
+                    evidence_snippet="一箭双雕",
+                    detection_run_id="seed",
+                    candidate_status="discovered",
+                    validation_status="pending",
+                    conflict_reason=None,
+                    analyst_model_name="analyst",
+                    analyst_prompt_version="1.0",
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    return candidate_id
+
+
 def test_detected_idiom_candidate_starts_without_english_rendering(
     tmp_path: Path,
     monkeypatch,
@@ -171,6 +220,64 @@ def test_detected_idiom_candidate_starts_without_english_rendering(
     assert len(candidates) == 1
     assert candidates[0].preferred_rendering_en == ""
     assert candidates[0].candidate_status == "discovered"
+
+
+def test_multi_model_idiom_translation_resolves_rendering_and_stores_votes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-votes"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    translator = ModelMappedIdiomTranslator(
+        {
+            ("model-a", "rendering"): "kill two birds with one stone",
+            ("model-b", "rendering"): "kill two birds with one stone",
+            ("model-c", "rendering"): "one arrow, two eagles",
+            ("model-a", "meaning"): "achieve two things at once",
+            ("model-b", "meaning"): "achieve two things at once",
+            ("model-c", "meaning"): "gain two benefits with one action",
+        }
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        translated = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id="idioms-001",
+            translator_client=translator,
+            translator_model_names=config.models.effective_preprocess_translator_names(),
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+        )
+
+        assert translated == 1
+        saved = list_candidates(conn, release_id=release_id)[0]
+        assert saved.candidate_id == candidate_id
+        assert saved.preferred_rendering_en == "kill two birds with one stone"
+        assert saved.meaning_en == "achieve two things at once"
+        assert saved.candidate_status == "translated"
+        assert translator.calls == [
+            ("model-a", "rendering"),
+            ("model-a", "meaning"),
+            ("model-b", "rendering"),
+            ("model-b", "meaning"),
+            ("model-c", "rendering"),
+            ("model-c", "meaning"),
+        ]
+        votes = list_translation_votes(conn, release_id=release_id)
+        assert len(votes) == 6
+        assert {vote.vote_kind for vote in votes} == {"rendering", "meaning"}
+    finally:
+        conn.close()
 
 
 def test_save_idiom_translation_fills_candidate_rendering(

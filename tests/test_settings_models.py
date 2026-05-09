@@ -84,6 +84,35 @@ class TestEffectiveContextWindow:
             config.models.effective_context_window("embedding", 65536)
 
 
+class TestPreprocessTranslatorNames:
+    def test_defaults_to_primary_translator(self) -> None:
+        config = AppConfig()
+
+        assert config.models.effective_preprocess_translator_names() == [
+            config.models.translator_name
+        ]
+
+    def test_uses_configured_preprocess_translators(self) -> None:
+        config = _config_with_custom_models(
+            translator_name="fallback-translator",
+            preprocess_translator_names=["model-a", "model-b", "model-c"],
+        )
+
+        assert config.models.effective_preprocess_translator_names() == [
+            "model-a",
+            "model-b",
+            "model-c",
+        ]
+
+    def test_strips_empty_configured_preprocess_translators(self) -> None:
+        config = _config_with_custom_models(
+            translator_name="fallback-translator",
+            preprocess_translator_names=["", "  ", "model-a"],
+        )
+
+        assert config.models.effective_preprocess_translator_names() == ["model-a"]
+
+
 class TestValidateConfig:
     def test_accepts_valid_per_model_values(self, tmp_path) -> None:
         toml_content = """
@@ -113,6 +142,27 @@ db_filename = "test.db"
         assert config.models.translator_max_context_ratio == 0.75
         assert config.models.analyst_context_window == 240000
         assert config.models.analyst_max_context_ratio == 0.8
+
+    def test_accepts_preprocess_translator_names(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+preprocess_translator_names = ["model-t", "model-u", "model-v"]
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+        assert config.models.effective_preprocess_translator_names() == [
+            "model-t",
+            "model-u",
+            "model-v",
+        ]
 
     def test_accepts_missing_per_model_fields(self, tmp_path) -> None:
         toml_content = """

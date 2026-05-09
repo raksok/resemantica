@@ -15,12 +15,15 @@ from resemantica.db.glossary_repo import (
     list_candidates_for_translation,
     list_conflicts,
     list_locked_entries,
+    list_translation_votes,
     mark_candidate_conflict,
     mark_candidate_promoted,
     promote_locked_entries,
     save_candidate_translation,
+    set_translation_vote_resolution,
     upsert_alias_clusters,
     upsert_discovered_candidates,
+    upsert_translation_vote,
 )
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.glossary.critic import deduplicate_and_cluster
@@ -271,6 +274,7 @@ def translate_glossary_candidates(
     prompt = load_prompt("glossary_translate.txt")
     client = _build_llm_client(config_obj, llm_client)
     usage_before = capture_usage_snapshot(client)
+    translator_names = config_obj.models.effective_preprocess_translator_names()
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
@@ -321,23 +325,56 @@ def translate_glossary_candidates(
                     f"{_STAGE_NAME}.translate.chapter_started",
                     chapter_number=chapter,
                 )
-            translated = client.translate_glossary_candidate(
-                model_name=config_obj.models.translator_name,
-                prompt_template=prompt.template,
-                source_term=candidate.source_term,
-                category=candidate.category,
-                evidence_snippet=candidate.evidence_snippet,
+        for model_name in translator_names:
+            for candidate in pending:
+                translated = client.translate_glossary_candidate(
+                    model_name=model_name,
+                    prompt_template=prompt.template,
+                    source_term=candidate.source_term,
+                    category=candidate.category,
+                    evidence_snippet=candidate.evidence_snippet,
+                )
+                upsert_translation_vote(
+                    conn,
+                    candidate_id=candidate.candidate_id,
+                    release_id=release_id,
+                    translation_run_id=run_id,
+                    model_name=model_name,
+                    prompt_version=prompt.version,
+                    raw_output=translated,
+                    cleaned_output=translated,
+                    normalized_output=normalize_term(translated),
+                )
+
+        translated_count = 0
+        unresolved_count = 0
+        for candidate in pending:
+            votes = list_translation_votes(
+                conn,
+                release_id=release_id,
+                candidate_id=candidate.candidate_id,
             )
-            normalized_target = normalize_term(translated)
-            save_candidate_translation(
+            votes = [vote for vote in votes if vote.translation_run_id == run_id]
+            resolution = _resolve_translation_votes(votes, translator_names)
+            set_translation_vote_resolution(
                 conn,
                 candidate_id=candidate.candidate_id,
                 translation_run_id=run_id,
-                target_term=translated,
-                normalized_target_term=normalized_target,
-                translator_model_name=config_obj.models.translator_name,
-                translator_prompt_version=prompt.version,
+                resolution_status=resolution["status"],
             )
+            if resolution["target_term"]:
+                save_candidate_translation(
+                    conn,
+                    candidate_id=candidate.candidate_id,
+                    translation_run_id=run_id,
+                    target_term=resolution["target_term"],
+                    normalized_target_term=resolution["normalized_target_term"],
+                    translator_model_name=resolution["model_name"],
+                    translator_prompt_version=prompt.version,
+                )
+                translated_count += 1
+            else:
+                unresolved_count += 1
         if active_chapter is not None:
             _emit(
                 run_id,
@@ -370,7 +407,8 @@ def translate_glossary_candidates(
         run_id,
         release_id,
         f"{_STAGE_NAME}.translate.completed",
-        translated_count=len(pending),
+        translated_count=translated_count,
+        unresolved_count=unresolved_count,
         **usage_payload_delta(client, usage_before),
     )
 
@@ -378,9 +416,52 @@ def translate_glossary_candidates(
         "status": "success",
         "release_id": release_id,
         "run_id": run_id,
-        "translated_count": len(pending),
+        "translated_count": translated_count,
+        "unresolved_count": unresolved_count,
         "candidates_artifact": str(paths.glossary_candidates_path),
         **usage_payload_delta(client, usage_before),
+    }
+
+
+def _resolve_translation_votes(votes: list[Any], model_order: list[str]) -> dict[str, str]:
+    votes_by_model = {vote.model_name: vote for vote in votes}
+    ordered_votes = [votes_by_model[name] for name in model_order if name in votes_by_model]
+    if not ordered_votes:
+        return {
+            "status": "unresolved",
+            "target_term": "",
+            "normalized_target_term": "",
+            "model_name": "",
+        }
+
+    counts: dict[str, int] = {}
+    for vote in ordered_votes:
+        if vote.normalized_output:
+            counts[vote.normalized_output] = counts.get(vote.normalized_output, 0) + 1
+    if not counts:
+        return {
+            "status": "unresolved",
+            "target_term": "",
+            "normalized_target_term": "",
+            "model_name": "",
+        }
+
+    winning_normalized, winning_count = max(counts.items(), key=lambda item: item[1])
+    if winning_count <= len(ordered_votes) // 2:
+        return {
+            "status": "unresolved",
+            "target_term": "",
+            "normalized_target_term": "",
+            "model_name": "",
+        }
+
+    status = "consensus" if winning_count == len(ordered_votes) else "majority"
+    display_vote = next(vote for vote in ordered_votes if vote.normalized_output == winning_normalized)
+    return {
+        "status": status,
+        "target_term": display_vote.cleaned_output,
+        "normalized_target_term": winning_normalized,
+        "model_name": display_vote.model_name,
     }
 
 
@@ -616,8 +697,19 @@ def review_glossary_candidates(
     ensure_schema(conn, "glossary")
     try:
         candidates = list_candidates_for_review(conn, release_id=release_id)
+        votes = list_translation_votes(conn, release_id=release_id)
     finally:
         conn.close()
+
+    model_order = {
+        model_name: index
+        for index, model_name in enumerate(config_obj.models.effective_preprocess_translator_names())
+    }
+    votes_by_candidate: dict[str, list[Any]] = {}
+    for vote in votes:
+        votes_by_candidate.setdefault(vote.candidate_id, []).append(vote)
+    for candidate_votes in votes_by_candidate.values():
+        candidate_votes.sort(key=lambda vote: model_order.get(vote.model_name, len(model_order)))
 
     entries = [
         {
@@ -626,6 +718,14 @@ def review_glossary_candidates(
             "category": c.category,
             "translation": c.candidate_translation_en or "",
             "evidence_snippet": c.evidence_snippet,
+            "alternatives": [
+                {
+                    "model_name": vote.model_name,
+                    "translation": vote.cleaned_output,
+                    "resolution_status": vote.resolution_status,
+                }
+                for vote in votes_by_candidate.get(c.candidate_id, [])
+            ],
             "action": "keep",
         }
         for c in candidates

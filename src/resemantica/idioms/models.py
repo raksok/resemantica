@@ -82,3 +82,22 @@ class IdiomConflict:
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
 
+
+@dataclass(slots=True)
+class IdiomTranslationVote:
+    vote_id: str
+    candidate_id: str
+    release_id: str
+    translation_run_id: str
+    model_name: str
+    prompt_version: str
+    vote_kind: str
+    raw_output: str
+    cleaned_output: str
+    normalized_output: str
+    resolution_status: str
+    schema_version: int = 1
+
+    def to_json_dict(self) -> dict[str, object]:
+        return asdict(self)
+

@@ -17,11 +17,14 @@ from resemantica.db.idiom_repo import (
     list_candidates_for_translation,
     list_conflicts,
     list_policies,
+    list_translation_votes,
     mark_candidate_conflict,
     mark_candidate_promoted,
     promote_policies,
     save_idiom_translation,
+    set_translation_vote_resolution,
     upsert_discovered_candidates,
+    upsert_translation_vote,
 )
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.idioms.extractor import extract_idioms
@@ -112,7 +115,7 @@ def translate_idiom_candidates(
     release_id: str,
     run_id: str,
     translator_client: LLMClient,
-    translator_model_name: str,
+    translator_model_names: list[str],
     rendering_prompt_template: str,
     rendering_prompt_version: str,
     meaning_prompt_template: str,
@@ -142,42 +145,98 @@ def translate_idiom_candidates(
             )
             active_chapter = chapter
 
-        # Call 1: idiom rendering
-        rendering_prompt = render_named_sections(
-            rendering_prompt_template,
-            sections={
-                "SOURCE_TEXT": candidate.source_text,
-                "EVIDENCE_SNIPPET": candidate.evidence_snippet,
-            },
-        )
-        rendered = translator_client.generate_text(
-            model_name=translator_model_name,
-            prompt=rendering_prompt,
-        )
-        rendered = _clean_llm_response(rendered)
+    for model_name in translator_model_names:
+        for candidate in pending:
+            rendering_prompt = render_named_sections(
+                rendering_prompt_template,
+                sections={
+                    "SOURCE_TEXT": candidate.source_text,
+                    "EVIDENCE_SNIPPET": candidate.evidence_snippet,
+                },
+            )
+            raw_rendered = translator_client.generate_text(
+                model_name=model_name,
+                prompt=rendering_prompt,
+            )
+            rendered = _clean_llm_response(raw_rendered)
+            upsert_translation_vote(
+                conn,
+                candidate_id=candidate.candidate_id,
+                release_id=release_id,
+                translation_run_id=run_id,
+                model_name=model_name,
+                prompt_version=rendering_prompt_version,
+                vote_kind="rendering",
+                raw_output=raw_rendered,
+                cleaned_output=rendered,
+                normalized_output=_normalize_translation(rendered),
+            )
 
-        # Call 2: meaning translation
-        meaning_prompt = render_named_sections(
-            meaning_prompt_template,
-            sections={
-                "MEANING_ZH": candidate.meaning_zh,
-            },
-        )
-        meaning = translator_client.generate_text(
-            model_name=translator_model_name,
-            prompt=meaning_prompt,
-        )
-        meaning = _clean_llm_response(meaning)
+            meaning_prompt = render_named_sections(
+                meaning_prompt_template,
+                sections={
+                    "MEANING_ZH": candidate.meaning_zh,
+                },
+            )
+            raw_meaning = translator_client.generate_text(
+                model_name=model_name,
+                prompt=meaning_prompt,
+            )
+            meaning = _clean_llm_response(raw_meaning)
+            upsert_translation_vote(
+                conn,
+                candidate_id=candidate.candidate_id,
+                release_id=release_id,
+                translation_run_id=run_id,
+                model_name=model_name,
+                prompt_version=meaning_prompt_version,
+                vote_kind="meaning",
+                raw_output=raw_meaning,
+                cleaned_output=meaning,
+                normalized_output=_normalize_translation(meaning),
+            )
 
-        save_idiom_translation(
+    translated_count = 0
+    for candidate in pending:
+        votes = list_translation_votes(
+            conn,
+            release_id=release_id,
+            candidate_id=candidate.candidate_id,
+        )
+        votes = [vote for vote in votes if vote.translation_run_id == run_id]
+        rendering_resolution = _resolve_translation_votes(
+            [vote for vote in votes if vote.vote_kind == "rendering"],
+            translator_model_names,
+        )
+        meaning_resolution = _resolve_translation_votes(
+            [vote for vote in votes if vote.vote_kind == "meaning"],
+            translator_model_names,
+        )
+        set_translation_vote_resolution(
             conn,
             candidate_id=candidate.candidate_id,
             translation_run_id=run_id,
-            target_term=rendered,
-            meaning_en=meaning,
-            translator_model_name=translator_model_name,
-            translator_prompt_version=rendering_prompt_version,
+            vote_kind="rendering",
+            resolution_status=rendering_resolution["status"],
         )
+        set_translation_vote_resolution(
+            conn,
+            candidate_id=candidate.candidate_id,
+            translation_run_id=run_id,
+            vote_kind="meaning",
+            resolution_status=meaning_resolution["status"],
+        )
+        if rendering_resolution["target_term"]:
+            save_idiom_translation(
+                conn,
+                candidate_id=candidate.candidate_id,
+                translation_run_id=run_id,
+                target_term=rendering_resolution["target_term"],
+                meaning_en=meaning_resolution["target_term"],
+                translator_model_name=rendering_resolution["model_name"],
+                translator_prompt_version=rendering_prompt_version,
+            )
+            translated_count += 1
     if active_chapter is not None:
         completed_chapters.append(active_chapter)
         raise_if_stop_requested(
@@ -185,7 +244,34 @@ def translate_idiom_candidates(
             checkpoint={"idiom_translate_completed_chapters": completed_chapters},
             message=f"Idiom translation stopped after chapter {active_chapter}",
         )
-    return len(pending)
+    return translated_count
+
+
+def _normalize_translation(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().casefold())
+
+
+def _resolve_translation_votes(votes: list[Any], model_order: list[str]) -> dict[str, str]:
+    votes_by_model = {vote.model_name: vote for vote in votes}
+    ordered_votes = [votes_by_model[name] for name in model_order if name in votes_by_model]
+    if not ordered_votes:
+        return {"status": "unresolved", "target_term": "", "model_name": ""}
+    counts: dict[str, int] = {}
+    for vote in ordered_votes:
+        if vote.normalized_output:
+            counts[vote.normalized_output] = counts.get(vote.normalized_output, 0) + 1
+    if not counts:
+        return {"status": "unresolved", "target_term": "", "model_name": ""}
+    winning_normalized, winning_count = max(counts.items(), key=lambda item: item[1])
+    if winning_count <= len(ordered_votes) // 2:
+        return {"status": "unresolved", "target_term": "", "model_name": ""}
+    status = "consensus" if winning_count == len(ordered_votes) else "majority"
+    display_vote = next(vote for vote in ordered_votes if vote.normalized_output == winning_normalized)
+    return {
+        "status": status,
+        "target_term": display_vote.cleaned_output,
+        "model_name": display_vote.model_name,
+    }
 
 
 def preprocess_idioms(
@@ -287,7 +373,7 @@ def preprocess_idioms(
             release_id=release_id,
             run_id=run_id,
             translator_client=translator_client,
-            translator_model_name=config_obj.models.translator_name,
+            translator_model_names=config_obj.models.effective_preprocess_translator_names(),
             rendering_prompt_template=translate_prompt.template,
             rendering_prompt_version=translate_prompt.version,
             meaning_prompt_template=meaning_prompt.template,
@@ -509,8 +595,24 @@ def review_idiom_candidates(
     ensure_schema(conn, "idioms")
     try:
         candidates = list_candidates_for_review(conn, release_id=release_id)
+        votes = list_translation_votes(conn, release_id=release_id)
     finally:
         conn.close()
+
+    model_order = {
+        model_name: index
+        for index, model_name in enumerate(config_obj.models.effective_preprocess_translator_names())
+    }
+    votes_by_candidate: dict[str, list[Any]] = {}
+    for vote in votes:
+        votes_by_candidate.setdefault(vote.candidate_id, []).append(vote)
+    for candidate_votes in votes_by_candidate.values():
+        candidate_votes.sort(
+            key=lambda vote: (
+                vote.vote_kind,
+                model_order.get(vote.model_name, len(model_order)),
+            )
+        )
 
     entries = [
         {
@@ -518,6 +620,15 @@ def review_idiom_candidates(
             "source_text": c.source_text,
             "meaning_zh": c.meaning_zh,
             "rendering": c.preferred_rendering_en,
+            "alternatives": [
+                {
+                    "model_name": vote.model_name,
+                    "kind": vote.vote_kind,
+                    "translation": vote.cleaned_output,
+                    "resolution_status": vote.resolution_status,
+                }
+                for vote in votes_by_candidate.get(c.candidate_id, [])
+            ],
             "action": "keep",
         }
         for c in candidates

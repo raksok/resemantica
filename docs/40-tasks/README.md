@@ -59,3 +59,4 @@ Always follow the milestone sequence below.
 | M39 | task-39 | M3 | Deterministic Glossary Discovery |
 | M40 | task-40 | M39 | Glossary Memory Optimization — Incremental Accumulation |
 | M41 | task-41 | M5, M39 | Deterministic Idiom Discovery |
+| M42 | task-42 | M3, M5, M40, M41 | Multi-Model Preprocess Translation |

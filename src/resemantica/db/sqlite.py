@@ -113,6 +113,23 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             UNIQUE (release_id, canonical_candidate_id)
         );
 
+        CREATE TABLE IF NOT EXISTS glossary_translation_votes (
+            vote_id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL,
+            release_id TEXT NOT NULL,
+            translation_run_id TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            raw_output TEXT NOT NULL,
+            cleaned_output TEXT NOT NULL,
+            normalized_output TEXT NOT NULL,
+            resolution_status TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (candidate_id, translation_run_id, model_name)
+        );
+
         CREATE TABLE IF NOT EXISTS locked_glossary (
             glossary_entry_id TEXT PRIMARY KEY,
             release_id TEXT NOT NULL,
@@ -260,6 +277,24 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             existing_idiom_id TEXT,
             schema_version INTEGER NOT NULL DEFAULT 1,
             detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS idiom_translation_votes (
+            vote_id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL,
+            release_id TEXT NOT NULL,
+            translation_run_id TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            vote_kind TEXT NOT NULL,
+            raw_output TEXT NOT NULL,
+            cleaned_output TEXT NOT NULL,
+            normalized_output TEXT NOT NULL,
+            resolution_status TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (candidate_id, translation_run_id, model_name, vote_kind)
         );
 
         CREATE TABLE IF NOT EXISTS deferred_entities (

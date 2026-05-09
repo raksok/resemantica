@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from typing import Sequence
 
 from resemantica.db.sqlite import ensure_schema
-from resemantica.idioms.models import IdiomCandidate, IdiomConflict, IdiomPolicy
+from resemantica.idioms.models import IdiomCandidate, IdiomConflict, IdiomPolicy, IdiomTranslationVote
 
 _IDIOM_UPSERT_SQL = """
 INSERT INTO idiom_candidates(
@@ -141,6 +142,30 @@ def _conflict_from_row(row: sqlite3.Row) -> IdiomConflict:
         existing_idiom_id=None if row["existing_idiom_id"] is None else str(row["existing_idiom_id"]),
         schema_version=int(row["schema_version"]),
     )
+
+
+def _vote_from_row(row: sqlite3.Row) -> IdiomTranslationVote:
+    return IdiomTranslationVote(
+        vote_id=str(row["vote_id"]),
+        candidate_id=str(row["candidate_id"]),
+        release_id=str(row["release_id"]),
+        translation_run_id=str(row["translation_run_id"]),
+        model_name=str(row["model_name"]),
+        prompt_version=str(row["prompt_version"]),
+        vote_kind=str(row["vote_kind"]),
+        raw_output=str(row["raw_output"]),
+        cleaned_output=str(row["cleaned_output"]),
+        normalized_output=str(row["normalized_output"]),
+        resolution_status=str(row["resolution_status"]),
+        schema_version=int(row["schema_version"]),
+    )
+
+
+def _vote_id(candidate_id: str, translation_run_id: str, model_name: str, vote_kind: str) -> str:
+    digest = hashlib.sha256(
+        f"{candidate_id}:{translation_run_id}:{model_name}:{vote_kind}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"itrv_{digest}"
 
 
 def upsert_discovered_candidates(
@@ -282,6 +307,103 @@ def save_idiom_translation(
         )
 
 
+def upsert_translation_vote(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    release_id: str,
+    translation_run_id: str,
+    model_name: str,
+    prompt_version: str,
+    vote_kind: str,
+    raw_output: str,
+    cleaned_output: str,
+    normalized_output: str,
+    resolution_status: str = "pending",
+) -> None:
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO idiom_translation_votes(
+                vote_id, candidate_id, release_id, translation_run_id,
+                model_name, prompt_version, vote_kind, raw_output,
+                cleaned_output, normalized_output, resolution_status,
+                schema_version, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(candidate_id, translation_run_id, model_name, vote_kind)
+            DO UPDATE SET
+                raw_output = excluded.raw_output,
+                cleaned_output = excluded.cleaned_output,
+                normalized_output = excluded.normalized_output,
+                resolution_status = excluded.resolution_status,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                _vote_id(candidate_id, translation_run_id, model_name, vote_kind),
+                candidate_id,
+                release_id,
+                translation_run_id,
+                model_name,
+                prompt_version,
+                vote_kind,
+                raw_output,
+                cleaned_output,
+                normalized_output,
+                resolution_status,
+            ),
+        )
+
+
+def set_translation_vote_resolution(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    translation_run_id: str,
+    vote_kind: str,
+    resolution_status: str,
+) -> None:
+    with conn:
+        conn.execute(
+            """
+            UPDATE idiom_translation_votes
+            SET resolution_status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE candidate_id = ?
+              AND translation_run_id = ?
+              AND vote_kind = ?
+            """,
+            (resolution_status, candidate_id, translation_run_id, vote_kind),
+        )
+
+
+def list_translation_votes(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    candidate_id: str | None = None,
+) -> list[IdiomTranslationVote]:
+    params: tuple[str, ...]
+    where = "WHERE release_id = ?"
+    params = (release_id,)
+    if candidate_id is not None:
+        where += " AND candidate_id = ?"
+        params = (release_id, candidate_id)
+    rows = conn.execute(
+        f"""
+        SELECT vote_id, candidate_id, release_id, translation_run_id,
+               model_name, prompt_version, vote_kind, raw_output,
+               cleaned_output, normalized_output, resolution_status,
+               schema_version
+        FROM idiom_translation_votes
+        {where}
+        ORDER BY candidate_id, vote_kind, created_at, model_name
+        """,
+        params,
+    ).fetchall()
+    return [_vote_from_row(row) for row in rows]
+
+
 def list_candidates_for_promotion(
     conn: sqlite3.Connection,
     *,
@@ -332,7 +454,13 @@ def list_candidates_for_review(
                  existing_policy_id
         FROM idiom_candidates
         WHERE release_id = ?
-          AND candidate_status = 'translated'
+          AND (
+            candidate_status = 'translated'
+            OR EXISTS (
+                SELECT 1 FROM idiom_translation_votes v
+                WHERE v.candidate_id = idiom_candidates.candidate_id
+            )
+          )
         ORDER BY first_seen_chapter, candidate_id
         """,
         (release_id,),

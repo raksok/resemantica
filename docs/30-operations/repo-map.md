@@ -30,7 +30,7 @@ Implemented package layout (M2 slice):
 Implemented package layout (M3 slice):
 
 - `src/resemantica/glossary/`: candidate discovery, promotion validators, and glossary pipeline orchestration
-- `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, locked glossary, and conflicts
+- `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, translation votes, locked glossary, and conflicts
 - `src/resemantica/db/migrations/003_glossary.sql`: glossary tables and constraints
 - `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`: M3 glossary prompt files
 - `tests/glossary/`: glossary discovery, conflict, transaction, and precedence tests
@@ -46,7 +46,7 @@ Implemented package layout (M4 slice):
 Implemented package layout (M5 slice):
 
 - `src/resemantica/idioms/`: idiom extraction, deterministic validation, exact-match hooks, and idiom preprocessing pipeline
-- `src/resemantica/db/idiom_repo.py`: SQLite repository for idiom candidates, policies, and conflicts
+- `src/resemantica/db/idiom_repo.py`: SQLite repository for idiom candidates, translation votes, policies, and conflicts
 - `src/resemantica/db/migrations/005_idioms.sql`: idiom tables and constraints
 - `src/resemantica/llm/prompts/idiom_detect.txt`: M5 idiom detection prompt file
 - `tests/idioms/`: idiom extraction, duplicate/conflict, storage, and retrieval precedence tests

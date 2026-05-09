@@ -8,6 +8,7 @@ from pathlib import Path
 @dataclass(slots=True)
 class ModelsConfig:
     translator_name: str = "HY-MT1.5-7B"
+    preprocess_translator_names: list[str] = field(default_factory=list)
     translator_context_window: int | None = None
     translator_max_context_ratio: float | None = None
     analyst_name: str = "Qwen3.5-9B-GLM5.1"
@@ -15,6 +16,12 @@ class ModelsConfig:
     analyst_max_context_ratio: float | None = None
     embedding_name: str = "bge-M3"
     pruning_threshold: float = 0.3
+
+    def effective_preprocess_translator_names(self) -> list[str]:
+        configured = [name.strip() for name in self.preprocess_translator_names if name.strip()]
+        if configured:
+            return configured
+        return [self.translator_name]
 
     def effective_context_window(self, role: str, global_window: int) -> int:
         if role == "translator":
@@ -223,6 +230,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             translator_name=_as_str(
                 models.get("translator_name", ModelsConfig().translator_name),
                 "models.translator_name",
+            ),
+            preprocess_translator_names=_as_str_list(
+                models.get(
+                    "preprocess_translator_names",
+                    ModelsConfig().preprocess_translator_names,
+                ),
+                "models.preprocess_translator_names",
             ),
             translator_context_window=(
                 _as_int(models["translator_context_window"], "models.translator_context_window")

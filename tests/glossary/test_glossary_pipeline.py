@@ -13,15 +13,18 @@ from resemantica.db.glossary_repo import (
     ensure_glossary_schema,
     list_conflicts,
     list_locked_entries,
+    list_translation_votes,
     promote_locked_entries,
+    upsert_discovered_candidates,
 )
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.extractor import extract_epub
-from resemantica.glossary.models import LockedGlossaryEntry
+from resemantica.glossary.models import GlossaryCandidate, LockedGlossaryEntry
 from resemantica.glossary.pipeline import (
     discover_glossary_candidates,
     promote_glossary_candidates,
     resolve_locked_glossary_term,
+    review_glossary_candidates,
     translate_glossary_candidates,
 )
 from resemantica.glossary.validators import normalize_term
@@ -122,6 +125,63 @@ class StaticGlossaryTranslator:
         return self.target_term
 
 
+class ModelMappedGlossaryTranslator:
+    def __init__(self, outputs: dict[tuple[str, str], str]) -> None:
+        self.outputs = outputs
+        self.calls: list[tuple[str, str]] = []
+
+    def translate_glossary_candidate(
+        self,
+        *,
+        model_name: str,
+        prompt_template: str,  # noqa: ARG002
+        source_term: str,
+        category: str,  # noqa: ARG002
+        evidence_snippet: str,  # noqa: ARG002
+    ) -> str:
+        self.calls.append((model_name, source_term))
+        return self.outputs[(model_name, source_term)]
+
+
+def _insert_glossary_candidate(
+    *,
+    release_id: str,
+    source_term: str,
+    category: str = "faction",
+) -> None:
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        upsert_discovered_candidates(
+            conn,
+            candidates=[
+                GlossaryCandidate(
+                    candidate_id=f"gcan_{normalize_term(source_term)}",
+                    release_id=release_id,
+                    source_term=source_term,
+                    normalized_source_term=normalize_term(source_term),
+                    category=category,
+                    source_language="zh",
+                    first_seen_chapter=1,
+                    last_seen_chapter=1,
+                    appearance_count=1,
+                    evidence_snippet=source_term,
+                    candidate_translation_en=None,
+                    normalized_target_term=None,
+                    discovery_run_id="seed",
+                    translation_run_id=None,
+                    candidate_status="discovered",
+                    validation_status="pending",
+                    conflict_reason=None,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+
 def test_discovery_writes_candidates_only(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _extract_one_chapter(
@@ -163,6 +223,90 @@ def test_discovery_writes_candidates_only(tmp_path: Path, monkeypatch) -> None:
         assert locked_count is not None and int(locked_count["count"]) == 0
     finally:
         conn.close()
+
+
+def test_multi_model_glossary_translation_majority_and_review_alternatives(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-votes"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    translator = ModelMappedGlossaryTranslator(
+        {
+            ("model-a", "青云门"): "Azure Sect",
+            ("model-b", "青云门"): "Azure Sect",
+            ("model-c", "青云门"): "Blue Cloud Gate",
+            ("model-a", "苍云门"): "Cangyun Gate",
+            ("model-b", "苍云门"): "Azure Cloud Sect",
+            ("model-c", "苍云门"): "Blue Cloud Gate",
+        }
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+
+    result = translate_glossary_candidates(
+        release_id=release_id,
+        run_id="translate-001",
+        config=config,
+        llm_client=translator,
+    )
+
+    assert result["translated_count"] == 1
+    assert result["unresolved_count"] == 1
+    assert translator.calls == [
+        ("model-a", "苍云门"),
+        ("model-a", "青云门"),
+        ("model-b", "苍云门"),
+        ("model-b", "青云门"),
+        ("model-c", "苍云门"),
+        ("model-c", "青云门"),
+    ]
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        rows = conn.execute(
+            """
+            SELECT candidate_id, source_term, candidate_translation_en, candidate_status
+            FROM glossary_candidates
+            WHERE release_id = ?
+            ORDER BY source_term
+            """,
+            (release_id,),
+        ).fetchall()
+        assert [(row["source_term"], row["candidate_translation_en"], row["candidate_status"]) for row in rows] == [
+            ("苍云门", None, "discovered"),
+            ("青云门", "Azure Sect", "translated"),
+        ]
+        votes = list_translation_votes(conn, release_id=release_id)
+        assert len(votes) == 6
+        ids_by_source = {str(row["source_term"]): str(row["candidate_id"]) for row in rows}
+        assert {
+            vote.resolution_status
+            for vote in votes
+            if vote.candidate_id == ids_by_source["青云门"]
+        } == {"majority"}
+        assert {
+            vote.resolution_status
+            for vote in votes
+            if vote.candidate_id == ids_by_source["苍云门"]
+        } == {"unresolved"}
+    finally:
+        conn.close()
+
+    review = review_glossary_candidates(release_id=release_id, run_id="review-001")
+    assert review["entries_written"] == 2
+    review_data = json.loads(paths.glossary_review_path.read_text(encoding="utf-8"))
+    unresolved = next(entry for entry in review_data["entries"] if entry["source_term"] == "苍云门")
+    assert unresolved["translation"] == ""
+    assert [alt["translation"] for alt in unresolved["alternatives"]] == [
+        "Cangyun Gate",
+        "Azure Cloud Sect",
+        "Blue Cloud Gate",
+    ]
 
 
 def test_discovery_builds_llm_client_from_config(tmp_path: Path, monkeypatch) -> None:
