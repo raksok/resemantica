@@ -199,6 +199,9 @@ def preprocess_idioms(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     stop_token: StopToken | None = None,
+    eval_batch_size: int | None = None,
+    skip_llm_eval: bool = False,
+    score_threshold: float | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -208,7 +211,7 @@ def preprocess_idioms(
         chapter_end=chapter_end,
     )
 
-    detect_prompt = load_prompt("idiom_detect.txt")
+    detect_prompt = load_prompt("idiom_evaluate.txt")
     translate_prompt = load_prompt("idiom_translate.txt")
     meaning_prompt = load_prompt("idiom_meaning.txt")
     analyst_client = _build_llm_client(config_obj, llm_client)
@@ -264,6 +267,9 @@ def preprocess_idioms(
                 **payload,
             ),
             stop_token=stop_token,
+            skip_llm_eval=skip_llm_eval,
+            eval_batch_size=eval_batch_size or 50,
+            score_threshold=score_threshold,
         )
         upsert_discovered_candidates(conn, candidates=detected_candidates)
         raise_if_stop_requested(

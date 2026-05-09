@@ -4,6 +4,8 @@
 
 Detect idioms and set phrases, capture their meaning and preferred English rendering, and store them as authoritative structured assets for packet assembly and translation support.
 
+Update: LLM-first idiom detection is superseded by `lld-41-deterministic-idiom-discovery.md`. Translation, review, promotion, exact-match policy lookup, and packet consumption remain owned by this LLD.
+
 Post-MVP additions: human-override review workflow, cross-chapter deduplication via UNIQUE constraint, translation response post-processing, and improved detect prompt.
 
 ## Public Interfaces

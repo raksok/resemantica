@@ -27,6 +27,21 @@ class IdiomCandidate:
     translator_model_name: str | None = None
     translator_prompt_version: str | None = None
     schema_version: int = 1
+    dictionary_match: int | None = None
+    source_strategies: str | None = None
+    chapter_coverage: int | None = None
+    corpus_score: float | None = None
+    context_snippets: str | None = None
+    literal_meaning_zh: str | None = None
+    idiomatic_meaning_zh: str | None = None
+    llm_is_idiom: int | None = None
+    llm_usage_type: str | None = None
+    llm_translation_strategy: str | None = None
+    llm_reason_code: str | None = None
+    llm_confidence: float | None = None
+    cluster_id: str | None = None
+    canonical_source_text: str | None = None
+    existing_policy_id: str | None = None
 
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)

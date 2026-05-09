@@ -26,7 +26,7 @@ from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.glossary.critic import deduplicate_and_cluster
 from resemantica.glossary.discovery import discover_candidates_from_extracted
 from resemantica.glossary.evaluator import evaluate_candidate_batch
-from resemantica.glossary.models import GlossaryCandidate
+from resemantica.glossary.models import AliasCluster, GlossaryCandidate
 from resemantica.glossary.validators import (
     apply_deterministic_filter,
     normalize_term,
@@ -181,7 +181,7 @@ def discover_glossary_candidates(
 
     # Stage 5: Embedding-based Dedup / Alias Clustering
     to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
-    clusters = []
+    clusters: list[AliasCluster] = []
     if to_dedup:
         conn_tmp = open_connection(paths.db_path)
         existing_locked = list_locked_entries(conn_tmp, release_id=release_id)
@@ -206,7 +206,12 @@ def discover_glossary_candidates(
     try:
         upsert_discovered_candidates(conn, candidates=discovered)
         if clusters:
-            upsert_alias_clusters(conn, clusters=clusters)
+            upsert_alias_clusters(
+                conn,
+                clusters=clusters,
+                release_id=release_id,
+                discovery_run_id=run_id,
+            )
 
         _write_candidate_snapshot(
             conn,

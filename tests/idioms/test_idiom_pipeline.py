@@ -27,16 +27,32 @@ from resemantica.settings import derive_paths, load_config
 
 
 class ScriptedIdiomLLM:
-    def __init__(self, rows_by_chapter: dict[int, list[dict[str, str]]]) -> None:
-        self.rows_by_chapter = rows_by_chapter
+    def __init__(self, *, keep_all: bool = True) -> None:
+        self.keep_all = keep_all
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
         if "IDIOM_DETECT" in prompt:
-            chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
-            if chapter_match is None:
-                raise RuntimeError("chapter number missing from idiom prompt")
-            chapter_number = int(chapter_match.group(1))
-            return json.dumps({"idioms": self.rows_by_chapter.get(chapter_number, [])}, ensure_ascii=False)
+            raise AssertionError("raw-chapter LLM idiom discovery should not run")
+        if "IDIOM_EVALUATE" in prompt:
+            match = re.search(r"## CANDIDATES\s+(.+?)(?:\n\n## |\Z)", prompt, flags=re.DOTALL)
+            if match is None:
+                raise RuntimeError("candidate JSON missing from idiom evaluator prompt")
+            rows = json.loads(match.group(1))
+            return json.dumps(
+                [
+                    {
+                        "candidate_id": row["candidate_id"],
+                        "is_idiom": self.keep_all,
+                        "usage_type": "idiomatic",
+                        "translation_strategy": "idiomatic",
+                        "reason_code": "lexicon_match",
+                        "confidence": 0.95,
+                        "meaning_zh": "一举两得",
+                    }
+                    for row in rows
+                ],
+                ensure_ascii=False,
+            )
         raise RuntimeError("Unexpected prompt type")
 
 
@@ -139,17 +155,7 @@ def test_detected_idiom_candidate_starts_without_english_rendering(
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
     prompt = load_prompt("idiom_detect.txt")
-    llm = ScriptedIdiomLLM(
-        {
-            1: [
-                {
-                    "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                    "usage_notes": "use for one action with two outcomes",
-                }
-            ]
-        }
-    )
+    llm = ScriptedIdiomLLM()
 
     candidates = extract_idioms(
         release_id=release_id,
@@ -159,6 +165,7 @@ def test_detected_idiom_candidate_starts_without_english_rendering(
         model_name=config.models.analyst_name,
         prompt_template=prompt.template,
         prompt_version=prompt.version,
+        skip_llm_eval=True,
     )
 
     assert len(candidates) == 1
@@ -180,16 +187,7 @@ def test_save_idiom_translation_fills_candidate_rendering(
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
     prompt = load_prompt("idiom_detect.txt")
-    llm = ScriptedIdiomLLM(
-        {
-            1: [
-                {
-                    "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                }
-            ]
-        }
-    )
+    llm = ScriptedIdiomLLM()
     candidates = extract_idioms(
         release_id=release_id,
         extracted_chapters_dir=paths.extracted_chapters_dir,
@@ -198,6 +196,7 @@ def test_save_idiom_translation_fills_candidate_rendering(
         model_name=config.models.analyst_name,
         prompt_template=prompt.template,
         prompt_version=prompt.version,
+        skip_llm_eval=True,
     )
 
     conn = open_connection(paths.db_path)
@@ -252,23 +251,7 @@ def test_preprocess_idioms_merges_normalized_duplicates(
         source_text="这一招真是一箭双雕。",
     )
 
-    llm = ScriptedIdiomLLM(
-        {
-            1: [
-                {
-                    "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                    "usage_notes": "use for one action with two outcomes",
-                }
-            ],
-            2: [
-                {
-                    "source_text": "一箭双雕  ",
-                    "meaning_zh": "一举两得",
-                }
-            ],
-        }
-    )
+    llm = ScriptedIdiomLLM()
     translator = ScriptedTranslatorLLM("kill two birds with one stone")
     result = preprocess_idioms(
         release_id=release_id,
@@ -304,16 +287,7 @@ def test_preprocess_idioms_emits_chapter_events(tmp_path: Path, monkeypatch) -> 
         chapter_number=1,
         source_text="他可谓一箭双雕。",
     )
-    llm = ScriptedIdiomLLM(
-        {
-            1: [
-                {
-                    "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                }
-            ]
-        }
-    )
+    llm = ScriptedIdiomLLM()
     translator = ScriptedTranslatorLLM("kill two birds with one stone")
     from resemantica.orchestration.events import subscribe, unsubscribe
 
@@ -361,22 +335,7 @@ def test_duplicate_conflict_rejects_policy_promotion(
     )
 
     # Both chapters detect the same idiom — should merge into one candidate
-    llm = ScriptedIdiomLLM(
-        {
-            1: [
-                {
-                    "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                },
-            ],
-            2: [
-                {
-                    "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                },
-            ],
-        }
-    )
+    llm = ScriptedIdiomLLM()
     translator = ScriptedTranslatorLLM("kill two birds with one stone")
     result = preprocess_idioms(
         release_id=release_id,
@@ -421,16 +380,7 @@ def test_existing_policy_conflict_is_recorded(
         preferred_rendering_en="kill two birds with one stone",
     )
 
-    llm = ScriptedIdiomLLM(
-        {
-            1: [
-                {
-                    "source_text": "一箭双雕",
-                    "meaning_zh": "一举两得",
-                }
-            ]
-        }
-    )
+    llm = ScriptedIdiomLLM()
     translator = ScriptedTranslatorLLM("one move, two wins")
     result = preprocess_idioms(
         release_id=release_id,

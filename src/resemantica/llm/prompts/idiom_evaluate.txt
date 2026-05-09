@@ -1,0 +1,25 @@
+# version: 1.0
+
+## TASK
+IDIOM_EVALUATE
+
+## CANDIDATES
+{CANDIDATES_JSON}
+
+## INSTRUCTIONS
+Evaluate each Chinese candidate phrase from a web novel.
+Decide whether it is an idiom, chengyu, proverb, or fixed expression.
+
+Return reason codes only. Do not include chain-of-thought.
+
+For each candidate, return:
+- candidate_id
+- is_idiom: true or false
+- usage_type: literal, idiomatic, mixed, or unknown
+- translation_strategy: literal, idiomatic, or preserve
+- reason_code: lexicon_match, chengyu_pattern, fixed_expression, repeated_non_compositional, ordinary_noun_phrase, proper_name, compositional, insufficient_evidence, or eval_error
+- confidence: number from 0.0 to 1.0
+- meaning_zh: short Chinese meaning if known, otherwise empty string
+
+## OUTPUT FORMAT
+Return a JSON array only. No markdown fences. No explanation text.

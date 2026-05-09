@@ -14,9 +14,17 @@ INSERT INTO idiom_candidates(
     evidence_snippet, detection_run_id, candidate_status,
     validation_status, conflict_reason, analyst_model_name,
     analyst_prompt_version, translation_run_id, translator_model_name,
-    translator_prompt_version, schema_version, updated_at
+    translator_prompt_version, schema_version, dictionary_match,
+    source_strategies, chapter_coverage, corpus_score, context_snippets,
+    literal_meaning_zh, idiomatic_meaning_zh, llm_is_idiom,
+    llm_usage_type, llm_translation_strategy, llm_reason_code,
+    llm_confidence, cluster_id, canonical_source_text, existing_policy_id,
+    updated_at
 )
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES(
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+)
 ON CONFLICT(release_id, normalized_source_text)
 DO UPDATE SET
     source_text = excluded.source_text,
@@ -34,6 +42,21 @@ DO UPDATE SET
     conflict_reason = excluded.conflict_reason,
     analyst_model_name = excluded.analyst_model_name,
     analyst_prompt_version = excluded.analyst_prompt_version,
+    dictionary_match = excluded.dictionary_match,
+    source_strategies = excluded.source_strategies,
+    chapter_coverage = excluded.chapter_coverage,
+    corpus_score = excluded.corpus_score,
+    context_snippets = excluded.context_snippets,
+    literal_meaning_zh = excluded.literal_meaning_zh,
+    idiomatic_meaning_zh = excluded.idiomatic_meaning_zh,
+    llm_is_idiom = excluded.llm_is_idiom,
+    llm_usage_type = excluded.llm_usage_type,
+    llm_translation_strategy = excluded.llm_translation_strategy,
+    llm_reason_code = excluded.llm_reason_code,
+    llm_confidence = excluded.llm_confidence,
+    cluster_id = excluded.cluster_id,
+    canonical_source_text = excluded.canonical_source_text,
+    existing_policy_id = excluded.existing_policy_id,
     updated_at = CURRENT_TIMESTAMP
 """
 
@@ -68,6 +91,23 @@ def _candidate_from_row(row: sqlite3.Row) -> IdiomCandidate:
             None if row["translator_prompt_version"] is None else str(row["translator_prompt_version"])
         ),
         schema_version=int(row["schema_version"]),
+        dictionary_match=None if row["dictionary_match"] is None else int(row["dictionary_match"]),
+        source_strategies=None if row["source_strategies"] is None else str(row["source_strategies"]),
+        chapter_coverage=None if row["chapter_coverage"] is None else int(row["chapter_coverage"]),
+        corpus_score=None if row["corpus_score"] is None else float(row["corpus_score"]),
+        context_snippets=None if row["context_snippets"] is None else str(row["context_snippets"]),
+        literal_meaning_zh=None if row["literal_meaning_zh"] is None else str(row["literal_meaning_zh"]),
+        idiomatic_meaning_zh=None if row["idiomatic_meaning_zh"] is None else str(row["idiomatic_meaning_zh"]),
+        llm_is_idiom=None if row["llm_is_idiom"] is None else int(row["llm_is_idiom"]),
+        llm_usage_type=None if row["llm_usage_type"] is None else str(row["llm_usage_type"]),
+        llm_translation_strategy=(
+            None if row["llm_translation_strategy"] is None else str(row["llm_translation_strategy"])
+        ),
+        llm_reason_code=None if row["llm_reason_code"] is None else str(row["llm_reason_code"]),
+        llm_confidence=None if row["llm_confidence"] is None else float(row["llm_confidence"]),
+        cluster_id=None if row["cluster_id"] is None else str(row["cluster_id"]),
+        canonical_source_text=None if row["canonical_source_text"] is None else str(row["canonical_source_text"]),
+        existing_policy_id=None if row["existing_policy_id"] is None else str(row["existing_policy_id"]),
     )
 
 
@@ -137,6 +177,21 @@ def upsert_discovered_candidates(
                     candidate.translator_model_name,
                     candidate.translator_prompt_version,
                     candidate.schema_version,
+                    candidate.dictionary_match,
+                    candidate.source_strategies,
+                    candidate.chapter_coverage,
+                    candidate.corpus_score,
+                    candidate.context_snippets,
+                    candidate.literal_meaning_zh,
+                    candidate.idiomatic_meaning_zh,
+                    candidate.llm_is_idiom,
+                    candidate.llm_usage_type,
+                    candidate.llm_translation_strategy,
+                    candidate.llm_reason_code,
+                    candidate.llm_confidence,
+                    candidate.cluster_id,
+                    candidate.canonical_source_text,
+                    candidate.existing_policy_id,
                 )
                 for candidate in candidates
             ],
@@ -152,7 +207,12 @@ def list_candidates(conn: sqlite3.Connection, *, release_id: str) -> list[IdiomC
                evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
                analyst_model_name, analyst_prompt_version, translator_model_name,
-               translator_prompt_version, schema_version
+               translator_prompt_version, schema_version,
+               dictionary_match, source_strategies, chapter_coverage, corpus_score,
+               context_snippets, literal_meaning_zh, idiomatic_meaning_zh,
+               llm_is_idiom, llm_usage_type, llm_translation_strategy,
+               llm_reason_code, llm_confidence, cluster_id, canonical_source_text,
+               existing_policy_id
         FROM idiom_candidates
         WHERE release_id = ?
         ORDER BY first_seen_chapter, candidate_id
@@ -175,7 +235,12 @@ def list_candidates_for_translation(
                evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
                  analyst_model_name, analyst_prompt_version, translator_model_name,
-                 translator_prompt_version, schema_version
+                 translator_prompt_version, schema_version,
+                 dictionary_match, source_strategies, chapter_coverage, corpus_score,
+                 context_snippets, literal_meaning_zh, idiomatic_meaning_zh,
+                 llm_is_idiom, llm_usage_type, llm_translation_strategy,
+                 llm_reason_code, llm_confidence, cluster_id, canonical_source_text,
+                 existing_policy_id
         FROM idiom_candidates
         WHERE release_id = ?
           AND candidate_status = 'discovered'
@@ -230,7 +295,12 @@ def list_candidates_for_promotion(
                evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
                  analyst_model_name, analyst_prompt_version, translator_model_name,
-                 translator_prompt_version, schema_version
+                 translator_prompt_version, schema_version,
+                 dictionary_match, source_strategies, chapter_coverage, corpus_score,
+                 context_snippets, literal_meaning_zh, idiomatic_meaning_zh,
+                 llm_is_idiom, llm_usage_type, llm_translation_strategy,
+                 llm_reason_code, llm_confidence, cluster_id, canonical_source_text,
+                 existing_policy_id
         FROM idiom_candidates
         WHERE release_id = ?
           AND candidate_status = 'translated'
@@ -254,7 +324,12 @@ def list_candidates_for_review(
                evidence_snippet, detection_run_id,
                translation_run_id, candidate_status, validation_status, conflict_reason,
                  analyst_model_name, analyst_prompt_version, translator_model_name,
-                 translator_prompt_version, schema_version
+                 translator_prompt_version, schema_version,
+                 dictionary_match, source_strategies, chapter_coverage, corpus_score,
+                 context_snippets, literal_meaning_zh, idiomatic_meaning_zh,
+                 llm_is_idiom, llm_usage_type, llm_translation_strategy,
+                 llm_reason_code, llm_confidence, cluster_id, canonical_source_text,
+                 existing_policy_id
         FROM idiom_candidates
         WHERE release_id = ?
           AND candidate_status = 'translated'

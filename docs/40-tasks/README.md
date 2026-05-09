@@ -58,3 +58,4 @@ Always follow the milestone sequence below.
 | M29 | task-38 | M28, M10 | Resume Preserves Chapter Scope |
 | M39 | task-39 | M3 | Deterministic Glossary Discovery |
 | M40 | task-40 | M39 | Glossary Memory Optimization — Incremental Accumulation |
+| M41 | task-41 | M5, M39 | Deterministic Idiom Discovery |

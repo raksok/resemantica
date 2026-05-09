@@ -212,6 +212,21 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             translator_model_name TEXT,
             translator_prompt_version TEXT,
             schema_version INTEGER NOT NULL DEFAULT 1,
+            dictionary_match INTEGER,
+            source_strategies TEXT,
+            chapter_coverage INTEGER,
+            corpus_score REAL,
+            context_snippets TEXT,
+            literal_meaning_zh TEXT,
+            idiomatic_meaning_zh TEXT,
+            llm_is_idiom INTEGER,
+            llm_usage_type TEXT,
+            llm_translation_strategy TEXT,
+            llm_reason_code TEXT,
+            llm_confidence REAL,
+            cluster_id TEXT,
+            canonical_source_text TEXT,
+            existing_policy_id TEXT,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (release_id, normalized_source_text)
         );
@@ -360,6 +375,32 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
     for col_name, col_type in new_columns:
         try:
             conn.execute(f"ALTER TABLE glossary_candidates ADD COLUMN {col_name} {col_type};")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                pass
+            else:
+                raise
+
+    idiom_new_columns = [
+        ("dictionary_match", "INTEGER"),
+        ("source_strategies", "TEXT"),
+        ("chapter_coverage", "INTEGER"),
+        ("corpus_score", "REAL"),
+        ("context_snippets", "TEXT"),
+        ("literal_meaning_zh", "TEXT"),
+        ("idiomatic_meaning_zh", "TEXT"),
+        ("llm_is_idiom", "INTEGER"),
+        ("llm_usage_type", "TEXT"),
+        ("llm_translation_strategy", "TEXT"),
+        ("llm_reason_code", "TEXT"),
+        ("llm_confidence", "REAL"),
+        ("cluster_id", "TEXT"),
+        ("canonical_source_text", "TEXT"),
+        ("existing_policy_id", "TEXT"),
+    ]
+    for col_name, col_type in idiom_new_columns:
+        try:
+            conn.execute(f"ALTER TABLE idiom_candidates ADD COLUMN {col_name} {col_type};")
         except sqlite3.OperationalError as e:
             if "duplicate column name" in str(e).lower():
                 pass

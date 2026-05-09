@@ -8,19 +8,18 @@ from pathlib import Path
 from typing import Any, Callable
 
 from resemantica.chapters.manifest import ChapterRef
-from resemantica.idioms.models import IdiomCandidate
-from resemantica.idioms.validators import normalize_idiom_source
-from resemantica.llm.budget import (
-    PromptBudgetError,
-    chunk_text_for_prompt,
-    ensure_prompt_within_budget,
+from resemantica.idioms.candidate_gen import (
+    RawIdiomCandidate,
+    generate_chapter_idiom_candidates,
+    merge_across_chapters,
 )
-from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
-from resemantica.llm.client import LLMClient, capture_usage_snapshot, record_cache_hit, usage_payload_delta
-from resemantica.llm.prompts import render_named_sections
-from resemantica.llm.tokens import count_tokens
+from resemantica.idioms.corpus_stats import score_idiom_candidates
+from resemantica.idioms.evaluator import evaluate_idiom_candidate_batch
+from resemantica.idioms.models import IdiomCandidate
+from resemantica.idioms.validators import apply_deterministic_filter
+from resemantica.llm.client import LLMClient
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
-from resemantica.settings import AppConfig, load_config
+from resemantica.settings import AppConfig
 from resemantica.utils import _chapter_number_from_path
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
@@ -137,8 +136,10 @@ def extract_idioms(
     cache_root: Path | None = None,
     event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
     stop_token: StopToken | None = None,
+    skip_llm_eval: bool = False,
+    eval_batch_size: int = 50,
+    score_threshold: float | None = None,
 ) -> list[IdiomCandidate]:
-    config_obj = config or load_config()
     refs = chapter_refs
     if refs is None:
         chapter_files = sorted(
@@ -161,16 +162,19 @@ def extract_idioms(
             )
             for path in chapter_files
         ]
-    candidates: list[IdiomCandidate] = []
+    merged_raw: dict[str, RawIdiomCandidate] = {}
 
     for chapter_ref in refs:
         chapter_file = chapter_ref.chapter_path
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
         chapter_number = int(payload.get("chapter_number", chapter_ref.chapter_number))
-        chapter_usage_before = capture_usage_snapshot(llm_client)
         raise_if_stop_requested(
             stop_token,
-            checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},
+            checkpoint={
+                "completed_chapters": sorted(
+                    {row.first_seen_chapter for row in merged_raw.values()}
+                )
+            },
             message="Idiom extraction stopped before next chapter",
         )
         if event_callback is not None:
@@ -182,176 +186,104 @@ def extract_idioms(
             continue
 
         source_text_zh = _collect_source_text(payload)
-        analyst_budget = config_obj.models.effective_max_context_per_pass(
-            "analyst", config_obj.budget.max_context_per_pass, config_obj.llm.context_window
-        )
         if not source_text_zh:
             if event_callback is not None:
                 event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
             continue
 
-        static_prompt = render_named_sections(
-            prompt_template,
-            {
-                "CHAPTER_NUMBER": str(chapter_number),
-                "SOURCE_TEXT_ZH": "",
-            },
+        chapter_candidates = generate_chapter_idiom_candidates(
+            chapter_number=chapter_number,
+            source_text=source_text_zh,
         )
-        try:
-            chunks = chunk_text_for_prompt(
-                source_text_zh,
-                config=config_obj,
-                static_prompt_tokens=count_tokens(static_prompt),
-                max_tokens=analyst_budget,
-            )
-        except PromptBudgetError:
-            if event_callback is not None:
-                event_callback("chapter_skipped", chapter_number, {"reason": "prompt_budget_exceeded"})
-            continue
-
-        detected_rows: list[_DetectedIdiom] = []
-        chapter_skipped = False
-        for chunk in chunks:
-            chunk_text = (
-                source_text_zh
-                if chunk.chunk_count == 1
-                else f"[Chunk {chunk.chunk_index}/{chunk.chunk_count}]\n{chunk.text}"
-            )
-            prompt = render_named_sections(
-                prompt_template,
-                {
-                    "CHAPTER_NUMBER": str(chapter_number),
-                    "SOURCE_TEXT_ZH": chunk_text,
-                },
-            )
-            try:
-                ensure_prompt_within_budget(
-                    prompt,
-                    config=config_obj,
-                    stage_name="preprocess-idioms.detect",
-                    chapter_number=chapter_number,
-                    max_tokens=analyst_budget,
-                )
-            except PromptBudgetError:
-                if event_callback is not None:
-                    event_callback("chapter_skipped", chapter_number, {"reason": "prompt_budget_exceeded"})
-                chapter_skipped = True
-                break
-
-            identity = LLMCacheIdentity(
-                release_id=release_id,
-                chapter_number=chapter_number,
-                source_hash=str(payload.get("chapter_source_hash") or ""),
-                stage_name="preprocess-idioms.detect",
-                chunk_index=chunk.chunk_index,
-                model_name=model_name,
-                prompt_version=prompt_version,
-                prompt_hash=hash_prompt(prompt),
-            )
-            cached = load_cached_text(cache_root, identity) if cache_root is not None else None
-            if cached is not None:
-                record_cache_hit(llm_client)
-            raw = (
-                cached
-                if cached is not None
-                else llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-            )
-            if cache_root is not None and cached is None:
-                save_cached_text(cache_root, identity, raw)
-            try:
-                parsed_rows = _parse_detected_idioms(raw)
-            except json.JSONDecodeError:
-                if cached is not None:
-                    assert cache_root is not None
-                    raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-                    save_cached_text(cache_root, identity, raw)
-                    try:
-                        parsed_rows = _parse_detected_idioms(raw)
-                    except (json.JSONDecodeError, ValueError):
-                        print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
-                        if event_callback is not None:
-                            event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
-                        chapter_skipped = True
-                        break
-                    detected_rows.extend(parsed_rows)
-                    continue
-                print(f"  WARN: chapter {chapter_number}: JSON decode error, skipping")
-                if event_callback is not None:
-                    event_callback("chapter_skipped", chapter_number, {"reason": "json_decode_error"})
-                chapter_skipped = True
-                break
-            except ValueError:
-                if cached is not None:
-                    assert cache_root is not None
-                    raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-                    save_cached_text(cache_root, identity, raw)
-                    try:
-                        parsed_rows = _parse_detected_idioms(raw)
-                    except (json.JSONDecodeError, ValueError):
-                        print(f"  WARN: chapter {chapter_number}: parse error, skipping")
-                        if event_callback is not None:
-                            event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
-                        chapter_skipped = True
-                        break
-                    detected_rows.extend(parsed_rows)
-                    continue
-                print(f"  WARN: chapter {chapter_number}: parse error, skipping")
-                if event_callback is not None:
-                    event_callback("chapter_skipped", chapter_number, {"reason": "parse_error"})
-                chapter_skipped = True
-                break
-            detected_rows.extend(parsed_rows)
-        if chapter_skipped:
-            continue
-
-        for index, detected in enumerate(detected_rows):
-            normalized_source = normalize_idiom_source(detected.source_text)
-            if not normalized_source:
-                continue
-            appearance_count = max(1, source_text_zh.count(detected.source_text))
-            candidates.append(
-                IdiomCandidate(
-                    candidate_id=_candidate_id(
-                        release_id=release_id,
-                        detection_run_id=detection_run_id,
-                        chapter_number=chapter_number,
-                        row_index=index,
-                        normalized_source_text=normalized_source,
-                    ),
-                    release_id=release_id,
-                    source_text=detected.source_text,
-                    normalized_source_text=normalized_source,
-                    meaning_zh=detected.meaning_zh,
-                    meaning_en="",
-                    preferred_rendering_en="",
-                    usage_notes=detected.usage_notes,
-                    first_seen_chapter=chapter_number,
-                    last_seen_chapter=chapter_number,
-                    appearance_count=appearance_count,
-                    evidence_snippet=_evidence_snippet(source_text_zh, detected.source_text),
-                    detection_run_id=detection_run_id,
-                    candidate_status="discovered",
-                    validation_status="pending",
-                    conflict_reason=None,
-                    analyst_model_name=model_name,
-                    analyst_prompt_version=prompt_version,
-                    schema_version=1,
-                )
-            )
+        merge_across_chapters(merged_raw, chapter_candidates)
         if event_callback is not None:
-            chapter_candidates = sum(1 for row in candidates if row.first_seen_chapter == chapter_number)
             event_callback(
                 "chapter_completed",
                 chapter_number,
                 {
-                    "candidate_count": chapter_candidates,
-                    **usage_payload_delta(llm_client, chapter_usage_before),
+                    "candidate_count": len(chapter_candidates),
                 },
             )
         raise_if_stop_requested(
             stop_token,
-            checkpoint={"completed_chapters": sorted({row.first_seen_chapter for row in candidates})},
+            checkpoint={
+                "completed_chapters": sorted(
+                    {row.first_seen_chapter for row in merged_raw.values()}
+                )
+            },
             message=f"Idiom extraction stopped after chapter {chapter_number}",
         )
+
+    candidates: list[IdiomCandidate] = []
+    for index, scored in enumerate(score_idiom_candidates(list(merged_raw.values()))):
+        raw = scored.raw
+        candidates.append(
+            IdiomCandidate(
+                candidate_id=_candidate_id(
+                    release_id=release_id,
+                    detection_run_id=detection_run_id,
+                    chapter_number=raw.first_seen_chapter,
+                    row_index=index,
+                    normalized_source_text=raw.normalized_form,
+                ),
+                release_id=release_id,
+                source_text=raw.surface_form,
+                normalized_source_text=raw.normalized_form,
+                meaning_zh=raw.idiomatic_meaning_zh,
+                meaning_en="",
+                preferred_rendering_en="",
+                usage_notes=None,
+                first_seen_chapter=raw.first_seen_chapter,
+                last_seen_chapter=raw.last_seen_chapter,
+                appearance_count=raw.appearances,
+                evidence_snippet=raw.context_snippets[0] if raw.context_snippets else "",
+                detection_run_id=detection_run_id,
+                candidate_status="discovered",
+                validation_status="pending",
+                conflict_reason=None,
+                analyst_model_name=model_name,
+                analyst_prompt_version=prompt_version,
+                schema_version=1,
+                dictionary_match=1 if raw.dictionary_match else 0,
+                source_strategies=json.dumps(sorted(raw.strategies), ensure_ascii=False),
+                chapter_coverage=scored.chapter_coverage,
+                corpus_score=scored.composite_score,
+                context_snippets=json.dumps(raw.context_snippets, ensure_ascii=False),
+                literal_meaning_zh=raw.literal_meaning_zh,
+                idiomatic_meaning_zh=raw.idiomatic_meaning_zh,
+            )
+        )
+
+    apply_deterministic_filter(
+        candidates,
+        min_score=0.2 if score_threshold is None else score_threshold,
+    )
+
+    if not skip_llm_eval:
+        pending_eval = [candidate for candidate in candidates if candidate.candidate_status == "discovered"]
+        eval_results = evaluate_idiom_candidate_batch(
+            candidates=pending_eval,
+            llm_client=llm_client,
+            model_name=model_name,
+            prompt_template=prompt_template,
+            prompt_version=prompt_version,
+            batch_size=eval_batch_size,
+            cache_root=cache_root,
+        )
+        eval_by_id = {result.candidate_id: result for result in eval_results}
+        for candidate in pending_eval:
+            result = eval_by_id.get(candidate.candidate_id)
+            if result is None:
+                continue
+            candidate.llm_is_idiom = 1 if result.is_idiom else 0
+            candidate.llm_usage_type = result.usage_type
+            candidate.llm_translation_strategy = result.translation_strategy
+            candidate.llm_reason_code = result.reason_code
+            candidate.llm_confidence = result.confidence
+            if result.meaning_zh and not candidate.meaning_zh.strip():
+                candidate.meaning_zh = result.meaning_zh
+            if not result.is_idiom:
+                candidate.candidate_status = "llm_rejected"
+                candidate.conflict_reason = f"llm_rejected:{result.reason_code}"
 
     return candidates

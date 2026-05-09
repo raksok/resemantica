@@ -7,6 +7,9 @@ from hashlib import sha256
 from resemantica.idioms.models import IdiomCandidate, IdiomConflict, IdiomPolicy
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_TITLE_SUFFIXES = ("先生", "师兄", "师姐", "师叔", "长老", "真人", "仙师")
+_LOCATION_SUFFIXES = ("山", "城", "谷", "洞", "府", "宫", "阁", "湖", "海")
+_TECHNIQUE_SUFFIXES = ("功", "法", "诀", "术", "剑", "拳", "掌", "阵")
 
 
 @dataclass(slots=True)
@@ -23,6 +26,35 @@ def normalize_idiom_source(source_text: str) -> str:
 
 def normalize_rendering(rendering: str) -> str:
     return _WHITESPACE_RE.sub(" ", rendering.strip()).casefold()
+
+
+def apply_deterministic_filter(
+    candidates: list[IdiomCandidate],
+    *,
+    min_score: float = 0.2,
+    min_length: int = 4,
+    max_length: int = 12,
+) -> list[IdiomCandidate]:
+    for candidate in candidates:
+        if candidate.candidate_status != "discovered":
+            continue
+        source = candidate.source_text.strip()
+        reasons: list[str] = []
+        if len(source) < min_length:
+            reasons.append("too_short")
+        if len(source) > max_length:
+            reasons.append("too_long")
+        if source.endswith(_TITLE_SUFFIXES):
+            reasons.append("proper_name_or_title")
+        if source.endswith(_LOCATION_SUFFIXES) or source.endswith(_TECHNIQUE_SUFFIXES):
+            reasons.append("location_or_technique")
+        if not candidate.dictionary_match and (candidate.corpus_score or 0.0) < min_score:
+            reasons.append("low_score")
+        if reasons:
+            candidate.candidate_status = "filtered"
+            candidate.validation_status = "pending"
+            candidate.conflict_reason = "deterministic_filter: " + "|".join(reasons)
+    return candidates
 
 
 def _normalize_free_text(text: str) -> str:
@@ -238,4 +270,3 @@ def validate_idiom_policy(
         promoted_candidate_ids=sorted(set(promoted_candidate_ids)),
         conflicted_candidate_ids=sorted(set(conflicted_candidate_ids)),
     )
-
