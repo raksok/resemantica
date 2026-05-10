@@ -199,7 +199,8 @@ class TestRunStage:
 
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"
         run_id = f"test-run-{uuid.uuid4().hex[:8]}"
-        paths = derive_paths(load_config(), release_id=release_id)
+        config = load_config()
+        paths = derive_paths(config, release_id=release_id)
         paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
         (paths.extracted_chapters_dir / "chapter-2.json").write_text("{}")
         (paths.extracted_chapters_dir / "chapter-3.json").write_text("{}")
@@ -219,7 +220,8 @@ class TestRunStage:
 
         monkeypatch.setattr(OrchestrationRunner, "_translate_chapter", fake_translate_chapter)
 
-        result = OrchestrationRunner(release_id, run_id).run_stage("translate-range")
+        config.translation.batched_model_order = False
+        result = OrchestrationRunner(release_id, run_id, config=config).run_stage("translate-range")
 
         assert result.success is True
         assert translated == [2, 3]
@@ -289,6 +291,7 @@ class TestRunStage:
         import uuid
 
         from resemantica.orchestration.models import StageResult
+        from resemantica.settings import load_config
 
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"
         run_id = f"test-run-{uuid.uuid4().hex[:8]}"
@@ -316,7 +319,9 @@ class TestRunStage:
 
         monkeypatch.setattr(OrchestrationRunner, "_translate_chapter", fake_translate_chapter)
 
-        result = OrchestrationRunner(release_id, run_id).run_stage(
+        config = load_config()
+        config.translation.batched_model_order = False
+        result = OrchestrationRunner(release_id, run_id, config=config).run_stage(
             "translate-range",
             chapter_start=1,
             chapter_end=3,

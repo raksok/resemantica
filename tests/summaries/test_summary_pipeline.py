@@ -511,6 +511,73 @@ def test_summary_prompt_declares_pipeline_chapter_number_authoritative() -> None
     assert "canonical pipeline chapter number" in prompt
 
 
+def test_summary_english_derivation_is_deferred_until_all_chinese_work(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m45-summary-model-order"
+    for i in [1, 2]:
+        _write_extracted_chapter(
+            release_id=release_id,
+            chapter_number=i,
+            source_text=f"第{i}章内容。",
+            chapter_source_hash=f"hash-ch{i}",
+        )
+
+    calls: list[str] = []
+
+    class RecordingSummaryLLM(ScriptedSummaryLLM):
+        def generate_text(self, *, model_name: str, prompt: str) -> str:
+            if "SUMMARY_ZH_STRUCTURED" in prompt:
+                calls.append("zh_structured")
+            elif "SUMMARY_ZH_VALIDATE" in prompt:
+                calls.append("zh_validate")
+            elif "SUMMARY_EN_DERIVE" in prompt:
+                calls.append("en_derive")
+            return super().generate_text(model_name=model_name, prompt=prompt)
+
+    llm = RecordingSummaryLLM(
+        {
+            1: {
+                "chapter_number": 1,
+                "characters_mentioned": ["甲"],
+                "key_events": ["甲出场"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山镇",
+                "tone": "quiet",
+                "narrative_progression": "甲在山镇出现。",
+                "is_story_chapter": True,
+            },
+            2: {
+                "chapter_number": 2,
+                "characters_mentioned": ["甲"],
+                "key_events": ["甲离开"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山路",
+                "tone": "urgent",
+                "narrative_progression": "甲踏上路程。",
+                "is_story_chapter": True,
+            },
+        }
+    )
+
+    preprocess_summaries(release_id=release_id, run_id="summaries-001", llm_client=llm)
+
+    assert calls == [
+        "zh_structured",
+        "zh_validate",
+        "zh_structured",
+        "zh_validate",
+        "en_derive",
+        "en_derive",
+        "en_derive",
+        "en_derive",
+    ]
+
+
 def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "m4-deterministic"

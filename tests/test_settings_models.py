@@ -176,6 +176,23 @@ db_filename = "test.db"
         assert config.models.translator_name in effective_names
         assert len(effective_names) >= 2
 
+    def test_translation_batched_model_order_defaults_to_true(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.translation.batched_model_order is True
+
     def test_accepts_missing_per_model_fields(self, tmp_path) -> None:
         toml_content = """
 [models]

@@ -80,7 +80,7 @@ class BudgetConfig:
 class TranslationConfig:
     pass3_default: bool = False
     risk_threshold_high: float = 0.7
-    batched_model_order: bool = False
+    batched_model_order: bool = True
     pass2_concurrency: int = 2
 
 

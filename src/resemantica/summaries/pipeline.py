@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -9,14 +10,21 @@ from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import list_locked_entries
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import (
+    ValidatedSummaryZhRecord,
     get_validated_summary,
     is_non_story_chapter,
     list_validated_summaries,
     save_derived_summary,
     save_validated_summary,
 )
+from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.llm.budget import PromptBudgetError
-from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
+from resemantica.llm.client import (
+    LLM_USAGE_PAYLOAD_FIELDS,
+    LLMClient,
+    capture_usage_snapshot,
+    usage_payload_delta,
+)
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -35,8 +43,27 @@ _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _STAGE_NAME = "preprocess-summaries"
 
 
+@dataclass(slots=True)
+class _PendingEnglishSummaryJob:
+    result_index: int
+    chapter_number: int
+    locked_glossary: list[LockedGlossaryEntry]
+    glossary_version_hash: str
+    short_record: ValidatedSummaryZhRecord
+    story_record: ValidatedSummaryZhRecord
+    en_artifact: Path
+    zh_usage_payload: dict[str, int]
+
+
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
     _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
+
+
+def _sum_usage_payloads(*payloads: dict[str, int]) -> dict[str, int]:
+    return {
+        field: sum(int(payload.get(field, 0)) for payload in payloads)
+        for field in LLM_USAGE_PAYLOAD_FIELDS
+    }
 
 
 def _collect_source_text(chapter_payload: dict[str, Any]) -> str:
@@ -91,6 +118,7 @@ def preprocess_summaries(
     ensure_schema(conn, "summaries")
 
     chapter_results: list[dict[str, Any]] = []
+    pending_english_jobs: list[_PendingEnglishSummaryJob] = []
 
     try:
         for chapter_file in chapter_files:
@@ -281,48 +309,6 @@ def preprocess_summaries(
             )
 
             glossary_version_hash = hash_locked_glossary(locked_glossary)
-            chapter_summary_en = derive_english_summary(
-                llm_client=client,
-                model_name=config_obj.models.translator_name,
-                prompt_template=prompt_en.template,
-                source_text_zh=generated.short_record.content_zh,
-                locked_glossary=locked_glossary,
-            )
-            chapter_en_record = save_derived_summary(
-                conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                summary_type="chapter_summary_en_short",
-                content_en=chapter_summary_en,
-                source_summary_id=generated.short_record.summary_id,
-                source_summary_hash=hash_validated_summary(generated.short_record),
-                glossary_version_hash=glossary_version_hash,
-                model_name=config_obj.models.translator_name,
-                prompt_version=prompt_en.version,
-                run_id=run_id,
-            )
-
-            story_so_far_en = derive_english_summary(
-                llm_client=client,
-                model_name=config_obj.models.translator_name,
-                prompt_template=prompt_en.template,
-                source_text_zh=story_record.content_zh,
-                locked_glossary=locked_glossary,
-            )
-            story_en_record = save_derived_summary(
-                conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                summary_type="story_so_far_en",
-                content_en=story_so_far_en,
-                source_summary_id=story_record.summary_id,
-                source_summary_hash=hash_validated_summary(story_record),
-                glossary_version_hash=glossary_version_hash,
-                model_name=config_obj.models.translator_name,
-                prompt_version=prompt_en.version,
-                run_id=run_id,
-            )
-
             zh_artifact = paths.summaries_dir / f"chapter-{chapter_number}-zh.json"
             en_artifact = paths.summaries_dir / f"chapter-{chapter_number}-en.json"
             _write_json(
@@ -341,20 +327,9 @@ def preprocess_summaries(
                     "warnings": generated.warnings,
                 },
             )
-            _write_json(
-                en_artifact,
-                {
-                    "release_id": release_id,
-                    "run_id": run_id,
-                    "chapter_number": chapter_number,
-                    "schema_version": 1,
-                    "derived": {
-                        "chapter_summary_en_short": chapter_en_record.to_json_dict(),
-                        "story_so_far_en": story_en_record.to_json_dict(),
-                    },
-                },
-            )
 
+            zh_usage_payload = usage_payload_delta(client, chapter_usage_before)
+            result_index = len(chapter_results)
             chapter_results.append(
                 {
                     "chapter_number": chapter_number,
@@ -364,18 +339,102 @@ def preprocess_summaries(
                     "warnings": generated.warnings,
                 }
             )
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.chapter_completed",
-                chapter_number=chapter_number,
-                summary_count=4,
-                **usage_payload_delta(client, chapter_usage_before),
+            pending_english_jobs.append(
+                _PendingEnglishSummaryJob(
+                    result_index=result_index,
+                    chapter_number=chapter_number,
+                    locked_glossary=locked_glossary,
+                    glossary_version_hash=glossary_version_hash,
+                    short_record=generated.short_record,
+                    story_record=story_record,
+                    en_artifact=en_artifact,
+                    zh_usage_payload=zh_usage_payload,
+                )
             )
             raise_if_stop_requested(
                 stop_token,
                 checkpoint={"chapter_artifacts": chapter_results},
                 message=f"Summaries preprocess stopped after chapter {chapter_number}",
+            )
+
+        for job in pending_english_jobs:
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"chapter_artifacts": chapter_results},
+                message="Summaries preprocess stopped before next English derivation",
+            )
+            en_usage_before = capture_usage_snapshot(client)
+            chapter_summary_en = derive_english_summary(
+                llm_client=client,
+                model_name=config_obj.models.translator_name,
+                prompt_template=prompt_en.template,
+                source_text_zh=job.short_record.content_zh,
+                locked_glossary=job.locked_glossary,
+            )
+            chapter_en_record = save_derived_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=job.chapter_number,
+                summary_type="chapter_summary_en_short",
+                content_en=chapter_summary_en,
+                source_summary_id=job.short_record.summary_id,
+                source_summary_hash=hash_validated_summary(job.short_record),
+                glossary_version_hash=job.glossary_version_hash,
+                model_name=config_obj.models.translator_name,
+                prompt_version=prompt_en.version,
+                run_id=run_id,
+            )
+
+            story_so_far_en = derive_english_summary(
+                llm_client=client,
+                model_name=config_obj.models.translator_name,
+                prompt_template=prompt_en.template,
+                source_text_zh=job.story_record.content_zh,
+                locked_glossary=job.locked_glossary,
+            )
+            story_en_record = save_derived_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=job.chapter_number,
+                summary_type="story_so_far_en",
+                content_en=story_so_far_en,
+                source_summary_id=job.story_record.summary_id,
+                source_summary_hash=hash_validated_summary(job.story_record),
+                glossary_version_hash=job.glossary_version_hash,
+                model_name=config_obj.models.translator_name,
+                prompt_version=prompt_en.version,
+                run_id=run_id,
+            )
+
+            _write_json(
+                job.en_artifact,
+                {
+                    "release_id": release_id,
+                    "run_id": run_id,
+                    "chapter_number": job.chapter_number,
+                    "schema_version": 1,
+                    "derived": {
+                        "chapter_summary_en_short": chapter_en_record.to_json_dict(),
+                        "story_so_far_en": story_en_record.to_json_dict(),
+                    },
+                },
+            )
+            chapter_results[job.result_index]["en_artifact"] = str(job.en_artifact)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.chapter_completed",
+                chapter_number=job.chapter_number,
+                summary_count=4,
+                **_sum_usage_payloads(
+                    job.zh_usage_payload,
+                    usage_payload_delta(client, en_usage_before),
+                ),
+            )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"chapter_artifacts": chapter_results},
+                message=f"Summaries preprocess stopped after English derivation for chapter {job.chapter_number}",
             )
     finally:
         conn.close()

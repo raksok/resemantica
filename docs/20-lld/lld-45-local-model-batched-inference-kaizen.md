@@ -1,0 +1,38 @@
+# LLD 45: Local Model-Batched Inference Kaizen
+
+## Summary
+Local inference servers often unload the active model when a request targets another model. Repeated translator to analyst switching therefore dominates long runs. This slice makes the existing translation batched path the default and removes summary preprocessing's per-chapter analyst to translator switch.
+
+## Translation Defaults
+`translation.batched_model_order` defaults to `true`. The runner already accepts `batched_model_order: bool | None`; `None` means "use config." CLI dispatch must preserve that by passing:
+
+- `None` when no batched flag is present.
+- `True` when `--batched`, `-b`, or `--batched-model-order` is present.
+
+The batched range order remains:
+
+```text
+pass1 translator for all selected chapters
+pass2 analyst for all selected chapters
+pass3 analyst for all selected chapters
+```
+
+## Summary Preprocessing
+`preprocess_summaries()` runs in two internal phases:
+
+1. Chinese phase: analyst-model structured summary generation, Chinese validation, validated Chinese rows, `story_so_far_zh`, and `chapter-*-zh.json`.
+2. English phase: translator-model derivation of `chapter_summary_en_short` and `story_so_far_en`, derived rows, and `chapter-*-en.json`.
+
+The function keeps the same public entrypoint and returned `chapter_artifacts` shape. Skipped chapters remain skipped during the Chinese phase and do not enqueue English work.
+
+## Events And Artifacts
+- Chinese artifacts are written immediately after Chinese validation succeeds.
+- English artifacts are written during the translator phase.
+- `preprocess-summaries.chapter_completed` is emitted after the English artifact is written for each processed chapter.
+- Final completion counters keep the same processed/skipped semantics.
+
+## Out Of Scope
+- A global cross-stage model scheduler.
+- Reordering production `STAGE_ORDER`.
+- Changing glossary or idiom multi-model translation loops.
+- Changing summary prompts, validation rules, or artifact schema versions.

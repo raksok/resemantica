@@ -210,6 +210,11 @@ class TestCliDispatch:
         assert args.start == 1
         assert args.end == 10
         assert args.verbose == 1
+        assert args.batched_model_order is None
+
+    def test_run_production_batched_flag_defaults_to_config(self):
+        args = _parse_and_resolve(["run", "production", "--release", "r1"])
+        assert args.batched_model_order is None
 
     def test_tui(self):
         parser = _build_parser()

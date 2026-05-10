@@ -199,6 +199,7 @@ def _add_batched_model_order_arg(parser: argparse.ArgumentParser) -> None:
         "-b", "--batched", "--batched-model-order",
         dest="batched_model_order",
         action="store_true",
+        default=None,
         help="Run all chapters pass1-first, then pass2, then pass3.",
     )
 
@@ -717,7 +718,7 @@ def main(argv: list[str] | None = None) -> int:
                     "translate-range",
                     chapter_start=args.start,
                     chapter_end=args.end,
-                    batched_model_order=bool(getattr(args, "batched_model_order", False)),
+                    batched_model_order=getattr(args, "batched_model_order", None),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -944,7 +945,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=True,
                     chapter_start=args.start,
                     chapter_end=args.end,
-                    batched_model_order=bool(getattr(args, "batched_model_order", False)),
+                    batched_model_order=getattr(args, "batched_model_order", None),
                 )
                 for stage in result.metadata.get("stages", []):
                     print(stage["stage_name"])
@@ -960,7 +961,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=False,
                     chapter_start=args.start,
                     chapter_end=args.end,
-                    batched_model_order=bool(getattr(args, "batched_model_order", False)),
+                    batched_model_order=getattr(args, "batched_model_order", None),
                 ),
                 stop_token=stop_token,
                 verbosity=int(getattr(args, "verbose", 0) or 0),
