@@ -9,6 +9,8 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from resemantica.chapters.manifest import list_extracted_chapters
+from resemantica.db.sqlite import ensure_schema, open_connection
+from resemantica.db.summary_repo import is_non_story_chapter
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -309,6 +311,8 @@ def rebuild_translated_epub(
     config: AppConfig | None = None,
     output_path: Path | None = None,
     project_root: Path | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ) -> RebuildResult:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -324,7 +328,29 @@ def rebuild_translated_epub(
     chapters_out.mkdir(parents=True, exist_ok=True)
 
     chapter_results: list[ChapterRebuildResult] = []
-    for chapter_ref in list_extracted_chapters(paths):
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "summaries")
+    try:
+        non_story_chapters = {
+            ref.chapter_number
+            for ref in list_extracted_chapters(paths, chapter_start=chapter_start, chapter_end=chapter_end)
+            if is_non_story_chapter(conn, release_id=release_id, chapter_number=ref.chapter_number)
+        }
+    finally:
+        conn.close()
+
+    for chapter_ref in list_extracted_chapters(paths, chapter_start=chapter_start, chapter_end=chapter_end):
+        if chapter_ref.chapter_number in non_story_chapters:
+            chapter_results.append(
+                ChapterRebuildResult(
+                    chapter_number=chapter_ref.chapter_number,
+                    source_document_path=chapter_ref.source_document_path or "",
+                    xhtml="",
+                    status="skipped",
+                    flags=[],
+                )
+            )
+            continue
         chapter_path = chapter_ref.chapter_path
         chapter_payload = _read_json(chapter_path)
         chapter_number = int(chapter_payload["chapter_number"])

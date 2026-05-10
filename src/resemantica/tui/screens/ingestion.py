@@ -36,7 +36,9 @@ class IngestionScreen(BaseScreen):
         super()._refresh_live_progress()
 
         state = self._run_state_for_refresh()
-        stage_list = self.query_one("#ingestion-stage-list", Static)
+        stage_list = self.query_one_optional("#ingestion-stage-list", Static)
+        if stage_list is None:
+            return
         stage_list.update(self._build_stage_progress(state))
 
         self._refresh_screen_status()
@@ -127,7 +129,7 @@ class IngestionScreen(BaseScreen):
 
     def _refresh_screen_status(self) -> None:
         snapshot = self._build_snapshot()
-        widget = self.query_one("#ingestion-status", Static)
+        widget = self.query_one_optional("#ingestion-status", Static)
         parts: list[str] = []
         if snapshot.active_action == "epub-extract":
             sdef = next(
@@ -141,7 +143,8 @@ class IngestionScreen(BaseScreen):
                 parts.append(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
         if snapshot.latest_failure:
             parts.append(f"[red]Failure: {snapshot.latest_failure}[/]")
-        widget.update("\n".join(parts) if parts else "")
+        if widget is not None:
+            widget.update("\n".join(parts) if parts else "")
 
     def _update_event_tail(self) -> None:
         events = self._screen_events_for_tail()

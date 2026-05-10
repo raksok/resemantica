@@ -12,6 +12,7 @@ from resemantica.tracking.models import RunState
 from resemantica.tracking.repo import ensure_tracking_db, load_run_state, save_run_state
 
 from .events import emit_event
+from .gates import GateReport, check_stage_gate
 from .models import CALLABLE_STAGES, STAGE_ORDER, StageResult, legal_transition
 from .stop import StopRequested, StopToken, raise_if_stop_requested
 
@@ -59,9 +60,18 @@ class OrchestrationRunner:
                 "preprocess-graph",
                 "packets-build",
                 "translate-range",
+                "epub-rebuild",
             }:
                 options = {"chapter_start": chapter_start, "chapter_end": chapter_end}
-            stages.append({"stage_name": stage_name, "options": options})
+            gate = check_stage_gate(
+                stage_name=stage_name,
+                release_id=self.release_id,
+                run_id=self.run_id,
+                config=self.config,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+            )
+            stages.append({"stage_name": stage_name, "options": options, "gate": gate.to_dict()})
         return ProductionPlan(self.release_id, self.run_id, stages)
 
     def run_production(
@@ -106,6 +116,7 @@ class OrchestrationRunner:
                 item["stage_name"],
                 **dict(item.get("options", {})),
                 batched_model_order=batched_model_order,
+                enforce_gates=True,
             )
             completed.append(item["stage_name"])
             if stage_result.stopped:
@@ -155,6 +166,7 @@ class OrchestrationRunner:
         force: bool = False,
         batched_model_order: bool | None = None,
         stop_token: StopToken | None = None,
+        enforce_gates: bool = False,
     ) -> StageResult:
         if stage_name not in CALLABLE_STAGES:
             return StageResult(
@@ -177,6 +189,35 @@ class OrchestrationRunner:
             return StageResult(success=False, stage_name=stage_name, message=msg)
 
         active_checkpoint = checkpoint or (state.checkpoint if state else {})
+        if enforce_gates and stage_name in STAGE_ORDER:
+            gate = self._check_stage_gate(
+                stage_name,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+            )
+            if not gate.success:
+                saved_checkpoint = dict(active_checkpoint)
+                if chapter_start is not None:
+                    saved_checkpoint["chapter_start"] = chapter_start
+                if chapter_end is not None:
+                    saved_checkpoint["chapter_end"] = chapter_end
+                self._update_run_state(stage_name, "failed", saved_checkpoint)
+                emit_event(
+                    self.run_id,
+                    self.release_id,
+                    f"{stage_name}.gate_failed",
+                    stage_name,
+                    severity="error",
+                    message=gate.message(),
+                    payload={"gate": gate.to_dict(), "checkpoint": saved_checkpoint},
+                )
+                return StageResult(
+                    success=False,
+                    stage_name=stage_name,
+                    message=gate.message(),
+                    checkpoint=saved_checkpoint,
+                    metadata={"gate": gate.to_dict()},
+                )
         self._update_run_state(stage_name, "running", active_checkpoint)
         emit_event(
             self.run_id,
@@ -311,6 +352,22 @@ class OrchestrationRunner:
             return state
         finally:
             conn.close()
+
+    def _check_stage_gate(
+        self,
+        stage_name: str,
+        *,
+        chapter_start: int | None,
+        chapter_end: int | None,
+    ) -> GateReport:
+        return check_stage_gate(
+            stage_name=stage_name,
+            release_id=self.release_id,
+            run_id=self.run_id,
+            config=self.config,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+        )
 
     def _execute_stage(
         self,
@@ -468,6 +525,8 @@ class OrchestrationRunner:
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
             )
             return StageResult(
                 success=rebuild_result.status == "success",
@@ -932,6 +991,7 @@ def run_stage(
     force: bool = False,
     batched_model_order: bool | None = None,
     stop_token: StopToken | None = None,
+    enforce_gates: bool = False,
 ) -> StageResult:
     runner = OrchestrationRunner(release_id=release_id, run_id=run_id, stop_token=stop_token)
     return runner.run_stage(
@@ -945,4 +1005,5 @@ def run_stage(
         force=force,
         batched_model_order=batched_model_order,
         stop_token=stop_token,
+        enforce_gates=enforce_gates,
     )

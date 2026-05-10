@@ -62,6 +62,7 @@ def resume_run(
             chapter_start=chapter_start,
             chapter_end=chapter_end,
             stop_token=stop_token,
+            enforce_gates=True,
         )
         if not result.success:
             emit_event(
