@@ -302,6 +302,66 @@ class TestCliDispatch:
         assert result == 0
         assert captured["verbosity"] == 3
 
+    def test_main_forwards_chapter_scope_to_stage_commands(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        calls = []
+
+        class FakeResult:
+            success = True
+            stopped = False
+            message = "ok"
+
+        def fake_run_stage(self, stage_name, **kwargs):
+            calls.append((stage_name, kwargs))
+            return FakeResult()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", lambda fn, **kwargs: fn())
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr(
+            "resemantica.orchestration.runner.OrchestrationRunner.run_stage",
+            fake_run_stage,
+        )
+
+        cases = [
+            (
+                ["preprocess", "idioms", "--release", "r1", "--run", "run-1", "--start", "2", "--end", "4"],
+                "preprocess-idioms",
+                None,
+                2,
+                4,
+            ),
+            (
+                ["preprocess", "graph", "--release", "r1", "--run", "run-1", "--chapter", "3"],
+                "preprocess-graph",
+                None,
+                3,
+                3,
+            ),
+            (
+                ["packets", "build", "--release", "r1", "--run", "run-1", "--start", "2", "--end", "4"],
+                "packets-build",
+                None,
+                2,
+                4,
+            ),
+            (
+                ["packets", "build", "--release", "r1", "--run", "run-1", "--chapter", "5"],
+                "packets-build",
+                5,
+                5,
+                5,
+            ),
+        ]
+
+        for argv, stage_name, chapter_number, chapter_start, chapter_end in cases:
+            result = cli_mod.main(argv)
+            assert result == 0
+            stage_call, kwargs = calls[-1]
+            assert stage_call == stage_name
+            assert kwargs.get("chapter_number") == chapter_number
+            assert kwargs["chapter_start"] == chapter_start
+            assert kwargs["chapter_end"] == chapter_end
+
     # --- Short flag tests ---
 
     def test_extract_short_flags(self):

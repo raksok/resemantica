@@ -8,12 +8,11 @@ Current top-level files:
 - `docs/`: implementation-facing documentation suite
 - `src/resemantica/`: active package root for milestone implementation
 - `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/`, `orchestration/`)
-- `main.py`: placeholder entrypoint kept for compatibility with the starter project
 - `pyproject.toml`: Python project metadata
 
 Implemented package layout (M1 slice):
 
-- `src/resemantica/cli.py`: CLI entrypoint (`epub-roundtrip`)
+- `src/resemantica/cli.py`: CLI entrypoint and command router
 - `src/resemantica/settings.py`: config loading and path derivation
 - `src/resemantica/epub/`: EPUB extractor, parser, placeholders, validators, rebuild
 - `src/resemantica/db/sqlite.py`: SQLite connection and migration helpers

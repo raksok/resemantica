@@ -23,7 +23,7 @@ from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payl
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
-from resemantica.utils import _build_llm_client, _chapter_number_from_path, _write_json
+from resemantica.utils import _build_llm_client, _write_json
 from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-graph"
@@ -70,26 +70,6 @@ def _merge_appearances(appearances: list[GraphAppearance]) -> list[GraphAppearan
     for appearance in appearances:
         by_id[appearance.appearance_id] = appearance
     return sorted(by_id.values(), key=lambda row: (row.chapter_number, row.appearance_id))
-
-
-def _filtered_chapter_count(
-    extracted_chapters_dir: Path,
-    *,
-    chapter_start: int | None = None,
-    chapter_end: int | None = None,
-) -> int:
-    chapter_files = sorted(
-        extracted_chapters_dir.glob("chapter-*.json"),
-        key=_chapter_number_from_path,
-    )
-    return len(
-        [
-            path
-            for path in chapter_files
-            if (chapter_start is None or _chapter_number_from_path(path) >= chapter_start)
-            and (chapter_end is None or _chapter_number_from_path(path) <= chapter_end)
-        ]
-    )
 
 
 def preprocess_graph(

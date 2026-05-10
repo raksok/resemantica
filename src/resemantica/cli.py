@@ -839,6 +839,8 @@ def main(argv: list[str] | None = None) -> int:
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                     "preprocess-idioms",
+                    chapter_start=args.start,
+                    chapter_end=args.end,
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -894,6 +896,8 @@ def main(argv: list[str] | None = None) -> int:
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                     "preprocess-graph",
+                    chapter_start=args.start,
+                    chapter_end=args.end,
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -917,6 +921,8 @@ def main(argv: list[str] | None = None) -> int:
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                     "packets-build",
                     chapter_number=args.chapter,
+                    chapter_start=args.start,
+                    chapter_end=args.end,
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,

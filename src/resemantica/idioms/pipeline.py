@@ -34,7 +34,7 @@ from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payl
 from resemantica.llm.prompts import load_prompt, render_named_sections
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
-from resemantica.utils import _build_llm_client, _chapter_number_from_path, _write_json
+from resemantica.utils import _build_llm_client, _write_json
 from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-idioms"
@@ -42,26 +42,6 @@ _STAGE_NAME = "preprocess-idioms"
 
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
     _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
-
-
-def _filtered_chapter_count(
-    extracted_chapters_dir: Path,
-    *,
-    chapter_start: int | None = None,
-    chapter_end: int | None = None,
-) -> int:
-    chapter_files = sorted(
-        extracted_chapters_dir.glob("chapter-*.json"),
-        key=_chapter_number_from_path,
-    )
-    return len(
-        [
-            path
-            for path in chapter_files
-            if (chapter_start is None or _chapter_number_from_path(path) >= chapter_start)
-            and (chapter_end is None or _chapter_number_from_path(path) <= chapter_end)
-        ]
-    )
 
 
 def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:

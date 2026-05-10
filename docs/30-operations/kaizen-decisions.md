@@ -1,11 +1,11 @@
 # Kaizen Analysis — Consolidated
 
 Date: 2026-05-01
-Status: Pending implementation
+Status: Superseded by focused refinement passes
 Sources: `kaizen` sweep + lint/typecheck/grep dups/dead-code scan
 Supersedes: previous `kaizen-decisions.md` + `kaizen-supplement.md` (both merged here)
 
-All 269 tests pass. No breaking changes. Work is grouped into a single smooth execution pass: edit each file once, verify at checkpoints, finish clean.
+Current validation after the focused refinement pass: 394 tests passed. No breaking changes. Work is grouped into small verified passes rather than one broad rewrite.
 
 ---
 
@@ -281,7 +281,7 @@ uv run mypy src/
 uv run pytest tests/ -v
 ```
 
-All 269 tests must pass. Ruff must show zero errors. Mypy errors should be zero or strictly reduced from baseline (3).
+All tests must pass. Ruff and mypy must show zero errors.
 
 ---
 
