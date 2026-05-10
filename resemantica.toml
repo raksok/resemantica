@@ -6,6 +6,10 @@ context_window = 65000
 
 [models]
 translator_name = "HY-MT1.5-7B"
+preprocess_translator_names = [
+  "HY-MT1.5-7B",
+  "Qwen3.5-9B-GLM5.1",
+]
 # translator_context_window = 65000
 # translator_max_context_ratio = 0.75
 analyst_name = "Qwen3.5-9B-GLM5.1"

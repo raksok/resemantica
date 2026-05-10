@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from resemantica.settings import AppConfig, load_config
@@ -163,6 +165,16 @@ db_filename = "test.db"
             "model-u",
             "model-v",
         ]
+
+    def test_checked_in_config_enables_multi_model_preprocess_translation(self) -> None:
+        config_path = Path(__file__).resolve().parents[1] / "resemantica.toml"
+
+        config = load_config(config_path)
+        effective_names = config.models.effective_preprocess_translator_names()
+
+        assert config.models.preprocess_translator_names
+        assert config.models.translator_name in effective_names
+        assert len(effective_names) >= 2
 
     def test_accepts_missing_per_model_fields(self, tmp_path) -> None:
         toml_content = """

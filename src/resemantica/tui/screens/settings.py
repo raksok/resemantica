@@ -49,6 +49,10 @@ class SettingsScreen(BaseScreen):
 
             lines.append("[bold]Models[/bold]")
             lines.append(f"  translator:  {config.models.translator_name}")
+            lines.append(
+                "  preprocess translators: "
+                + ", ".join(config.models.effective_preprocess_translator_names())
+            )
             lines.append(f"  analyst:     {config.models.analyst_name}")
             lines.append(f"  embedding:   {config.models.embedding_name}")
 
