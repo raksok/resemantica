@@ -139,6 +139,7 @@ def preprocess_summaries(
                 run_id=run_id,
                 chapter_number=chapter_number,
                 chapter_source_hash=chapter_source_hash,
+                source_document_path=source_doc,
                 source_text_zh=source_text_zh,
                 locked_glossary=locked_glossary,
                 llm_client=client,
@@ -190,6 +191,15 @@ def preprocess_summaries(
                     message=f"Summaries preprocess stopped after chapter {chapter_number}",
                 )
                 continue
+            if generated.warnings:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_identity_warning",
+                    chapter_number=chapter_number,
+                    severity="warning",
+                    warnings=generated.warnings,
+                )
             _emit(run_id, release_id, f"{_STAGE_NAME}.draft_generated", chapter_number=chapter_number)
             _emit(
                 run_id,
@@ -328,6 +338,7 @@ def preprocess_summaries(
                         "story_so_far_zh": story_record.to_json_dict(),
                     },
                     "llm_validation_flags": llm_validation_flags,
+                    "warnings": generated.warnings,
                 },
             )
             _write_json(
@@ -350,6 +361,7 @@ def preprocess_summaries(
                     "chapter_source_hash": chapter_source_hash,
                     "zh_artifact": str(zh_artifact),
                     "en_artifact": str(en_artifact),
+                    "warnings": generated.warnings,
                 }
             )
             _emit(

@@ -17,6 +17,7 @@ from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
 from resemantica.settings import derive_paths, load_config
 from resemantica.summaries.pipeline import preprocess_summaries
+from resemantica.tracking.repo import ensure_tracking_db, load_events
 
 
 class ScriptedSummaryLLM:
@@ -56,23 +57,25 @@ def _write_extracted_chapter(
     chapter_number: int,
     source_text: str,
     chapter_source_hash: str,
+    source_document_path: str | None = None,
 ) -> None:
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
     paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
 
     block_id = f"ch{chapter_number:03d}_blk001"
+    source_path = source_document_path or f"OEBPS/chapter{chapter_number}.xhtml"
     payload = {
         "chapter_id": f"chapter-{chapter_number}",
         "chapter_number": chapter_number,
-        "source_document_path": f"OEBPS/chapter{chapter_number}.xhtml",
+        "source_document_path": source_path,
         "chapter_source_hash": chapter_source_hash,
         "schema_version": 1,
         "records": [
             {
                 "chapter_id": f"chapter-{chapter_number}",
                 "chapter_number": chapter_number,
-                "source_document_path": f"OEBPS/chapter{chapter_number}.xhtml",
+                "source_document_path": source_path,
                 "block_id": block_id,
                 "parent_block_id": block_id,
                 "segment_id": None,
@@ -352,6 +355,113 @@ def test_future_knowledge_leak_fails_validation(tmp_path: Path, monkeypatch) -> 
     assert result["chapters_processed"] == 0
 
 
+def test_summary_chapter_number_mismatch_is_normalized_with_warning(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m44-normalize-summary-id"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=12,
+        source_text="第4章 错位标题\n张三抵达青云山。",
+        chapter_source_hash="hash-ch12",
+        source_document_path="OEBPS/chapter012.xhtml",
+    )
+
+    llm = ScriptedSummaryLLM(
+        {
+            12: {
+                "chapter_number": 4,
+                "characters_mentioned": ["张三"],
+                "key_events": ["张三抵达青云山"],
+                "new_terms": ["青云山"],
+                "relationships_changed": [{"entity": "张三", "change": "arrived"}],
+                "setting": "青云山",
+                "tone": "steady",
+                "narrative_progression": "第4章：张三抵达青云山。",
+                "is_story_chapter": True,
+            }
+        }
+    )
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 1
+    assert result["chapter_artifacts"][0]["chapter_number"] == 12
+    warnings = result["chapter_artifacts"][0]["warnings"]
+    assert any("summary_chapter_number_mismatch" in warning for warning in warnings)
+    assert any("source_heading_chapter_mismatch" in warning for warning in warnings)
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    zh_artifact = paths.summaries_dir / "chapter-12-zh.json"
+    payload = json.loads(zh_artifact.read_text(encoding="utf-8"))
+    assert payload["warnings"] == warnings
+    structured = json.loads(payload["validated"]["chapter_summary_zh_structured"]["content_zh"])
+    assert structured["chapter_number"] == 12
+
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id="summaries-001", release_id=release_id, limit=20)
+    finally:
+        conn.close()
+    warning_events = [
+        event for event in events
+        if event.event_type == "preprocess-summaries.chapter_identity_warning"
+    ]
+    assert warning_events
+    assert warning_events[0].chapter_number == 12
+
+
+def test_visible_source_heading_is_allowed_in_summary_future_check(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m44-visible-heading"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=4,
+        source_text="第12章 错位标题\n张三闭关修炼。",
+        chapter_source_hash="hash-ch4",
+        source_document_path="OEBPS/chapter004.xhtml",
+    )
+
+    llm = ScriptedSummaryLLM(
+        {
+            4: {
+                "chapter_number": 4,
+                "characters_mentioned": ["张三"],
+                "key_events": ["第12章张三闭关修炼"],
+                "new_terms": [],
+                "relationships_changed": [{"entity": "张三", "change": "trains in 第12章"}],
+                "setting": "洞府",
+                "tone": "focused",
+                "narrative_progression": "第12章：张三闭关修炼。",
+                "is_story_chapter": True,
+            }
+        }
+    )
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 1
+    assert any(
+        "source_heading_chapter_mismatch" in warning
+        for warning in result["chapter_artifacts"][0]["warnings"]
+    )
+
+
 def test_continuity_conflict_on_chapter_number_mismatch(
     tmp_path: Path,
     monkeypatch,
@@ -387,7 +497,18 @@ def test_continuity_conflict_on_chapter_number_mismatch(
         llm_client=llm,
     )
     assert result["status"] == "success"
-    assert result["chapters_processed"] == 0
+    assert result["chapters_processed"] == 1
+    assert any(
+        "summary_chapter_number_mismatch" in warning
+        for warning in result["chapter_artifacts"][0]["warnings"]
+    )
+
+
+def test_summary_prompt_declares_pipeline_chapter_number_authoritative() -> None:
+    prompt_path = Path("src/resemantica/llm/prompts/summary_zh_structured.txt")
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    assert "canonical pipeline chapter number" in prompt
 
 
 def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> None:

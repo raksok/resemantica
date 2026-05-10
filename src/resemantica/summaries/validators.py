@@ -118,11 +118,15 @@ def _validate_future_knowledge(
     summary: dict[str, object],
     *,
     chapter_number: int,
+    allowed_future_chapter_numbers: set[int] | None = None,
 ) -> list[str]:
     errors: list[str] = []
+    allowed = allowed_future_chapter_numbers or set()
     for text in _collect_text_fields(summary):
         for match in _FUTURE_CHAPTER_ZH_RE.finditer(text):
             referenced = int(match.group(1))
+            if referenced in allowed:
+                continue
             if referenced > chapter_number:
                 msg = (
                     f"future_knowledge: references chapter {referenced}"
@@ -136,6 +140,8 @@ def _validate_future_knowledge(
                 errors.append(msg)
         for match in _FUTURE_CHAPTER_EN_RE.finditer(text):
             referenced = int(match.group(1))
+            if referenced in allowed:
+                continue
             if referenced > chapter_number:
                 msg = (
                     f"future_knowledge: references chapter {referenced}"
@@ -154,6 +160,7 @@ def validate_chinese_summary(
     *,
     structured_summary: dict[str, Any],
     expected_chapter_number: int,
+    allowed_future_chapter_numbers: set[int] | None = None,
 ) -> ValidationResult:
     errors: list[str] = []
     errors.extend(_validate_schema(structured_summary, expected_chapter_number))
@@ -161,6 +168,7 @@ def validate_chinese_summary(
         _validate_future_knowledge(
             structured_summary,
             chapter_number=expected_chapter_number,
+            allowed_future_chapter_numbers=allowed_future_chapter_numbers,
         )
     )
 

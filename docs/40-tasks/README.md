@@ -61,3 +61,4 @@ Always follow the milestone sequence below.
 | M41 | task-41 | M5, M39 | Deterministic Idiom Discovery |
 | M42 | task-42 | M3, M5, M40, M41 | Multi-Model Preprocess Translation |
 | M43 | task-43 | M42, M20C, M16 | Pipeline Reliability Gates Kaizen |
+| M44 | task-44 | M4, M20C, M43 | Summary Chapter Identity Normalization |

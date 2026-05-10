@@ -4,6 +4,10 @@ SUMMARY_ZH_STRUCTURED
 ## CHAPTER NUMBER
 {CHAPTER_NUMBER}
 
+This is the canonical pipeline chapter number. Echo this exact number in
+the JSON "chapter_number" field even if the source filename, title, or
+visible heading contains a different chapter number.
+
 ## LOCKED GLOSSARY
 {LOCKED_GLOSSARY}
 

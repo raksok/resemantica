@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,24 @@ from resemantica.summaries.validators import validate_chinese_summary
 from resemantica.validators import ValidationResult
 
 _NON_STORY_GUARDRAIL_LENGTH = 500
+_SOURCE_PATH_CHAPTER_RE = re.compile(r"(?:chapter|chap|ch)[-_ ]*0*(\d+)", re.IGNORECASE)
+_SOURCE_HEADING_ZH_RE = re.compile(r"第\s*([0-9零〇一二两三四五六七八九十百千]+)\s*[章节回]")
+_SOURCE_HEADING_EN_RE = re.compile(r"\bchapter\s+0*(\d+)\b", re.IGNORECASE)
+_CHINESE_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_CHINESE_UNITS = {"十": 10, "百": 100, "千": 1000}
 
 
 @dataclass(slots=True)
@@ -40,6 +59,86 @@ class GeneratedChapterSummary:
     structured_record: ValidatedSummaryZhRecord
     short_record: ValidatedSummaryZhRecord
     validation: ValidationResult
+    warnings: list[str]
+
+
+def _parse_chapter_number_token(value: str) -> int | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if stripped.isdigit():
+        return int(stripped)
+    total = 0
+    current = 0
+    seen = False
+    for char in stripped:
+        if char in _CHINESE_DIGITS:
+            current = _CHINESE_DIGITS[char]
+            seen = True
+            continue
+        unit = _CHINESE_UNITS.get(char)
+        if unit is None:
+            return None
+        total += (current or 1) * unit
+        current = 0
+        seen = True
+    if not seen:
+        return None
+    return total + current
+
+
+def _detect_path_chapter_number(source_document_path: str) -> int | None:
+    match = _SOURCE_PATH_CHAPTER_RE.search(Path(source_document_path).name)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _detect_source_heading_chapter_number(source_text_zh: str) -> int | None:
+    candidate = source_text_zh[:500]
+    zh_match = _SOURCE_HEADING_ZH_RE.search(candidate)
+    if zh_match is not None:
+        return _parse_chapter_number_token(zh_match.group(1))
+    en_match = _SOURCE_HEADING_EN_RE.search(candidate)
+    if en_match is not None:
+        return int(en_match.group(1))
+    return None
+
+
+def _normalize_summary_chapter_identity(
+    *,
+    parsed: dict[str, Any],
+    canonical_chapter_number: int,
+    source_document_path: str,
+    source_text_zh: str,
+) -> tuple[list[str], set[int]]:
+    warnings: list[str] = []
+    reported = parsed.get("chapter_number")
+    if isinstance(reported, int) and reported != canonical_chapter_number:
+        parsed["chapter_number"] = canonical_chapter_number
+        warnings.append(
+            "summary_chapter_number_mismatch:"
+            f" expected={canonical_chapter_number}, reported={reported}"
+        )
+
+    path_chapter = _detect_path_chapter_number(source_document_path)
+    if path_chapter is not None and path_chapter != canonical_chapter_number:
+        warnings.append(
+            "source_filename_chapter_mismatch:"
+            f" expected={canonical_chapter_number}, source_document_path={source_document_path},"
+            f" detected={path_chapter}"
+        )
+
+    heading_chapter = _detect_source_heading_chapter_number(source_text_zh)
+    allowed_future_numbers: set[int] = set()
+    if heading_chapter is not None:
+        allowed_future_numbers.add(heading_chapter)
+        if heading_chapter != canonical_chapter_number:
+            warnings.append(
+                "source_heading_chapter_mismatch:"
+                f" expected={canonical_chapter_number}, detected={heading_chapter}"
+            )
+    return warnings, allowed_future_numbers
 
 
 def _parse_summary(raw_output: str) -> dict[str, Any] | None:
@@ -208,6 +307,7 @@ def generate_chapter_summary(
     run_id: str,
     chapter_number: int,
     chapter_source_hash: str,
+    source_document_path: str,
     source_text_zh: str,
     locked_glossary: list[LockedGlossaryEntry],
     llm_client: LLMClient,
@@ -272,6 +372,13 @@ def generate_chapter_summary(
         )
         return None
 
+    identity_warnings, allowed_future_chapter_numbers = _normalize_summary_chapter_identity(
+        parsed=parsed,
+        canonical_chapter_number=chapter_number,
+        source_document_path=source_document_path,
+        source_text_zh=source_text_zh,
+    )
+
     is_story_chapter = parsed.get("is_story_chapter", True)
 
     if is_story_chapter is False and len(source_text_zh) > _NON_STORY_GUARDRAIL_LENGTH:
@@ -319,6 +426,7 @@ def generate_chapter_summary(
     validation = validate_chinese_summary(
         structured_summary=parsed,
         expected_chapter_number=chapter_number,
+        allowed_future_chapter_numbers=allowed_future_chapter_numbers,
     )
     if not validation.is_valid:
         save_summary_draft(
@@ -329,6 +437,7 @@ def generate_chapter_summary(
             content={
                 "parsed_summary": parsed,
                 "validation_errors": validation.errors,
+                "warnings": identity_warnings,
             },
             chapter_source_hash=chapter_source_hash,
             model_name=model_name,
@@ -364,4 +473,5 @@ def generate_chapter_summary(
         structured_record=structured_record,
         short_record=short_record,
         validation=validation,
+        warnings=identity_warnings,
     )
