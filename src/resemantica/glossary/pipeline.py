@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import (
     find_exact_locked_entry,
@@ -123,6 +125,8 @@ def discover_glossary_candidates(
         stop_token=stop_token,
     )
 
+    logger.info("Discovery: {} raw candidates from {} chapters", len(discovered), len(chapter_refs))
+
     # Stage 3: Deterministic Filtering
     pre_filter_count = len(discovered)
     discovered = apply_deterministic_filter(
@@ -138,6 +142,12 @@ def discover_glossary_candidates(
         message=f"Deterministic filter: {filtered_count_stage3} filtered from {pre_filter_count} candidates",
         pre_filter_count=pre_filter_count,
         filtered_count=filtered_count_stage3,
+    )
+
+    kept_after_filter = pre_filter_count - filtered_count_stage3
+    logger.info(
+        "Filter stage: {} kept (of {}), {} filtered",
+        kept_after_filter, pre_filter_count, filtered_count_stage3,
     )
 
     # Stage 4: LLM Batch Evaluation
@@ -171,6 +181,10 @@ def discover_glossary_candidates(
                     c.llm_confidence = res.confidence
                     if not res.keep:
                         c.candidate_status = "llm_rejected"
+
+            llm_kept = sum(1 for c in pending_eval if c.candidate_status == "discovered")
+            llm_rejected = sum(1 for c in pending_eval if c.candidate_status == "llm_rejected")
+            logger.info("LLM eval: {} kept, {} rejected", llm_kept, llm_rejected)
 
     # Stage 5: Embedding-based Dedup / Alias Clustering
     to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
@@ -209,6 +223,7 @@ def discover_glossary_candidates(
             cluster_count=len(clusters),
             alias_merged_count=alias_merged,
         )
+        logger.info("Dedup: {} clusters formed, {} aliases merged", len(clusters), alias_merged)
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
@@ -252,6 +267,11 @@ def discover_glossary_candidates(
         message="Glossary preprocess stopped after discovery",
     )
 
+    logger.info(
+        "Discover phase done: {} total (filtered={}, llm_rejected={}, alias_merged={}, pruned={})",
+        len(discovered), filtered_count, llm_rejected_count, alias_merged_count, pruned_count,
+    )
+
     return {
         "status": "success",
         "release_id": release_id,
@@ -292,6 +312,10 @@ def translate_glossary_candidates(
             release_id,
             f"{_STAGE_NAME}.translate.started",
             total_chapters=len(chapters_with_pending),
+        )
+        logger.info(
+            "Translation started: {} candidates pending across {} chapters",
+            len(pending), len(chapters_with_pending),
         )
         active_chapter: int | None = None
         chapter_usage_before = capture_usage_snapshot(client)
@@ -381,6 +405,10 @@ def translate_glossary_candidates(
                 translated_count += 1
             else:
                 unresolved_count += 1
+                logger.warning(
+                    "Translation unresolved for candidate {} (no majority vote)",
+                    candidate.candidate_id,
+                )
         if active_chapter is not None:
             _emit(
                 run_id,
@@ -416,6 +444,10 @@ def translate_glossary_candidates(
         translated_count=translated_count,
         unresolved_count=unresolved_count,
         **usage_payload_delta(client, usage_before),
+    )
+    logger.info(
+        "Translation complete: {} translated, {} unresolved",
+        translated_count, unresolved_count,
     )
 
     return {
@@ -493,6 +525,7 @@ def promote_glossary_candidates(
             message="Glossary promotion stopped before starting",
         )
         _emit(run_id, release_id, f"{_STAGE_NAME}.promote.started")
+        logger.info("Promotion phase started")
 
         if review_file_path is not None:
             if not review_file_path.exists():
@@ -548,6 +581,10 @@ def promote_glossary_candidates(
             f"{_STAGE_NAME}.promote.completed",
             promoted_count=len(promotable_without_conflicts),
             **(llm_usage_payload or {}),
+        )
+        logger.info(
+            "Promotion complete: {} entries promoted, {} conflicts",
+            len(promotable_without_conflicts), len(conflicts),
         )
         raise_if_stop_requested(
             stop_token,
@@ -756,6 +793,7 @@ def review_glossary_candidates(
         entries_written=len(entries),
         review_path=str(paths.glossary_review_path),
     )
+    logger.info("Review file written: {} entries -> {}", len(entries), paths.glossary_review_path)
     return {
         "status": "success",
         "release_id": release_id,
