@@ -161,7 +161,7 @@ def discover_glossary_candidates(
             eval_results = evaluate_candidate_batch(
                 candidates=pending_eval,
                 llm_client=client,
-                model_name=config_obj.models.analyst_name,
+                model_name=config_obj.models.eval_name,
                 prompt_template=eval_prompt.template,
                 prompt_version=eval_prompt.version,
                 batch_size=batch_sz,

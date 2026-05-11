@@ -72,28 +72,33 @@ def compute_c_value(
     where |term| is length of term (in characters for Chinese, or tokens).
     c is number of unique superstrings.
     If no superstrings, C-value = log2(|term|) * freq.
+
+    Uses O(n·L²) substring enumeration instead of the naive O(n²) nested loop,
+    where L is max term length. At L ≤ 20 this is at most 400 checks per term
+    regardless of total term count.
     """
-    # First, map terms to their frequencies
-    c_values: dict[str, float] = {}
+    all_terms = {c.normalized_form for c in candidates}
+    terms = sorted(all_terms, key=len, reverse=True)
 
-    # Sort terms by length descending to easily find superstrings
-    terms = sorted([c.normalized_form for c in candidates], key=len, reverse=True)
-
-    # Track superstrings for each term: term -> (sum_of_superstring_freqs, count_of_superstrings)
     super_info: dict[str, tuple[int, int]] = {t: (0, 0) for t in terms}
 
-    for i, term in enumerate(terms):
-        length = len(term)
+    for term in terms:
         freq = term_freq.get(term, 0)
+        t_len = len(term)
 
-        # Find substrings of `term` that are also candidates
-        # We can just check all shorter terms, but checking if shorter term in `term` is faster
-        for j in range(i + 1, len(terms)):
-            sub = terms[j]
-            if sub in term:
-                sum_freq, count = super_info[sub]
-                super_info[sub] = (sum_freq + freq, count + 1)
+        # Enumerate all substrings (2 to t_len-1 chars) that are also terms.
+        # Use a seen set to avoid double-counting the same substring appearing
+        # at multiple positions within the same superstring.
+        seen: set[str] = set()
+        for sub_len in range(2, t_len):
+            for start in range(t_len - sub_len + 1):
+                sub = term[start : start + sub_len]
+                if sub in all_terms and sub not in seen:
+                    seen.add(sub)
+                    s_freq, s_cnt = super_info[sub]
+                    super_info[sub] = (s_freq + freq, s_cnt + 1)
 
+    c_values: dict[str, float] = {}
     for term in terms:
         length = len(term)
         if length < 2:
@@ -103,13 +108,12 @@ def compute_c_value(
         freq = term_freq.get(term, 0)
         sum_freq, count = super_info[term]
 
-        # log2(length) * freq if no superstrings
         if count == 0:
             val = math.log2(length) * freq
         else:
             val = math.log2(length) * (freq - (1.0 / count) * sum_freq)
 
-        c_values[term] = max(0.0, val) # C-value shouldn't be negative
+        c_values[term] = max(0.0, val)
 
     return c_values
 

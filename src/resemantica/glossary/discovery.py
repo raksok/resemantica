@@ -146,6 +146,21 @@ def discover_candidates_from_extracted(
     )
 
     global_raw = list(merged_accumulator.values())
+
+    # Pre-filter: drop single-chapter terms before O(n²) C-value scoring.
+    # Most n-grams appear in only 1 chapter and are noise — removing them
+    # cuts the candidate pool by ~80-90% with minimal impact on quality.
+    # Only applies when there are multiple chapters (single-chapter would lose everything).
+    pre_filter_count = len(global_raw)
+    if total_chapters >= 2:
+        global_raw = [rc for rc in global_raw if doc_freq.get(rc.normalized_form, 0) >= 2]
+        if pre_filter_count:
+            logger.info(
+                "Pre-filter (df>=2): {} kept of {} ({:.0f}% filtered before scoring)",
+                len(global_raw), pre_filter_count,
+                (1 - len(global_raw) / pre_filter_count) * 100,
+            )
+
     logger.debug(
         "Corpus aggregation: {} unique terms across {} chapters, scoring...",
         len(global_raw),

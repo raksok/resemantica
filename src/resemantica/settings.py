@@ -14,6 +14,7 @@ class ModelsConfig:
     analyst_name: str = "Qwen3.5-9B-GLM5.1"
     analyst_context_window: int | None = None
     analyst_max_context_ratio: float | None = None
+    eval_name: str = "Qwen3.5-9B-GLM5.1"
     embedding_name: str = "bge-M3"
     pruning_threshold: float = 0.3
 
@@ -250,6 +251,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 models.get("analyst_name", ModelsConfig().analyst_name),
                 "models.analyst_name",
             ),
+            eval_name=_as_str(
+                models.get("eval_name", ModelsConfig().eval_name),
+                "models.eval_name",
+            ),
             analyst_context_window=(
                 _as_int(models["analyst_context_window"], "models.analyst_context_window")
                 if "analyst_context_window" in models else None
@@ -388,6 +393,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("models.translator_name is required.")
     if not config.models.analyst_name.strip():
         raise ValueError("models.analyst_name is required.")
+    if not config.models.eval_name.strip():
+        raise ValueError("models.eval_name is required.")
     if not config.models.embedding_name.strip():
         raise ValueError("models.embedding_name is required.")
 
