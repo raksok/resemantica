@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from loguru import logger
+
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -261,6 +263,15 @@ class OrchestrationRunner:
                 stopped=True,
             )
         except Exception as exc:
+            logger.opt(exception=True).error(
+                "Unexpected stage failure (stage={}, release={}, run={}, chapter={}, start={}, end={})",
+                stage_name,
+                self.release_id,
+                self.run_id,
+                chapter_number,
+                chapter_start,
+                chapter_end,
+            )
             result = StageResult(success=False, stage_name=stage_name, message=str(exc))
 
         status = "stopped" if result.stopped else "completed" if result.success else "failed"
@@ -804,6 +815,12 @@ class OrchestrationRunner:
                     payload={"artifact_path": result.get("pass1_artifact"), "pass_name": "pass1"},
                 )
             except Exception as exc:
+                logger.opt(exception=True).error(
+                    "Batched pass1 failed (release={}, run={}, chapter={})",
+                    self.release_id,
+                    self.run_id,
+                    chapter_number,
+                )
                 failures[chapter_number] = str(exc)
                 break
             self._update_run_state(
@@ -863,6 +880,12 @@ class OrchestrationRunner:
                     payload={"artifact_path": result.get("pass2_artifact"), "pass_name": "pass2"},
                 )
             except Exception as exc:
+                logger.opt(exception=True).error(
+                    "Batched pass2 failed (release={}, run={}, chapter={})",
+                    self.release_id,
+                    self.run_id,
+                    chapter_number,
+                )
                 failures[chapter_number] = str(exc)
                 break
             self._update_run_state(
@@ -931,6 +954,12 @@ class OrchestrationRunner:
                     payload=usage_payload_delta(client, chapter_usage_before[chapter_number]),
                 )
             except Exception as exc:
+                logger.opt(exception=True).error(
+                    "Batched pass3 failed (release={}, run={}, chapter={})",
+                    self.release_id,
+                    self.run_id,
+                    chapter_number,
+                )
                 failures[chapter_number] = str(exc)
                 break
             self._update_run_state(

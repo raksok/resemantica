@@ -5,6 +5,8 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+from loguru import logger
+
 from resemantica.db.idiom_repo import (
     ensure_idiom_schema,
     list_candidates,
@@ -246,6 +248,7 @@ def test_multi_model_idiom_translation_resolves_rendering_and_stores_votes(
     paths = derive_paths(load_config(), release_id=release_id)
     conn = open_connection(paths.db_path)
     ensure_idiom_schema(conn)
+    events: list[tuple[str, dict[str, object]]] = []
     try:
         translated = translate_idiom_candidates(
             conn=conn,
@@ -257,6 +260,7 @@ def test_multi_model_idiom_translation_resolves_rendering_and_stores_votes(
             rendering_prompt_version=rendering_prompt.version,
             meaning_prompt_template=meaning_prompt.template,
             meaning_prompt_version=meaning_prompt.version,
+            event_callback=lambda event_name, payload: events.append((event_name, payload)),
         )
 
         assert translated == 1
@@ -276,7 +280,74 @@ def test_multi_model_idiom_translation_resolves_rendering_and_stores_votes(
         votes = list_translation_votes(conn, release_id=release_id)
         assert len(votes) == 6
         assert {vote.vote_kind for vote in votes} == {"rendering", "meaning"}
+        event_names = [event_name for event_name, _ in events]
+        assert event_names[0] == "translate.started"
+        assert event_names.count("translate.model_started") == 3
+        assert event_names.count("translate.model_completed") == 3
+        assert event_names[-1] == "translate.completed"
+        assert events[-1][1]["translated_count"] == 1
+        assert events[-1][1]["unresolved_count"] == 0
     finally:
+        conn.close()
+
+
+def test_unresolved_idiom_translation_warns_and_preserves_unresolved_behavior(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-unresolved"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    translator = ModelMappedIdiomTranslator(
+        {
+            ("model-a", "rendering"): "kill two birds with one stone",
+            ("model-b", "rendering"): "one arrow, two eagles",
+            ("model-a", "meaning"): "achieve two things at once",
+            ("model-b", "meaning"): "achieve two things at once",
+        }
+    )
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    events: list[tuple[str, dict[str, object]]] = []
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), level="WARNING", format="{message}")
+    try:
+        translated = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id="idioms-001",
+            translator_client=translator,
+            translator_model_names=["model-a", "model-b"],
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+            event_callback=lambda event_name, payload: events.append((event_name, payload)),
+        )
+
+        assert translated == 0
+        saved = list_candidates(conn, release_id=release_id)[0]
+        assert saved.candidate_id == candidate_id
+        assert saved.preferred_rendering_en == ""
+        assert saved.candidate_status == "discovered"
+        votes = list_translation_votes(conn, release_id=release_id)
+        rendering_votes = [vote for vote in votes if vote.vote_kind == "rendering"]
+        meaning_votes = [vote for vote in votes if vote.vote_kind == "meaning"]
+        assert {vote.resolution_status for vote in rendering_votes} == {"unresolved"}
+        assert {vote.resolution_status for vote in meaning_votes} == {"consensus"}
+        warning_events = [payload for event_name, payload in events if event_name == "translate.unresolved"]
+        assert warning_events
+        assert warning_events[0]["severity"] == "warning"
+        assert warning_events[0]["candidate_id"] == candidate_id
+        assert events[-1][0] == "translate.completed"
+        assert events[-1][1]["translated_count"] == 0
+        assert events[-1][1]["unresolved_count"] == 1
+        assert any("rendering vote prevented saving" in message for message in messages)
+    finally:
+        logger.remove(sink_id)
         conn.close()
 
 
@@ -419,7 +490,48 @@ def test_preprocess_idioms_emits_chapter_events(tmp_path: Path, monkeypatch) -> 
     assert event_types[0] == "preprocess-idioms.started"
     assert "preprocess-idioms.chapter_started" in event_types
     assert "preprocess-idioms.chapter_completed" in event_types
+    assert "preprocess-idioms.eval_batch_start" in event_types
+    assert "preprocess-idioms.eval_batch_success" in event_types
+    assert "preprocess-idioms.translate.started" in event_types
+    assert "preprocess-idioms.translate.model_started" in event_types
+    assert "preprocess-idioms.translate.model_completed" in event_types
+    assert "preprocess-idioms.translate.completed" in event_types
     assert event_types[-1] == "preprocess-idioms.completed"
+
+
+def test_extract_idioms_forwards_eval_batch_events_with_no_chapter(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m19-idiom-extract-eval-events"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="他可谓一箭双雕。",
+    )
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    prompt = load_prompt("idiom_evaluate.txt")
+    events: list[tuple[str, int | None, dict[str, object]]] = []
+
+    extract_idioms(
+        release_id=release_id,
+        extracted_chapters_dir=paths.extracted_chapters_dir,
+        detection_run_id="idioms-001",
+        llm_client=ScriptedIdiomLLM(),
+        model_name=config.models.analyst_name,
+        prompt_template=prompt.template,
+        prompt_version=prompt.version,
+        event_callback=lambda event_name, chapter_number, payload: events.append(
+            (event_name, chapter_number, payload)
+        ),
+    )
+
+    eval_events = [event for event in events if event[0].startswith("eval_batch_")]
+    assert [event[0] for event in eval_events] == ["eval_batch_start", "eval_batch_success"]
+    assert [event[1] for event in eval_events] == [None, None]
+    assert eval_events[0][2]["model_name"] == config.models.analyst_name
 
 
 def test_duplicate_conflict_rejects_policy_promotion(

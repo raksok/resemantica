@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from loguru import logger
+
 from resemantica.idioms.models import IdiomCandidate
 from resemantica.llm.client import LLMClient
 
@@ -45,6 +47,7 @@ def evaluate_idiom_candidate_batch(
     results: list[IdiomEvalResult] = []
     for index in range(0, len(candidates), batch_size):
         batch = candidates[index:index + batch_size]
+        batch_index = index // batch_size + 1
         payload = [
             {
                 "candidate_id": candidate.candidate_id,
@@ -67,7 +70,15 @@ def evaluate_idiom_candidate_batch(
             json.dumps(payload, ensure_ascii=False, indent=2),
         )
         if event_callback is not None:
-            event_callback("eval_batch_start", {"batch_size": len(batch)})
+            event_callback(
+                "eval_batch_start",
+                {
+                    "batch_index": batch_index,
+                    "batch_size": len(batch),
+                    "model_name": model_name,
+                    "message": f"Evaluating idiom batch {batch_index}: {len(batch)} candidates",
+                },
+            )
         try:
             parsed = json.loads(_strip_json_fence(llm_client.generate_text(model_name=model_name, prompt=prompt)))
             if isinstance(parsed, dict):
@@ -79,6 +90,15 @@ def evaluate_idiom_candidate_batch(
                 for item in parsed
                 if isinstance(item, dict) and item.get("candidate_id")
             }
+            missing_count = sum(1 for candidate in batch if candidate.candidate_id not in parsed_by_id)
+            if missing_count:
+                logger.warning(
+                    "Idiom eval batch {} omitted {} of {} candidates (model={})",
+                    batch_index,
+                    missing_count,
+                    len(batch),
+                    model_name,
+                )
             for candidate in batch:
                 item = parsed_by_id.get(candidate.candidate_id)
                 if item is None:
@@ -96,10 +116,34 @@ def evaluate_idiom_candidate_batch(
                     )
                 )
             if event_callback is not None:
-                event_callback("eval_batch_success", {"batch_size": len(batch)})
+                event_callback(
+                    "eval_batch_success",
+                    {
+                        "batch_index": batch_index,
+                        "batch_size": len(batch),
+                        "model_name": model_name,
+                        "message": f"Idiom eval batch {batch_index} completed: {len(batch)} candidates",
+                    },
+                )
         except Exception as exc:
             if event_callback is not None:
-                event_callback("eval_batch_error", {"batch_size": len(batch), "error": str(exc)})
+                event_callback(
+                    "eval_batch_error",
+                    {
+                        "batch_index": batch_index,
+                        "batch_size": len(batch),
+                        "model_name": model_name,
+                        "error": str(exc),
+                        "message": f"Idiom eval batch {batch_index} failed: {exc}",
+                    },
+                )
+            logger.opt(exception=True).warning(
+                "Idiom eval batch {} failed for model {} (batch_size={}): {}",
+                batch_index,
+                model_name,
+                len(batch),
+                exc,
+            )
             results.extend(_rejected(candidate.candidate_id, "eval_error") for candidate in batch)
     return results
 

@@ -27,7 +27,7 @@ def _add_verbose_arg(parser: argparse.ArgumentParser) -> None:
         "--verbose",
         action="count",
         default=0,
-        help="-v for INFO, -vv for CHAPTER, -vvv for DEBUG, -vvvv for TRACE.",
+        help="-v for INFO, -vv for INFO with more detail, -vvv/-vvvv for DEBUG; -vvvv adds source detail.",
     )
 
 

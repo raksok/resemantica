@@ -5,6 +5,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from resemantica.cli import _build_parser
 from resemantica.logging_config import configure_logging
 
 
@@ -79,3 +80,16 @@ def test_configure_logging_skips_json_handler_when_artifacts_dir_missing(tmp_pat
     logger.debug("console only")
 
     assert not artifacts.exists()
+
+
+def test_cli_verbose_help_matches_debug_behavior(capsys) -> None:
+    parser = _build_parser()
+
+    try:
+        parser.parse_args(["translate", "--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    captured = " ".join(capsys.readouterr().out.split())
+    assert "-vvv/-vvvv for DEBUG" in captured
+    assert "-vvvv for TRACE" not in captured

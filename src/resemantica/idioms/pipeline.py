@@ -5,7 +5,9 @@ import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from loguru import logger
 
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.idiom_repo import (
@@ -101,11 +103,22 @@ def translate_idiom_candidates(
     meaning_prompt_template: str,
     meaning_prompt_version: str,
     stop_token: StopToken | None = None,
+    event_callback: Callable[[str, dict[str, object]], None] | None = None,
 ) -> int:
     """Phase 2: Translate discovered idiom candidates using the Translator model.
     Two calls per candidate: idiom rendering + meaning translation.
     """
+    def _notify(event_name: str, **payload: object) -> None:
+        if event_callback is not None:
+            event_callback(event_name, payload)
+
     pending = list_candidates_for_translation(conn, release_id=release_id)
+    _notify(
+        "translate.started",
+        pending_count=len(pending),
+        model_count=len(translator_model_names),
+        message=f"Idiom translation started: {len(pending)} pending candidates",
+    )
     active_chapter: int | None = None
     completed_chapters: list[int] = []
     for candidate in pending:
@@ -125,98 +138,190 @@ def translate_idiom_candidates(
             )
             active_chapter = chapter
 
-    for model_name in translator_model_names:
-        for candidate in pending:
-            rendering_prompt = render_named_sections(
-                rendering_prompt_template,
-                sections={
-                    "SOURCE_TEXT": candidate.source_text,
-                    "EVIDENCE_SNIPPET": candidate.evidence_snippet,
-                },
-            )
-            raw_rendered = translator_client.generate_text(
+    current_model_name = ""
+    current_candidate_id = ""
+    current_vote_kind = ""
+    try:
+        for model_name in translator_model_names:
+            current_model_name = model_name
+            _notify(
+                "translate.model_started",
                 model_name=model_name,
-                prompt=rendering_prompt,
+                pending_count=len(pending),
+                message=f"Idiom translation model {model_name} started: {len(pending)} candidates",
             )
-            rendered = _clean_llm_response(raw_rendered)
-            upsert_translation_vote(
-                conn,
-                candidate_id=candidate.candidate_id,
-                release_id=release_id,
-                translation_run_id=run_id,
-                model_name=model_name,
-                prompt_version=rendering_prompt_version,
-                vote_kind="rendering",
-                raw_output=raw_rendered,
-                cleaned_output=rendered,
-                normalized_output=_normalize_translation(rendered),
-            )
+            for candidate in pending:
+                current_candidate_id = candidate.candidate_id
+                current_vote_kind = "rendering"
+                rendering_prompt = render_named_sections(
+                    rendering_prompt_template,
+                    sections={
+                        "SOURCE_TEXT": candidate.source_text,
+                        "EVIDENCE_SNIPPET": candidate.evidence_snippet,
+                    },
+                )
+                raw_rendered = translator_client.generate_text(
+                    model_name=model_name,
+                    prompt=rendering_prompt,
+                )
+                rendered = _clean_llm_response(raw_rendered)
+                upsert_translation_vote(
+                    conn,
+                    candidate_id=candidate.candidate_id,
+                    release_id=release_id,
+                    translation_run_id=run_id,
+                    model_name=model_name,
+                    prompt_version=rendering_prompt_version,
+                    vote_kind="rendering",
+                    raw_output=raw_rendered,
+                    cleaned_output=rendered,
+                    normalized_output=_normalize_translation(rendered),
+                )
 
-            meaning_prompt = render_named_sections(
-                meaning_prompt_template,
-                sections={
-                    "MEANING_ZH": candidate.meaning_zh,
-                },
-            )
-            raw_meaning = translator_client.generate_text(
+                current_vote_kind = "meaning"
+                meaning_prompt = render_named_sections(
+                    meaning_prompt_template,
+                    sections={
+                        "MEANING_ZH": candidate.meaning_zh,
+                    },
+                )
+                raw_meaning = translator_client.generate_text(
+                    model_name=model_name,
+                    prompt=meaning_prompt,
+                )
+                meaning = _clean_llm_response(raw_meaning)
+                upsert_translation_vote(
+                    conn,
+                    candidate_id=candidate.candidate_id,
+                    release_id=release_id,
+                    translation_run_id=run_id,
+                    model_name=model_name,
+                    prompt_version=meaning_prompt_version,
+                    vote_kind="meaning",
+                    raw_output=raw_meaning,
+                    cleaned_output=meaning,
+                    normalized_output=_normalize_translation(meaning),
+                )
+            _notify(
+                "translate.model_completed",
                 model_name=model_name,
-                prompt=meaning_prompt,
+                pending_count=len(pending),
+                message=f"Idiom translation model {model_name} completed: {len(pending)} candidates",
             )
-            meaning = _clean_llm_response(raw_meaning)
-            upsert_translation_vote(
-                conn,
-                candidate_id=candidate.candidate_id,
-                release_id=release_id,
-                translation_run_id=run_id,
-                model_name=model_name,
-                prompt_version=meaning_prompt_version,
-                vote_kind="meaning",
-                raw_output=raw_meaning,
-                cleaned_output=meaning,
-                normalized_output=_normalize_translation(meaning),
-            )
+    except Exception as exc:
+        _notify(
+            "translate.failed",
+            severity="error",
+            model_name=current_model_name,
+            candidate_id=current_candidate_id,
+            vote_kind=current_vote_kind,
+            error=str(exc),
+            message=(
+                "Idiom translation failed"
+                f" for model {current_model_name}, candidate {current_candidate_id}, {current_vote_kind}: {exc}"
+            ),
+        )
+        logger.opt(exception=True).error(
+            "Idiom translation failed for model {} candidate {} vote_kind={}: {}",
+            current_model_name,
+            current_candidate_id,
+            current_vote_kind,
+            exc,
+        )
+        raise
 
     translated_count = 0
-    for candidate in pending:
-        votes = list_translation_votes(
-            conn,
-            release_id=release_id,
-            candidate_id=candidate.candidate_id,
-        )
-        votes = [vote for vote in votes if vote.translation_run_id == run_id]
-        rendering_resolution = _resolve_translation_votes(
-            [vote for vote in votes if vote.vote_kind == "rendering"],
-            translator_model_names,
-        )
-        meaning_resolution = _resolve_translation_votes(
-            [vote for vote in votes if vote.vote_kind == "meaning"],
-            translator_model_names,
-        )
-        set_translation_vote_resolution(
-            conn,
-            candidate_id=candidate.candidate_id,
-            translation_run_id=run_id,
-            vote_kind="rendering",
-            resolution_status=rendering_resolution["status"],
-        )
-        set_translation_vote_resolution(
-            conn,
-            candidate_id=candidate.candidate_id,
-            translation_run_id=run_id,
-            vote_kind="meaning",
-            resolution_status=meaning_resolution["status"],
-        )
-        if rendering_resolution["target_term"]:
-            save_idiom_translation(
+    unresolved_count = 0
+    unresolved_rendering_count = 0
+    unresolved_meaning_count = 0
+    try:
+        for candidate in pending:
+            current_candidate_id = candidate.candidate_id
+            current_vote_kind = "resolution"
+            votes = list_translation_votes(
+                conn,
+                release_id=release_id,
+                candidate_id=candidate.candidate_id,
+            )
+            votes = [vote for vote in votes if vote.translation_run_id == run_id]
+            rendering_resolution = _resolve_translation_votes(
+                [vote for vote in votes if vote.vote_kind == "rendering"],
+                translator_model_names,
+            )
+            meaning_resolution = _resolve_translation_votes(
+                [vote for vote in votes if vote.vote_kind == "meaning"],
+                translator_model_names,
+            )
+            set_translation_vote_resolution(
                 conn,
                 candidate_id=candidate.candidate_id,
                 translation_run_id=run_id,
-                target_term=rendering_resolution["target_term"],
-                meaning_en=meaning_resolution["target_term"],
-                translator_model_name=rendering_resolution["model_name"],
-                translator_prompt_version=rendering_prompt_version,
+                vote_kind="rendering",
+                resolution_status=rendering_resolution["status"],
             )
-            translated_count += 1
+            set_translation_vote_resolution(
+                conn,
+                candidate_id=candidate.candidate_id,
+                translation_run_id=run_id,
+                vote_kind="meaning",
+                resolution_status=meaning_resolution["status"],
+            )
+            rendering_unresolved = not rendering_resolution["target_term"]
+            meaning_unresolved = not meaning_resolution["target_term"]
+            if rendering_unresolved or meaning_unresolved:
+                unresolved_count += 1
+                if rendering_unresolved:
+                    unresolved_rendering_count += 1
+                if meaning_unresolved:
+                    unresolved_meaning_count += 1
+            if rendering_resolution["target_term"]:
+                current_vote_kind = "rendering"
+                save_idiom_translation(
+                    conn,
+                    candidate_id=candidate.candidate_id,
+                    translation_run_id=run_id,
+                    target_term=rendering_resolution["target_term"],
+                    meaning_en=meaning_resolution["target_term"],
+                    translator_model_name=rendering_resolution["model_name"],
+                    translator_prompt_version=rendering_prompt_version,
+                )
+                translated_count += 1
+            else:
+                _notify(
+                    "translate.unresolved",
+                    severity="warning",
+                    candidate_id=candidate.candidate_id,
+                    vote_kind="rendering",
+                    unresolved_count=unresolved_count,
+                    message=(
+                        "Idiom translation unresolved for candidate "
+                        f"{candidate.candidate_id}: rendering vote prevented saving"
+                    ),
+                )
+                logger.warning(
+                    "Idiom translation unresolved for candidate {}: rendering vote prevented saving",
+                    candidate.candidate_id,
+                )
+    except Exception as exc:
+        _notify(
+            "translate.failed",
+            severity="error",
+            model_name=current_model_name,
+            candidate_id=current_candidate_id,
+            vote_kind=current_vote_kind,
+            error=str(exc),
+            message=(
+                "Idiom translation failed"
+                f" for candidate {current_candidate_id}, {current_vote_kind}: {exc}"
+            ),
+        )
+        logger.opt(exception=True).error(
+            "Idiom translation failed while resolving candidate {} vote_kind={}: {}",
+            current_candidate_id,
+            current_vote_kind,
+            exc,
+        )
+        raise
     if active_chapter is not None:
         completed_chapters.append(active_chapter)
         raise_if_stop_requested(
@@ -224,6 +329,18 @@ def translate_idiom_candidates(
             checkpoint={"idiom_translate_completed_chapters": completed_chapters},
             message=f"Idiom translation stopped after chapter {active_chapter}",
         )
+    _notify(
+        "translate.completed",
+        pending_count=len(pending),
+        translated_count=translated_count,
+        unresolved_count=unresolved_count,
+        unresolved_rendering_count=unresolved_rendering_count,
+        unresolved_meaning_count=unresolved_meaning_count,
+        message=(
+            f"Idiom translation completed: {translated_count} translated, "
+            f"{unresolved_count} unresolved"
+        ),
+    )
     return translated_count
 
 
@@ -311,6 +428,22 @@ def preprocess_idioms(
         for row in cursor.fetchall():
             skip_chapters.add(int(row[0]))
 
+        def _emit_extract_event(
+            event_name: str,
+            chapter_number: int | None,
+            payload: dict[str, object],
+        ) -> None:
+            event_payload = dict(payload)
+            if event_name == "eval_batch_error":
+                event_payload.setdefault("severity", "warning")
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.{event_name}",
+                chapter_number=chapter_number,
+                **event_payload,
+            )
+
         detected_candidates = extract_idioms(
             release_id=release_id,
             extracted_chapters_dir=paths.extracted_chapters_dir,
@@ -325,13 +458,7 @@ def preprocess_idioms(
             config=config_obj,
             chapter_refs=chapter_refs,
             cache_root=paths.release_root / "cache" / "llm",
-            event_callback=lambda event_name, chapter_number, payload: _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.{event_name}",
-                chapter_number=chapter_number,
-                **payload,
-            ),
+            event_callback=_emit_extract_event,
             stop_token=stop_token,
             skip_llm_eval=skip_llm_eval,
             eval_batch_size=eval_batch_size or 50,
@@ -359,6 +486,12 @@ def preprocess_idioms(
             meaning_prompt_template=meaning_prompt.template,
             meaning_prompt_version=meaning_prompt.version,
             stop_token=stop_token,
+            event_callback=lambda event_name, payload: _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.{event_name}",
+                **payload,
+            ),
         )
         raise_if_stop_requested(
             stop_token,

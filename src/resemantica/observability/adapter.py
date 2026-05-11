@@ -5,6 +5,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from loguru import logger
+
 from resemantica.observability.granularity import classify_event_level
 from resemantica.tracking.models import Event
 
@@ -81,7 +83,11 @@ class LiveAdapter:
                     try:
                         cb(event)
                     except Exception:
-                        pass
+                        logger.opt(exception=True).debug(
+                            "Observability subscriber failed (level={}, event_type={})",
+                            sub_level,
+                            event.event_type,
+                        )
 
 
 class PollAdapter:
@@ -156,4 +162,9 @@ class PollAdapter:
             self._log_path = paths.artifact_root / "logs" / f"{self._run_id}.jsonl"
             return self._log_path
         except Exception:
+            logger.opt(exception=True).debug(
+                "Failed to resolve observability log path (release={}, run={})",
+                self._release_id,
+                self._run_id,
+            )
             return None

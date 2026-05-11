@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from loguru import logger
+
 from resemantica.llm.prompts import render_named_sections
 
 GenerationHook = Callable[[str, str], str]
@@ -105,6 +107,13 @@ class LLMClient:
                 last_error = exc
                 if attempt >= self.max_retries:
                     break
+                logger.warning(
+                    "LLM request failed; retrying (model={}, attempt={}, max_retries={}): {}",
+                    model_name,
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                )
                 time.sleep(0.2)
 
         if last_error is None:  # pragma: no cover - defensive fallback

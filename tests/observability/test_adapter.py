@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from loguru import logger
+
 from resemantica.observability.adapter import LiveAdapter, NullAdapter
 from resemantica.tracking.models import Event
 
@@ -130,3 +132,27 @@ def test_live_adapter_error_not_delivered_to_high_level() -> None:
     adapter._on_event(error_event)
 
     assert len(received) == 0
+
+
+def test_live_adapter_logs_subscriber_failure_and_continues() -> None:
+    adapter = _make_live_adapter()
+    received: list[Event] = []
+    messages: list[str] = []
+
+    def fail_callback(event: Event) -> None:  # noqa: ARG001
+        raise RuntimeError("subscriber boom")
+
+    sink_id = logger.add(lambda message: messages.append(str(message)), level="DEBUG", format="{message}")
+    try:
+        adapter.subscribe(0, fail_callback)
+        adapter.subscribe(0, received.append)
+        event = _make_event(event_type="stage_completed")
+        adapter._on_event(event)
+    finally:
+        logger.remove(sink_id)
+
+    assert received == [event]
+    log_output = "\n".join(messages)
+    assert "Observability subscriber failed" in log_output
+    assert "stage_completed" in log_output
+    assert "subscriber boom" in log_output

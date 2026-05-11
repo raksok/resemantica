@@ -17,6 +17,9 @@ _STAGE_LABELS: dict[str, str] = {
     "packets-build": "Packet build",
     "preprocess-glossary": "Glossary preprocessing",
     "preprocess-glossary.discover": "Glossary discovery",
+    "preprocess-glossary.discover.filter": "Glossary deterministic filter",
+    "preprocess-glossary.discover.dedup": "Glossary alias clustering",
+    "preprocess-glossary.eval": "Glossary LLM evaluation",
     "preprocess-glossary.translate": "Glossary translation",
     "preprocess-glossary.promote": "Glossary promotion",
     "preprocess-summaries": "Summaries preprocessing",
@@ -91,6 +94,7 @@ class EventBus:
         try:
             return load_config().events
         except Exception:
+            logger.opt(exception=True).debug("Failed to load event config; using default event settings")
             return EventsConfig()
 
     def _should_persist(self, event: Event) -> bool:

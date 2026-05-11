@@ -6,6 +6,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import list_locked_entries
 from resemantica.db.sqlite import ensure_schema, open_connection
@@ -135,12 +137,14 @@ def preprocess_summaries(
 
             source_doc = str(chapter_payload.get("source_document_path", ""))
             if _exclude_compiled and any(p.search(source_doc) for p in _exclude_compiled):
-                print(f"  SKIP: chapter {chapter_number} ({source_doc}) matches exclude pattern")
+                message = "Chapter {} skipped: source document {} matches exclude pattern"
+                logger.info(message, chapter_number, source_doc)
                 _emit(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.chapter_skipped",
                     chapter_number=chapter_number,
+                    message=message.format(chapter_number, source_doc),
                     reason="exclude_pattern",
                     **usage_payload_delta(client, chapter_usage_before),
                 )
@@ -161,30 +165,54 @@ def preprocess_summaries(
             source_text_zh = _collect_source_text(chapter_payload)
             locked_glossary = list_locked_entries(conn, release_id=release_id)
 
-            generated = generate_chapter_summary(
-                conn=conn,
-                release_id=release_id,
-                run_id=run_id,
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.generation_started",
                 chapter_number=chapter_number,
-                chapter_source_hash=chapter_source_hash,
-                source_document_path=source_doc,
-                source_text_zh=source_text_zh,
-                locked_glossary=locked_glossary,
-                llm_client=client,
+                message=f"Chinese summary generation started for chapter {chapter_number}",
                 model_name=config_obj.models.analyst_name,
-                prompt_template=prompt_structured.template,
-                prompt_version=prompt_structured.version,
-                config=config_obj,
-                cache_root=paths.release_root / "cache" / "llm",
             )
+            try:
+                generated = generate_chapter_summary(
+                    conn=conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    chapter_number=chapter_number,
+                    chapter_source_hash=chapter_source_hash,
+                    source_document_path=source_doc,
+                    source_text_zh=source_text_zh,
+                    locked_glossary=locked_glossary,
+                    llm_client=client,
+                    model_name=config_obj.models.analyst_name,
+                    prompt_template=prompt_structured.template,
+                    prompt_version=prompt_structured.version,
+                    config=config_obj,
+                    cache_root=paths.release_root / "cache" / "llm",
+                )
+            except Exception as exc:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.generation_failed",
+                    chapter_number=chapter_number,
+                    severity="error",
+                    message=f"Chinese summary generation failed for chapter {chapter_number}: {exc}",
+                    model_name=config_obj.models.analyst_name,
+                    reason=str(exc),
+                    **usage_payload_delta(client, chapter_usage_before),
+                )
+                raise
             if generated is None:
                 if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
-                    print(f"  SKIP: chapter {chapter_number}: non-story chapter flagged")
+                    message = f"Chapter {chapter_number} skipped: non-story chapter flagged"
+                    logger.info(message)
                     _emit(
                         run_id,
                         release_id,
                         f"{_STAGE_NAME}.chapter_skipped",
                         chapter_number=chapter_number,
+                        message=message,
                         reason="non_story_chapter",
                         **usage_payload_delta(client, chapter_usage_before),
                     )
@@ -197,12 +225,26 @@ def preprocess_summaries(
                         }
                     )
                 else:
-                    print(f"  WARN: chapter {chapter_number}: summary generation failed, skipping")
+                    message = f"Chapter {chapter_number} skipped: summary generation failed"
+                    logger.warning(message)
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.generation_failed",
+                        chapter_number=chapter_number,
+                        severity="warning",
+                        message=message,
+                        model_name=config_obj.models.analyst_name,
+                        reason="generation_returned_none",
+                        **usage_payload_delta(client, chapter_usage_before),
+                    )
                     _emit(
                         run_id,
                         release_id,
                         f"{_STAGE_NAME}.chapter_skipped",
                         chapter_number=chapter_number,
+                        severity="warning",
+                        message=message,
                         reason="generation_failed",
                         **usage_payload_delta(client, chapter_usage_before),
                     )
@@ -219,6 +261,15 @@ def preprocess_summaries(
                     message=f"Summaries preprocess stopped after chapter {chapter_number}",
                 )
                 continue
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.generation_completed",
+                chapter_number=chapter_number,
+                message=f"Chinese summary generation completed for chapter {chapter_number}",
+                model_name=config_obj.models.analyst_name,
+                status=generated.validation.status,
+            )
             if generated.warnings:
                 _emit(
                     run_id,
@@ -238,6 +289,14 @@ def preprocess_summaries(
             )
 
             try:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.llm_validation_started",
+                    chapter_number=chapter_number,
+                    message=f"LLM summary validation started for chapter {chapter_number}",
+                    model_name=config_obj.models.analyst_name,
+                )
                 llm_validation_flags = validate_chinese_summary_content(
                     llm_client=client,
                     model_name=config_obj.models.analyst_name,
@@ -248,6 +307,17 @@ def preprocess_summaries(
                     config=config_obj,
                 )
             except PromptBudgetError:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.llm_validation_failed",
+                    chapter_number=chapter_number,
+                    severity="warning",
+                    message=f"LLM summary validation skipped for chapter {chapter_number}: prompt budget exceeded",
+                    model_name=config_obj.models.analyst_name,
+                    reason="prompt_budget_exceeded",
+                    **usage_payload_delta(client, chapter_usage_before),
+                )
                 _emit(
                     run_id,
                     release_id,
@@ -270,6 +340,38 @@ def preprocess_summaries(
                     message=f"Summaries preprocess stopped after chapter {chapter_number}",
                 )
                 continue
+            except Exception as exc:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.llm_validation_failed",
+                    chapter_number=chapter_number,
+                    severity="error",
+                    message=f"LLM summary validation failed for chapter {chapter_number}: {exc}",
+                    model_name=config_obj.models.analyst_name,
+                    reason=str(exc),
+                    **usage_payload_delta(client, chapter_usage_before),
+                )
+                raise
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.llm_validation_completed",
+                chapter_number=chapter_number,
+                message=f"LLM summary validation completed for chapter {chapter_number}",
+                model_name=config_obj.models.analyst_name,
+                flag_count=len(llm_validation_flags),
+            )
+            for flag in llm_validation_flags:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.llm_validation_warning",
+                    chapter_number=chapter_number,
+                    severity="warning",
+                    message=f"LLM summary validation warning for chapter {chapter_number}: {flag}",
+                    flag=str(flag),
+                )
 
             short_summaries = list_validated_summaries(
                 conn,
@@ -364,13 +466,35 @@ def preprocess_summaries(
                 message="Summaries preprocess stopped before next English derivation",
             )
             en_usage_before = capture_usage_snapshot(client)
-            chapter_summary_en = derive_english_summary(
-                llm_client=client,
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.english_derivation_started",
+                chapter_number=job.chapter_number,
+                message=f"English summary derivation started for chapter {job.chapter_number}",
                 model_name=config_obj.models.translator_name,
-                prompt_template=prompt_en.template,
-                source_text_zh=job.short_record.content_zh,
-                locked_glossary=job.locked_glossary,
             )
+            try:
+                chapter_summary_en = derive_english_summary(
+                    llm_client=client,
+                    model_name=config_obj.models.translator_name,
+                    prompt_template=prompt_en.template,
+                    source_text_zh=job.short_record.content_zh,
+                    locked_glossary=job.locked_glossary,
+                )
+            except Exception as exc:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.english_derivation_failed",
+                    chapter_number=job.chapter_number,
+                    severity="error",
+                    message=f"English summary derivation failed for chapter {job.chapter_number}: {exc}",
+                    model_name=config_obj.models.translator_name,
+                    reason=str(exc),
+                    **usage_payload_delta(client, en_usage_before),
+                )
+                raise
             chapter_en_record = save_derived_summary(
                 conn,
                 release_id=release_id,
@@ -385,13 +509,27 @@ def preprocess_summaries(
                 run_id=run_id,
             )
 
-            story_so_far_en = derive_english_summary(
-                llm_client=client,
-                model_name=config_obj.models.translator_name,
-                prompt_template=prompt_en.template,
-                source_text_zh=job.story_record.content_zh,
-                locked_glossary=job.locked_glossary,
-            )
+            try:
+                story_so_far_en = derive_english_summary(
+                    llm_client=client,
+                    model_name=config_obj.models.translator_name,
+                    prompt_template=prompt_en.template,
+                    source_text_zh=job.story_record.content_zh,
+                    locked_glossary=job.locked_glossary,
+                )
+            except Exception as exc:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.english_derivation_failed",
+                    chapter_number=job.chapter_number,
+                    severity="error",
+                    message=f"English story-so-far derivation failed for chapter {job.chapter_number}: {exc}",
+                    model_name=config_obj.models.translator_name,
+                    reason=str(exc),
+                    **usage_payload_delta(client, en_usage_before),
+                )
+                raise
             story_en_record = save_derived_summary(
                 conn,
                 release_id=release_id,
@@ -420,6 +558,16 @@ def preprocess_summaries(
                 },
             )
             chapter_results[job.result_index]["en_artifact"] = str(job.en_artifact)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.english_derivation_completed",
+                chapter_number=job.chapter_number,
+                message=f"English summary derivation completed for chapter {job.chapter_number}",
+                model_name=config_obj.models.translator_name,
+                summary_count=2,
+                **usage_payload_delta(client, en_usage_before),
+            )
             _emit(
                 run_id,
                 release_id,

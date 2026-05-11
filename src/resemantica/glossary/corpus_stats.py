@@ -1,6 +1,8 @@
 import math
 from dataclasses import dataclass
 
+from loguru import logger
+
 from resemantica.glossary.candidate_gen import RawCandidate
 
 
@@ -45,12 +47,19 @@ def compute_corpus_stats(per_chapter_candidates: dict[int, list[RawCandidate]]) 
         for term in chapter_terms:
             doc_freq[term] = doc_freq.get(term, 0) + 1
 
-    return CorpusStats(
+    result = CorpusStats(
         term_frequency=term_freq,
         document_frequency=doc_freq,
         total_chapters=total_chapters,
         total_tokens=total_tokens
     )
+    logger.debug(
+        "Corpus stats: {} chapters, {} unique terms, {} total tokens",
+        total_chapters,
+        len(term_freq),
+        total_tokens,
+    )
+    return result
 
 
 def compute_c_value(
@@ -170,4 +179,12 @@ def score_candidates(
 
     # Sort descending by composite score
     scored.sort(key=lambda x: x.composite_score, reverse=True)
+    if scored:
+        logger.debug(
+            "Scored {} candidates: top={:.4f}, median={:.4f}, min={:.4f}",
+            len(scored),
+            scored[0].composite_score,
+            scored[len(scored) // 2].composite_score,
+            scored[-1].composite_score,
+        )
     return scored

@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import numpy as np
+from loguru import logger
 
 from resemantica.glossary.models import AliasCluster, GlossaryCandidate, LockedGlossaryEntry
 
@@ -14,9 +15,11 @@ def _get_model(model_name: str) -> Any:
     global _cached_model
     if _cached_model is not None:
         return _cached_model
+    logger.info("Loading sentence-transformers model '{}' for alias clustering...", model_name)
     from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
     _cached_model = SentenceTransformer(model_name)
     _cached_model.encode("x")  # warm up
+    logger.info("Embedding model loaded successfully.")
     return _cached_model
 
 
@@ -63,10 +66,12 @@ def deduplicate_and_cluster(
     try:
         model = _get_model(model_name)
     except ImportError:
+        logger.warning("sentence-transformers not installed, skipping alias clustering")
         return candidates, []
 
     to_cluster = [c for c in candidates if c.candidate_status == "discovered" or c.candidate_status == "translated"]
     if not to_cluster:
+        logger.debug("No candidates eligible for clustering")
         return candidates, []
 
     # 1. Embed candidates
@@ -84,6 +89,7 @@ def deduplicate_and_cluster(
         texts.append(f"{c.source_term} [{category}] {snippet}")
 
     embeddings = model.encode(texts, normalize_embeddings=True)
+    logger.debug("Embedded {} candidates for clustering (threshold={:.2f})", len(to_cluster), similarity_threshold)
 
     # 2 & 3. Compute pairwise similarity and Union-Find
     n = len(to_cluster)
@@ -191,5 +197,14 @@ def deduplicate_and_cluster(
                 existing_glossary_match=match_id
             )
         )
+
+    alias_merged_count = sum(1 for c in candidates if c.candidate_status == "alias_merged")
+    pruned_count = sum(1 for c in candidates if c.candidate_status == "pruned")
+    logger.info(
+        "Clustering complete: {} clusters, {} aliases merged, {} pruned (existing match)",
+        len(alias_clusters),
+        alias_merged_count,
+        pruned_count,
+    )
 
     return candidates, alias_clusters

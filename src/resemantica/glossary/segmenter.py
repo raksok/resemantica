@@ -38,8 +38,8 @@ def _load_hanlp_pipeline() -> Any | None:
     except ImportError:
         logger.warning("HanLP not installed. Falling back to simple character/word segmentation.")
         _HANLP_AVAILABLE = False
-    except Exception as e:
-        logger.error(f"Failed to load HanLP pipeline: {e}. Falling back to simple segmentation.")
+    except Exception as exc:
+        logger.error("Failed to load HanLP pipeline: {}. Falling back to simple segmentation.", exc)
         _HANLP_AVAILABLE = False
 
     return _HANLP_PIPELINE
@@ -93,7 +93,7 @@ def segment_chapter(source_text: str) -> list[SegmentedToken]:
     lines = source_text.splitlines(keepends=True)
 
     current_offset = 0
-    for line in lines:
+    for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             current_offset += len(line)
             continue
@@ -149,8 +149,13 @@ def segment_chapter(source_text: str) -> list[SegmentedToken]:
                 )
                 line_offset = idx + len(tok)
 
-        except Exception as e:
-            logger.warning(f"HanLP failed on line, falling back to simple segmentation: {e}")
+        except Exception as exc:
+            logger.warning(
+                "HanLP failed on line {}; falling back to simple segmentation (line_length={}): {}",
+                line_number,
+                len(line),
+                exc,
+            )
             fallback_toks = _fallback_segment(line)
             for ft in fallback_toks:
                 ft.offset_start += current_offset

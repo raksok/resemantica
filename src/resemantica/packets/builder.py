@@ -7,6 +7,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import list_locked_entries
 from resemantica.db.graph_repo import list_graph_snapshots
@@ -428,6 +430,15 @@ def build_chapter_packet(
     chapter_payload = _read_json(chapter_path)
     records_raw = chapter_payload.get("records", [])
     if not isinstance(records_raw, list) or not records_raw:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.prerequisite_skipped",
+            chapter_number=chapter_number,
+            severity="warning",
+            message=f"Packet build skipped chapter {chapter_number}: extracted records are empty",
+            reason="empty_records",
+        )
         return PacketBuildOutput(
             status="skipped",
             release_id=release_id,
@@ -451,6 +462,15 @@ def build_chapter_packet(
     ensure_schema(conn, "packets")
 
     if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.prerequisite_skipped",
+            chapter_number=chapter_number,
+            severity="warning",
+            message=f"Packet build skipped chapter {chapter_number}: non-story chapter",
+            reason="non_story_chapter",
+        )
         conn.close()
         return PacketBuildOutput(
             status="skipped",
@@ -479,6 +499,15 @@ def build_chapter_packet(
             summary_type="story_so_far_zh",
         )
         if story_so_far is None:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.prerequisite_skipped",
+                chapter_number=chapter_number,
+                severity="warning",
+                message=f"Packet build skipped chapter {chapter_number}: missing story-so-far summary",
+                reason="missing_story_so_far_summary",
+            )
             conn.close()
             return PacketBuildOutput(
                 status="skipped",
@@ -498,6 +527,15 @@ def build_chapter_packet(
             summary_type="chapter_summary_zh_short",
         )
         if chapter_short is None:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.prerequisite_skipped",
+                chapter_number=chapter_number,
+                severity="warning",
+                message=f"Packet build skipped chapter {chapter_number}: missing chapter summary",
+                reason="missing_chapter_summary_short",
+            )
             conn.close()
             return PacketBuildOutput(
                 status="skipped",
@@ -534,6 +572,15 @@ def build_chapter_packet(
 
         graph_snapshots = list_graph_snapshots(conn, release_id=release_id)
         if not graph_snapshots:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.prerequisite_skipped",
+                chapter_number=chapter_number,
+                severity="warning",
+                message=f"Packet build skipped chapter {chapter_number}: missing graph snapshot",
+                reason="missing_graph_snapshot",
+            )
             conn.close()
             return PacketBuildOutput(
                 status="skipped",
@@ -572,6 +619,17 @@ def build_chapter_packet(
             packet_path_ref = Path(latest_metadata.packet_path)
             bundle_path_ref = Path(latest_metadata.bundle_path)
             if packet_path_ref.exists() and bundle_path_ref.exists():
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.cache_hit",
+                    chapter_number=chapter_number,
+                    message=f"Packet build cache hit for chapter {chapter_number}",
+                    status="up_to_date",
+                    packet_id=latest_metadata.packet_id,
+                    packet_hash=latest_metadata.packet_hash,
+                    artifact_path=latest_metadata.packet_path,
+                )
                 return PacketBuildOutput(
                     status="up_to_date",
                     release_id=release_id,
@@ -585,6 +643,18 @@ def build_chapter_packet(
                 )
             staleness.reasons.append("missing_packet_artifact")
             staleness.is_stale = True
+
+        if staleness.is_stale:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.stale_rebuild",
+                chapter_number=chapter_number,
+                severity="warning",
+                message=f"Packet build rebuilding stale chapter {chapter_number}: {', '.join(staleness.reasons)}",
+                reasons=staleness.reasons,
+                reason=staleness.reasons[0] if staleness.reasons else "stale",
+            )
 
         graph = _build_graph_client(paths, graph_client)
         graph_context = enrich_with_graph_context(
@@ -645,6 +715,16 @@ def build_chapter_packet(
         packet.section_token_counts = section_token_counts
         if trimmed_sections:
             packet.warnings = [f"trimmed:{key}" for key in trimmed_sections]
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.packet_trimmed",
+                chapter_number=chapter_number,
+                severity="warning",
+                message=f"Packet build trimmed chapter {chapter_number}: {', '.join(trimmed_sections)}",
+                trimmed_sections=trimmed_sections,
+                reason="packet_budget_exceeded",
+            )
 
         bundles: list[ParagraphBundle] = []
         bundle_warnings: list[str] = []
@@ -660,6 +740,17 @@ def build_chapter_packet(
                 bundle_warnings.append(f"bundle_skip: block={row.get('block_id', '?')}: {exc}")
         if bundle_warnings:
             packet.warnings.extend(bundle_warnings)
+            for warning in bundle_warnings:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.bundle_skipped",
+                    chapter_number=chapter_number,
+                    severity="warning",
+                    message=f"Packet bundle skipped for chapter {chapter_number}: {warning}",
+                    reason="bundle_skip",
+                    warning=warning,
+                )
 
         packet_hash = _packet_hash(packet)
         packet.packet_id = f"pkt_{packet_hash[:24]}"
@@ -791,6 +882,12 @@ def build_packets(
             else:
                 _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_completed", chapter_number=number)
         except Exception as exc:
+            logger.opt(exception=True).error(
+                "Chapter packet build failed (release={}, run={}, chapter={})",
+                release_id,
+                run_id,
+                number,
+            )
             failures.append(f"ch{number}: {exc}")
             results.append(PacketBuildOutput(
                 status="failed",
@@ -806,8 +903,19 @@ def build_packets(
             _emit(
                 run_id,
                 release_id,
+                f"{_STAGE_NAME}.chapter_failed",
+                chapter_number=number,
+                severity="error",
+                message=f"Packet build failed for chapter {number}: {exc}",
+                reason=str(exc),
+            )
+            _emit(
+                run_id,
+                release_id,
                 f"{_STAGE_NAME}.chapter_skipped",
                 chapter_number=number,
+                severity="error",
+                message=f"Packet build skipped chapter {number} after failure: {exc}",
                 reason=str(exc),
             )
         raise_if_stop_requested(

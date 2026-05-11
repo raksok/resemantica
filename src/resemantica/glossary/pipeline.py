@@ -124,10 +124,20 @@ def discover_glossary_candidates(
     )
 
     # Stage 3: Deterministic Filtering
+    pre_filter_count = len(discovered)
     discovered = apply_deterministic_filter(
         discovered,
         config=config_obj.glossary,
         min_score_override=pruning_threshold,
+    )
+    filtered_count_stage3 = sum(1 for c in discovered if c.candidate_status == "filtered")
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.discover.filter_completed",
+        message=f"Deterministic filter: {filtered_count_stage3} filtered from {pre_filter_count} candidates",
+        pre_filter_count=pre_filter_count,
+        filtered_count=filtered_count_stage3,
     )
 
     # Stage 4: LLM Batch Evaluation
@@ -166,6 +176,13 @@ def discover_glossary_candidates(
     to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
     clusters: list[AliasCluster] = []
     if to_dedup:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.dedup_started",
+            message=f"Alias clustering: {len(to_dedup)} candidates",
+            candidate_count=len(to_dedup),
+        )
         conn_tmp = open_connection(paths.db_path)
         existing_locked = list_locked_entries(conn_tmp, release_id=release_id)
         conn_tmp.close()
@@ -182,6 +199,15 @@ def discover_glossary_candidates(
             model_name=config_obj.models.embedding_name,
             existing_entries=existing_locked,
             similarity_threshold=sim_threshold,
+        )
+        alias_merged = sum(1 for c in to_dedup if c.candidate_status == "alias_merged")
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.dedup_completed",
+            message=f"Clustering complete: {len(clusters)} clusters, {alias_merged} aliases merged",
+            cluster_count=len(clusters),
+            alias_merged_count=alias_merged,
         )
 
     conn = open_connection(paths.db_path)

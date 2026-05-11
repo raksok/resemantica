@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from loguru import logger
+
 from resemantica.glossary.data import load_data_file
 from resemantica.glossary.segmenter import SegmentedToken, segment_chapter
 
@@ -333,13 +335,35 @@ def generate_chapter_candidates(text: str) -> list[RawCandidate]:
     Orchestrate full candidate generation for a single chapter text.
     Returns deduplicated candidates.
     """
+    logger.debug("Generating candidates from text ({} chars)", len(text))
     tokens = segment_chapter(text)
 
-    all_candidates = []
-    all_candidates.extend(extract_ner_candidates(tokens, text))
-    all_candidates.extend(extract_pos_noun_phrases(tokens, text))
-    all_candidates.extend(extract_heuristic_patterns(tokens, text))
-    all_candidates.extend(extract_webnovel_dict(tokens, text))
-    all_candidates.extend(extract_ngrams(tokens, text))
+    all_candidates: list[RawCandidate] = []
 
-    return merge_candidates(all_candidates)
+    ner = extract_ner_candidates(tokens, text)
+    all_candidates.extend(ner)
+    logger.debug("NER strategy: {} candidates", len(ner))
+
+    pos = extract_pos_noun_phrases(tokens, text)
+    all_candidates.extend(pos)
+    logger.debug("POS noun-phrase strategy: {} candidates", len(pos))
+
+    heuristic = extract_heuristic_patterns(tokens, text)
+    all_candidates.extend(heuristic)
+    logger.debug("Heuristic pattern strategy: {} candidates", len(heuristic))
+
+    webnovel = extract_webnovel_dict(tokens, text)
+    all_candidates.extend(webnovel)
+    logger.debug("Webnovel dictionary strategy: {} candidates", len(webnovel))
+
+    ngrams = extract_ngrams(tokens, text)
+    all_candidates.extend(ngrams)
+    logger.debug("N-gram strategy: {} candidates", len(ngrams))
+
+    merged = merge_candidates(all_candidates)
+    logger.debug(
+        "Merged {} raw candidates into {} unique terms",
+        len(all_candidates),
+        len(merged),
+    )
+    return merged

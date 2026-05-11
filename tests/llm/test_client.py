@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from loguru import logger
+
 from resemantica.llm.client import LLMClient
 
 
@@ -25,6 +27,25 @@ class _FakeChat:
 class _FakeOpenAIClient:
     def __init__(self, *, usage: Any | None = None) -> None:
         self.completions = _FakeCompletions(usage=usage)
+        self.chat = _FakeChat(self.completions)
+
+
+class _FlakyCompletions:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def create(self, **kwargs: Any) -> Any:  # noqa: ARG002
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("temporary outage")
+        message = type("Message", (), {"content": "ok"})()
+        choice = type("Choice", (), {"message": message})()
+        return type("Response", (), {"choices": [choice], "usage": None})()
+
+
+class _FlakyOpenAIClient:
+    def __init__(self) -> None:
+        self.completions = _FlakyCompletions()
         self.chat = _FakeChat(self.completions)
 
 
@@ -110,3 +131,28 @@ def test_cache_hits_and_missing_usage_are_tracked_without_tokens(monkeypatch) ->
         "llm_completion_tokens": 0,
         "llm_total_tokens": 0,
     }
+
+
+def test_generate_text_logs_retry_warning(monkeypatch) -> None:
+    flaky = _FlakyOpenAIClient()
+
+    def build_client(self: LLMClient) -> _FlakyOpenAIClient:  # noqa: ARG001
+        return flaky
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), level="DEBUG", format="{message}")
+    monkeypatch.setattr(LLMClient, "_build_openai_client", build_client)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    try:
+        client = LLMClient(base_url="http://local", timeout_seconds=30, max_retries=2)
+        assert client.generate_text(model_name="model-a", prompt="first") == "ok"
+    finally:
+        logger.remove(sink_id)
+
+    log_output = "\n".join(messages)
+    assert "LLM request failed; retrying" in log_output
+    assert "model=model-a" in log_output
+    assert "attempt=1" in log_output
+    assert "max_retries=2" in log_output
+    assert "temporary outage" in log_output
+    assert flaky.completions.calls == 2

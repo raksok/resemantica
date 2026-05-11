@@ -96,6 +96,27 @@ def _emit_translation_event(
         logger.opt(exception=True).debug("Failed to emit translation event {}", event_type)
 
 
+def _emit_pass2_fallback_event(
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    payload: dict[str, Any],
+) -> None:
+    block_id = payload.get("block_id")
+    reason = str(payload.get("reason", "fallback"))
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="pass2.fallback",
+        chapter_number=chapter_number,
+        block_id=str(block_id) if block_id else None,
+        severity="warning",
+        message=f"Pass2 fallback for {block_id or 'chapter'}: {reason}",
+        payload=payload,
+    )
+
+
 def _is_blocking_restore_warning(warning: str) -> bool:
     return warning.startswith("Unknown placeholder") or warning.startswith(
         "Unexpected closing placeholder"
@@ -176,7 +197,16 @@ def translate_chapter_pass1(
     ensure_checkpoint_schema(conn)
 
     try:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass1.started",
+            chapter_number=chapter_number,
+            message=f"Pass1 started for chapter {chapter_number}",
+            payload={"pass_name": "pass1", "model_name": model_name},
+        )
         pass1_structure_checks: list[dict[str, Any]] = []
+        used_pass1_cache = False
         pass1_checkpoint = load_checkpoint(
             conn,
             release_id=release_id,
@@ -193,9 +223,22 @@ def translate_chapter_pass1(
             and pass1_checkpoint.status == "success"
             and Path(pass1_checkpoint.artifact_path).exists()
         ):
+            used_pass1_cache = True
             pass1_payload = _read_json(Path(pass1_checkpoint.artifact_path))
             pass1_structure_checks = list(pass1_payload.get("structure_validation", []))
             logger.info("Chapter {} pass1: using cached artifact", chapter_number)
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass1.cached",
+                chapter_number=chapter_number,
+                message=f"Pass1 cache hit for chapter {chapter_number}",
+                payload={
+                    "pass_name": "pass1",
+                    "artifact_path": pass1_checkpoint.artifact_path,
+                    "status": pass1_checkpoint.status,
+                },
+            )
         else:
             pass1_blocks: list[dict[str, Any]] = []
 
@@ -252,6 +295,20 @@ def translate_chapter_pass1(
                         warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
                     ]
                     if blocking_restore_warnings:
+                        _emit_translation_event(
+                            release_id=release_id,
+                            run_id=run_id,
+                            event_type="pass1.restore_failed",
+                            chapter_number=chapter_number,
+                            block_id=block_id,
+                            severity="error",
+                            message=f"Pass1 placeholder restoration failed for {block_id}",
+                            payload={
+                                "pass_name": "pass1",
+                                "errors": blocking_restore_warnings,
+                                "warnings": restore_warnings,
+                            },
+                        )
                         pass1_structure_checks.append(
                             {
                                 "stage": "pass1_restore",
@@ -284,6 +341,21 @@ def translate_chapter_pass1(
                             payload={"pass_name": "pass1"},
                         )
                         continue
+                else:
+                    _emit_translation_event(
+                        release_id=release_id,
+                        run_id=run_id,
+                        event_type="pass1.structure_failed",
+                        chapter_number=chapter_number,
+                        block_id=block_id,
+                        severity="warning",
+                        message=f"Pass1 structure validation failed for {block_id}",
+                        payload={
+                            "pass_name": "pass1",
+                            "errors": structure.errors,
+                            "warnings": structure.warnings,
+                        },
+                    )
 
                 if _placeholder_tokens(cleaned_source):
                     pass1_blocks.append(
@@ -300,6 +372,16 @@ def translate_chapter_pass1(
                         }
                     )
                     logger.warning("Chapter {} block {}: pass1 failed", chapter_number, block_id)
+                    _emit_translation_event(
+                        release_id=release_id,
+                        run_id=run_id,
+                        event_type="validation_failed",
+                        chapter_number=chapter_number,
+                        block_id=block_id,
+                        severity="error",
+                        message=f"Pass1 validation failed for {block_id}",
+                        payload={"pass_name": "pass1", "errors": structure.errors},
+                    )
                     continue
 
                 retry_segments = _split_for_retry(cleaned_source, max_chars=750)
@@ -332,6 +414,16 @@ def translate_chapter_pass1(
 
                 segment_payloads: list[dict[str, Any]] = []
                 segment_failed = False
+                _emit_translation_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    event_type="pass1.resegmentation_started",
+                    chapter_number=chapter_number,
+                    block_id=block_id,
+                    severity="warning",
+                    message=f"Pass1 resegmentation started for {block_id}",
+                    payload={"segment_count": len(retry_segments), "pass_name": "pass1"},
+                )
                 _emit_translation_event(
                     release_id=release_id,
                     run_id=run_id,
@@ -402,6 +494,16 @@ def translate_chapter_pass1(
                         severity="error",
                         message=f"Pass1 resegmentation failed for {parent_block_id}",
                     )
+                    _emit_translation_event(
+                        release_id=release_id,
+                        run_id=run_id,
+                        event_type="pass1.resegmentation_failed",
+                        chapter_number=chapter_number,
+                        block_id=parent_block_id,
+                        severity="error",
+                        message=f"Pass1 resegmentation failed for {parent_block_id}",
+                        payload={"pass_name": "pass1"},
+                    )
 
             pass1_failed = any(block.get("status") == "failed" for block in pass1_blocks)
             pass1_payload = {
@@ -436,13 +538,68 @@ def translate_chapter_pass1(
                     failed_count,
                     len(pass1_blocks),
                 )
+                _emit_translation_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    event_type="pass1.completed",
+                    chapter_number=chapter_number,
+                    severity="warning",
+                    message=f"Pass1 completed for chapter {chapter_number} with {failed_count} failed blocks",
+                    payload={
+                        "pass_name": "pass1",
+                        "status": "failed",
+                        "failed_count": failed_count,
+                        "artifact_path": str(pass1_artifact_path),
+                    },
+                )
+            else:
+                _emit_translation_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    event_type="pass1.completed",
+                    chapter_number=chapter_number,
+                    message=f"Pass1 completed for chapter {chapter_number}",
+                    payload={
+                        "pass_name": "pass1",
+                        "status": "success",
+                        "artifact_path": str(pass1_artifact_path),
+                    },
+                )
 
+        if used_pass1_cache:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass1.completed",
+                chapter_number=chapter_number,
+                message=f"Pass1 completed for chapter {chapter_number} from cache",
+                payload={
+                    "pass_name": "pass1",
+                    "status": "cached",
+                    "artifact_path": (
+                        pass1_checkpoint.artifact_path
+                        if pass1_checkpoint is not None
+                        else str(pass1_artifact_path)
+                    ),
+                },
+            )
         return {
             "status": str(pass1_payload.get("status", "unknown")),
             "pass1_artifact": str(pass1_artifact_path),
             "blocks": pass1_payload.get("blocks", []),
             **usage_payload_delta(client, usage_before),
         }
+    except Exception as exc:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass1.failed",
+            chapter_number=chapter_number,
+            severity="error",
+            message=f"Pass1 failed for chapter {chapter_number}: {exc}",
+            payload={"pass_name": "pass1", "reason": str(exc)},
+        )
+        raise
     finally:
         conn.close()
 
@@ -466,6 +623,15 @@ def _process_pass2_block(
     source_text = str(block["source_text_zh"])
     parent_block_id = str(block["parent_block_id"])
     placeholder_entries = placeholders_by_block.get(parent_block_id, [])
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="paragraph_started",
+        chapter_number=chapter_number,
+        block_id=parent_block_id,
+        message=f"Pass2 started for {parent_block_id}",
+        payload={"pass_name": "pass2"},
+    )
 
     if bool(block.get("was_resegmented")):
         prior_segment_translations: list[str] = []
@@ -483,6 +649,15 @@ def _process_pass2_block(
                 draft_text=segment_draft,
                 full_source_block=source_text,
                 prior_segment_translations=prior_segment_translations,
+                chapter_number=chapter_number,
+                block_id=parent_block_id,
+                segment_id=segment_id,
+                fallback_callback=lambda payload: _emit_pass2_fallback_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    chapter_number=chapter_number,
+                    payload=payload,
+                ),
             )
             structure = validate_structure(segment_source, segment_corrected)
             structure_checks.append(
@@ -495,6 +670,16 @@ def _process_pass2_block(
                 }
             )
             if not structure.is_valid:
+                _emit_translation_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    event_type="pass2.failed",
+                    chapter_number=chapter_number,
+                    block_id=segment_id,
+                    severity="error",
+                    message=f"Pass2 structural validation failed for segment {segment_id}",
+                    payload={"pass_name": "pass2", "errors": structure.errors},
+                )
                 raise RuntimeError(
                     f"Pass 2 structural validation failed for segment {segment_id}."
                 )
@@ -516,6 +701,20 @@ def _process_pass2_block(
             warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
         ]
         if blocking_restore_warnings:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.failed",
+                chapter_number=chapter_number,
+                block_id=parent_block_id,
+                severity="error",
+                message=f"Pass2 restoration failed for block {parent_block_id}",
+                payload={
+                    "pass_name": "pass2",
+                    "errors": blocking_restore_warnings,
+                    "warnings": restore_warnings,
+                },
+            )
             raise RuntimeError(
                 f"Pass 2 restoration failed for block {parent_block_id}."
             )
@@ -556,6 +755,14 @@ def _process_pass2_block(
         draft_text=draft_text,
         full_source_block=source_text,
         prior_segment_translations=[],
+        chapter_number=chapter_number,
+        block_id=block_id,
+        fallback_callback=lambda payload: _emit_pass2_fallback_event(
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            payload=payload,
+        ),
     )
     structure = validate_structure(source_text, corrected_text)
     structure_check = {
@@ -566,6 +773,16 @@ def _process_pass2_block(
         "warnings": structure.warnings,
     }
     if not structure.is_valid:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass2.failed",
+            chapter_number=chapter_number,
+            block_id=block_id,
+            severity="error",
+            message=f"Pass2 structural validation failed for block {block_id}",
+            payload={"pass_name": "pass2", "errors": structure.errors},
+        )
         raise RuntimeError(f"Pass 2 structural validation failed for block {block_id}.")
 
     restored_text, restore_warnings = restore_from_placeholders(
@@ -576,6 +793,20 @@ def _process_pass2_block(
         warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
     ]
     if blocking_restore_warnings:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass2.failed",
+            chapter_number=chapter_number,
+            block_id=block_id,
+            severity="error",
+            message=f"Pass2 restoration failed for block {block_id}",
+            payload={
+                "pass_name": "pass2",
+                "errors": blocking_restore_warnings,
+                "warnings": restore_warnings,
+            },
+        )
         raise RuntimeError(f"Pass 2 restoration failed for block {block_id}.")
 
     fidelity = validate_basic_fidelity(source_text, restored_text)
@@ -652,6 +883,14 @@ def translate_chapter_pass2(
     ensure_checkpoint_schema(conn)
 
     try:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass2.started",
+            chapter_number=chapter_number,
+            message=f"Pass2 started for chapter {chapter_number}",
+            payload={"pass_name": "pass2", "model_name": analyst_model},
+        )
         pass1_payload = _read_json(pass1_artifact_path)
 
         pass2_checkpoint = load_checkpoint(
@@ -676,6 +915,18 @@ def translate_chapter_pass2(
             fidelity_checks = list(cached_payload.get("fidelity_validation", []))
             pass2_payload = cached_payload
             logger.info("Chapter {} pass2: using cached artifact", chapter_number)
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.cached",
+                chapter_number=chapter_number,
+                message=f"Pass2 cache hit for chapter {chapter_number}",
+                payload={
+                    "pass_name": "pass2",
+                    "artifact_path": pass2_checkpoint.artifact_path,
+                    "status": pass2_checkpoint.status,
+                },
+            )
         else:
             pass2_blocks = []
             pass2_structure_checks = []
@@ -717,7 +968,21 @@ def translate_chapter_pass2(
                     results: dict[int, tuple] = {}
                     for future in as_completed(fut_map):
                         idx = fut_map[future]
-                        results[idx] = future.result()
+                        try:
+                            results[idx] = future.result()
+                        except Exception as exc:
+                            block_id = str(blocks_to_process[idx].get("block_id", ""))
+                            _emit_translation_event(
+                                release_id=release_id,
+                                run_id=run_id,
+                                event_type="pass2.failed",
+                                chapter_number=chapter_number,
+                                block_id=block_id,
+                                severity="error",
+                                message=f"Pass2 worker failed for {block_id}: {exc}",
+                                payload={"pass_name": "pass2", "reason": str(exc)},
+                            )
+                            raise
 
                 for idx in sorted(results):
                     block_result, struct_checks, fidelity_check = results[idx]
@@ -805,14 +1070,49 @@ def translate_chapter_pass2(
             check["status"] == "failed" for check in fidelity_checks
         )
         if pass2_failed:
+            failed_count = sum(
+                1 for check in [*pass2_structure_checks, *fidelity_checks] if check["status"] == "failed"
+            )
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.failed",
+                chapter_number=chapter_number,
+                severity="error",
+                message=f"Pass2 validation failed for chapter {chapter_number}",
+                payload={"pass_name": "pass2", "failed_count": failed_count},
+            )
             raise RuntimeError("Pass 2 failed validation.")
 
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass2.completed",
+            chapter_number=chapter_number,
+            message=f"Pass2 completed for chapter {chapter_number}",
+            payload={
+                "pass_name": "pass2",
+                "status": "success",
+                "artifact_path": str(pass2_artifact_path),
+            },
+        )
         return {
             "status": "success",
             "pass2_artifact": str(pass2_artifact_path),
             "blocks": pass2_blocks,
             **usage_payload_delta(client, usage_before),
         }
+    except Exception as exc:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass2.failed",
+            chapter_number=chapter_number,
+            severity="error",
+            message=f"Pass2 failed for chapter {chapter_number}: {exc}",
+            payload={"pass_name": "pass2", "reason": str(exc)},
+        )
+        raise
     finally:
         conn.close()
 
@@ -832,6 +1132,15 @@ def translate_chapter_pass3(
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     if not config_obj.translation.pass3_default:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass3.skipped",
+            chapter_number=chapter_number,
+            severity="warning",
+            message=f"Pass3 skipped for chapter {chapter_number}: disabled",
+            payload={"pass_name": "pass3", "reason": "disabled"},
+        )
         return {"status": "skipped", "pass3_artifact": None}
 
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -843,12 +1152,42 @@ def translate_chapter_pass3(
 
     if not pass2_artifact_path.exists():
         logger.warning("Chapter {} pass3: pass2 artifact not found, skipping", chapter_number)
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass3.skipped",
+            chapter_number=chapter_number,
+            severity="warning",
+            message=f"Pass3 skipped for chapter {chapter_number}: pass2 artifact missing",
+            payload={"pass_name": "pass3", "reason": "missing_pass2_artifact"},
+        )
         return {"status": "skipped", "pass3_artifact": None}
 
-    pass2_payload = _read_json(pass2_artifact_path)
+    try:
+        pass2_payload = _read_json(pass2_artifact_path)
+    except Exception as exc:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass3.failed",
+            chapter_number=chapter_number,
+            severity="error",
+            message=f"Pass3 failed for chapter {chapter_number}: {exc}",
+            payload={"pass_name": "pass3", "reason": str(exc)},
+        )
+        raise
     pass2_blocks = list(pass2_payload.get("blocks", []))
 
     if not pass2_blocks:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass3.skipped",
+            chapter_number=chapter_number,
+            severity="warning",
+            message=f"Pass3 skipped for chapter {chapter_number}: pass2 has no blocks",
+            payload={"pass_name": "pass3", "reason": "empty_pass2_blocks"},
+        )
         return {"status": "skipped", "pass3_artifact": None}
 
     pass3_prompt = load_prompt("translate_pass3.txt")
@@ -861,6 +1200,14 @@ def translate_chapter_pass3(
     ensure_checkpoint_schema(conn)
 
     try:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass3.started",
+            chapter_number=chapter_number,
+            message=f"Pass3 started for chapter {chapter_number}",
+            payload={"pass_name": "pass3", "model_name": model_name},
+        )
         pass3_checkpoint = load_checkpoint(
             conn,
             release_id=release_id,
@@ -877,6 +1224,30 @@ def translate_chapter_pass3(
             and Path(pass3_checkpoint.artifact_path).exists()
         ):
             logger.info("Chapter {} pass3: using cached artifact", chapter_number)
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass3.cached",
+                chapter_number=chapter_number,
+                message=f"Pass3 cache hit for chapter {chapter_number}",
+                payload={
+                    "pass_name": "pass3",
+                    "artifact_path": pass3_checkpoint.artifact_path,
+                    "status": pass3_checkpoint.status,
+                },
+            )
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass3.completed",
+                chapter_number=chapter_number,
+                message=f"Pass3 completed for chapter {chapter_number} from cache",
+                payload={
+                    "pass_name": "pass3",
+                    "status": "cached",
+                    "artifact_path": pass3_checkpoint.artifact_path,
+                },
+            )
             return {
                 "status": "success",
                 "pass3_artifact": pass3_checkpoint.artifact_path,
@@ -943,6 +1314,16 @@ def translate_chapter_pass3(
                     message=f"Pass3 skipped high-risk block {block_id}",
                     payload={"pass_name": "pass3"},
                 )
+                _emit_translation_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    event_type="pass3.skipped",
+                    chapter_number=chapter_number,
+                    block_id=block_id,
+                    severity="warning",
+                    message=f"Pass3 skipped high-risk block {block_id}",
+                    payload={"pass_name": "pass3", "reason": "high_risk", "risk_score": risk.risk_score},
+                )
                 continue
 
             bundle3 = bundles_by_block.get(block_id) if bundles_by_block else None
@@ -977,6 +1358,21 @@ def translate_chapter_pass3(
             else:
                 final_output = pass2_output
                 pass_decision = "pass3_rejected_integrity_failure"
+                _emit_translation_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    event_type="pass3.skipped",
+                    chapter_number=chapter_number,
+                    block_id=block_id,
+                    severity="warning",
+                    message=f"Pass3 rejected by integrity validation for {block_id}",
+                    payload={
+                        "pass_name": "pass3",
+                        "reason": "integrity_rejection",
+                        "errors": integrity.errors,
+                        "warnings": integrity.warnings,
+                    },
+                )
 
             pass3_blocks.append(
                 {
@@ -1035,10 +1431,33 @@ def translate_chapter_pass3(
             chapter_report["risk_classifications"] = risk_classifications
             _write_json(chapter_report_path, chapter_report)
 
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass3.completed",
+            chapter_number=chapter_number,
+            message=f"Pass3 completed for chapter {chapter_number}",
+            payload={
+                "pass_name": "pass3",
+                "status": "success",
+                "artifact_path": str(pass3_artifact_path),
+            },
+        )
         return {
             "status": "success",
             "pass3_artifact": str(pass3_artifact_path),
             **usage_payload_delta(client, usage_before),
         }
+    except Exception as exc:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass3.failed",
+            chapter_number=chapter_number,
+            severity="error",
+            message=f"Pass3 failed for chapter {chapter_number}: {exc}",
+            payload={"pass_name": "pass3", "reason": str(exc)},
+        )
+        raise
     finally:
         conn.close()

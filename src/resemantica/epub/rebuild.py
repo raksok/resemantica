@@ -8,15 +8,23 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from loguru import logger
+
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import is_non_story_chapter
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.utils import _emit as _emit_shared
 from resemantica.utils import _read_json, _write_json
 
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "div", "li", "td", "table"}
+_STAGE_NAME = "epub-rebuild"
+
+
+def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
+    _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
 
 
 @dataclass(slots=True)
@@ -316,89 +324,236 @@ def rebuild_translated_epub(
 ) -> RebuildResult:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    chapter_refs = list_extracted_chapters(paths, chapter_start=chapter_start, chapter_end=chapter_end)
     reconstruction_root = paths.release_root / "runs" / run_id / "reconstruction"
     chapters_out = reconstruction_root / "chapters"
     work_dir = reconstruction_root / "work"
     final_output = output_path or reconstruction_root / "reconstructed.epub"
     validation_report_path = reconstruction_root / "validation-report.json"
 
-    if work_dir.exists():
-        shutil.rmtree(work_dir)
-    shutil.copytree(paths.unpacked_dir, work_dir)
-    chapters_out.mkdir(parents=True, exist_ok=True)
+    _emit(
+        run_id,
+        release_id,
+        f"{_STAGE_NAME}.started",
+        total_chapters=len(chapter_refs),
+        message=f"EPUB rebuild started for {len(chapter_refs)} chapters",
+    )
 
     chapter_results: list[ChapterRebuildResult] = []
-    conn = open_connection(paths.db_path)
-    ensure_schema(conn, "summaries")
     try:
-        non_story_chapters = {
-            ref.chapter_number
-            for ref in list_extracted_chapters(paths, chapter_start=chapter_start, chapter_end=chapter_end)
-            if is_non_story_chapter(conn, release_id=release_id, chapter_number=ref.chapter_number)
-        }
-    finally:
-        conn.close()
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        shutil.copytree(paths.unpacked_dir, work_dir)
+        chapters_out.mkdir(parents=True, exist_ok=True)
 
-    for chapter_ref in list_extracted_chapters(paths, chapter_start=chapter_start, chapter_end=chapter_end):
-        if chapter_ref.chapter_number in non_story_chapters:
-            chapter_results.append(
-                ChapterRebuildResult(
+        conn = open_connection(paths.db_path)
+        ensure_schema(conn, "summaries")
+        try:
+            non_story_chapters = {
+                ref.chapter_number
+                for ref in chapter_refs
+                if is_non_story_chapter(conn, release_id=release_id, chapter_number=ref.chapter_number)
+            }
+        finally:
+            conn.close()
+
+        for chapter_ref in chapter_refs:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.chapter_started",
+                chapter_number=chapter_ref.chapter_number,
+                message=f"EPUB rebuild started for chapter {chapter_ref.chapter_number}",
+            )
+            if chapter_ref.chapter_number in non_story_chapters:
+                result = ChapterRebuildResult(
                     chapter_number=chapter_ref.chapter_number,
                     source_document_path=chapter_ref.source_document_path or "",
                     xhtml="",
                     status="skipped",
                     flags=[],
                 )
-            )
-            continue
-        chapter_path = chapter_ref.chapter_path
-        chapter_payload = _read_json(chapter_path)
-        chapter_number = int(chapter_payload["chapter_number"])
-        source_document_path = str(chapter_payload["source_document_path"])
-        source_path = paths.unpacked_dir / source_document_path
-        work_source_path = work_dir / source_document_path
-        translation_dir = paths.release_root / "runs" / run_id / "translation" / f"chapter-{chapter_number}"
-        placeholder_path = paths.extracted_placeholders_dir / f"chapter-{chapter_number}.json"
-        placeholder_map = _read_json(placeholder_path) if placeholder_path.exists() else {}
-        result = rebuild_chapter_xhtml(
-            source_xhtml=source_path.read_text(encoding="utf-8"),
-            chapter_records=list(chapter_payload.get("records", [])),
-            translated_blocks=_load_final_blocks(translation_dir),
-            placeholder_map=placeholder_map,
-        )
-        chapter_results.append(result)
-        if result.status == "success":
-            chapters_out.joinpath(f"chapter-{chapter_number}.xhtml").write_text(
-                result.xhtml,
-                encoding="utf-8",
-            )
-            work_source_path.parent.mkdir(parents=True, exist_ok=True)
-            work_source_path.write_text(result.xhtml, encoding="utf-8")
+                chapter_results.append(result)
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_skipped",
+                    chapter_number=chapter_ref.chapter_number,
+                    severity="warning",
+                    message=f"EPUB rebuild skipped chapter {chapter_ref.chapter_number}: non-story chapter",
+                    reason="non_story_chapter",
+                )
+                continue
+            try:
+                chapter_path = chapter_ref.chapter_path
+                chapter_payload = _read_json(chapter_path)
+                chapter_number = int(chapter_payload["chapter_number"])
+                source_document_path = str(chapter_payload["source_document_path"])
+                source_path = paths.unpacked_dir / source_document_path
+                work_source_path = work_dir / source_document_path
+                translation_dir = paths.release_root / "runs" / run_id / "translation" / f"chapter-{chapter_number}"
+                placeholder_path = paths.extracted_placeholders_dir / f"chapter-{chapter_number}.json"
+                placeholder_map = _read_json(placeholder_path) if placeholder_path.exists() else {}
+                translated_blocks = _load_final_blocks(translation_dir)
+                if not translated_blocks:
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.translation_missing",
+                        chapter_number=chapter_number,
+                        severity="warning",
+                        message=f"EPUB rebuild found no translated blocks for chapter {chapter_number}",
+                        reason="missing_translated_blocks",
+                    )
+                result = rebuild_chapter_xhtml(
+                    source_xhtml=source_path.read_text(encoding="utf-8"),
+                    chapter_records=list(chapter_payload.get("records", [])),
+                    translated_blocks=translated_blocks,
+                    placeholder_map=placeholder_map,
+                )
+                chapter_results.append(result)
+                for flag in result.flags:
+                    severity = "error" if flag in {"xhtml_parse_failed"} else "warning"
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_warning",
+                        chapter_number=chapter_number,
+                        severity=severity,
+                        message=f"EPUB rebuild warning for chapter {chapter_number}: {flag}",
+                        reason=flag,
+                        missing_blocks=result.missing_blocks,
+                    )
+                if result.status == "success":
+                    chapter_artifact = chapters_out / f"chapter-{chapter_number}.xhtml"
+                    chapter_artifact.write_text(
+                        result.xhtml,
+                        encoding="utf-8",
+                    )
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.artifact_written",
+                        chapter_number=chapter_number,
+                        message=f"Rebuilt chapter artifact written for chapter {chapter_number}",
+                        artifact_path=str(chapter_artifact),
+                    )
+                    work_source_path.parent.mkdir(parents=True, exist_ok=True)
+                    work_source_path.write_text(result.xhtml, encoding="utf-8")
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_completed",
+                        chapter_number=chapter_number,
+                        message=f"EPUB rebuild completed for chapter {chapter_number}",
+                    )
+                else:
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_failed",
+                        chapter_number=chapter_number,
+                        severity="error",
+                        message=f"EPUB rebuild failed for chapter {chapter_number}",
+                        reason=";".join(result.flags) or "chapter_rebuild_failed",
+                        missing_blocks=result.missing_blocks,
+                    )
+            except Exception as exc:
+                logger.opt(exception=True).error(
+                    "EPUB rebuild failed for chapter {}",
+                    chapter_ref.chapter_number,
+                )
+                result = ChapterRebuildResult(
+                    chapter_number=chapter_ref.chapter_number,
+                    source_document_path=chapter_ref.source_document_path or "",
+                    xhtml="",
+                    status="failed",
+                    flags=["chapter_rebuild_exception"],
+                )
+                chapter_results.append(result)
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_failed",
+                    chapter_number=chapter_ref.chapter_number,
+                    severity="error",
+                    message=f"EPUB rebuild failed for chapter {chapter_ref.chapter_number}: {exc}",
+                    reason=str(exc),
+                )
 
-    rebuilt_path = rebuild_epub(work_dir, final_output)
-    report = validate_reconstruction(
-        release_id=release_id,
-        run_id=run_id,
-        chapter_results=chapter_results,
-        output_path=rebuilt_path,
-    )
-    _write_json(validation_report_path, report.to_json_dict())
-    _write_json(
-        reconstruction_root / "manifest.json",
-        {
-            "release_id": release_id,
-            "run_id": run_id,
-            "schema_version": "1.0",
-            "output_path": str(rebuilt_path),
-            "validation_report_path": str(validation_report_path),
-            "chapters": [chapter.to_json_dict() for chapter in chapter_results],
-        },
-    )
-    return RebuildResult(
-        release_id=release_id,
-        run_id=run_id,
-        status=report.status,
-        output_path=rebuilt_path,
-        validation_report_path=validation_report_path,
-        chapter_results=chapter_results,
-    )
+        try:
+            rebuilt_path = rebuild_epub(work_dir, final_output)
+        except Exception as exc:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.failed",
+                severity="error",
+                message=f"EPUB rebuild packaging failed: {exc}",
+                reason=str(exc),
+            )
+            raise
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.artifact_written",
+            message="Rebuilt EPUB artifact written",
+            artifact_path=str(rebuilt_path),
+        )
+        report = validate_reconstruction(
+            release_id=release_id,
+            run_id=run_id,
+            chapter_results=chapter_results,
+            output_path=rebuilt_path,
+        )
+        _write_json(validation_report_path, report.to_json_dict())
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.validation_completed",
+            severity="error" if report.status == "failed" else "info",
+            message=f"EPUB rebuild validation {report.status}",
+            status=report.status,
+            flags=report.flags,
+            artifact_path=str(validation_report_path),
+        )
+        _write_json(
+            reconstruction_root / "manifest.json",
+            {
+                "release_id": release_id,
+                "run_id": run_id,
+                "schema_version": "1.0",
+                "output_path": str(rebuilt_path),
+                "validation_report_path": str(validation_report_path),
+                "chapters": [chapter.to_json_dict() for chapter in chapter_results],
+            },
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.completed",
+            severity="error" if report.status == "failed" else "info",
+            message=f"EPUB rebuild completed with status {report.status}",
+            status=report.status,
+            failed_count=sum(1 for chapter in chapter_results if chapter.status == "failed"),
+            skipped_count=sum(1 for chapter in chapter_results if chapter.status == "skipped"),
+            artifact_path=str(rebuilt_path),
+        )
+        return RebuildResult(
+            release_id=release_id,
+            run_id=run_id,
+            status=report.status,
+            output_path=rebuilt_path,
+            validation_report_path=validation_report_path,
+            chapter_results=chapter_results,
+        )
+    except Exception as exc:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.failed",
+            severity="error",
+            message=f"EPUB rebuild failed: {exc}",
+            reason=str(exc),
+        )
+        raise

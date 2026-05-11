@@ -60,5 +60,5 @@ def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> No
             message=message,
             payload=dict(kwargs),
         )
-    except Exception as exc:
-        logger.debug("Failed to emit tracking event: {}", exc)
+    except Exception:
+        logger.opt(exception=True).debug("Failed to emit tracking event {}", event_type)

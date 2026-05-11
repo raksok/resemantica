@@ -4,6 +4,8 @@ import json
 import zipfile
 from pathlib import Path
 
+from loguru import logger
+
 from resemantica.epub.extractor import extract_epub
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pipeline import (
@@ -280,6 +282,7 @@ def test_pass2_fidelity_errors_with_corrected_text_returns_corrected() -> None:
 
 def test_pass2_json_parse_failure_falls_back_to_draft() -> None:
     client = MockLLMClient("This is not JSON.")
+    fallbacks = []
     result = translate_pass2(
         client=client,
         model_name="test-model",
@@ -287,8 +290,48 @@ def test_pass2_json_parse_failure_falls_back_to_draft() -> None:
         source_text="源文本",
         draft_text="Original draft text.",
         full_source_block="源文本",
+        chapter_number=7,
+        block_id="block-1",
+        fallback_callback=fallbacks.append,
     )
     assert result == "Original draft text."
+    assert fallbacks == [
+        {
+            "reason": "json_parse_failed",
+            "model_name": "test-model",
+            "chapter_number": 7,
+            "block_id": "block-1",
+            "segment_id": None,
+        }
+    ]
+
+
+def test_pass2_json_parse_failure_logs_context() -> None:
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), level="DEBUG", format="{message}")
+    try:
+        client = MockLLMClient("This is not JSON.")
+        result = translate_pass2(
+            client=client,
+            model_name="audit-model",
+            prompt_template="# version: 2.0\nSource: {SOURCE_TEXT}\nDraft: {DRAFT_TEXT}",
+            source_text="源文本",
+            draft_text="Original draft text.",
+            full_source_block="源文本",
+            chapter_number=12,
+            block_id="block-3",
+            segment_id="seg-4",
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert result == "Original draft text."
+    log_output = "\n".join(messages)
+    assert "Pass 2 JSON parse failed" in log_output
+    assert "audit-model" in log_output
+    assert "chapter=12" in log_output
+    assert "block=block-3" in log_output
+    assert "segment=seg-4" in log_output
 
 
 def test_pass2_fidelity_errors_empty_corrected_text_falls_back() -> None:
@@ -297,6 +340,7 @@ def test_pass2_fidelity_errors_empty_corrected_text_falls_back() -> None:
         "analysis": "Errors found but no correction provided.",
         "corrected_text": "",
     }))
+    fallbacks = []
     result = translate_pass2(
         client=client,
         model_name="test-model",
@@ -304,8 +348,10 @@ def test_pass2_fidelity_errors_empty_corrected_text_falls_back() -> None:
         source_text="源文本",
         draft_text="Original draft text.",
         full_source_block="源文本",
+        fallback_callback=fallbacks.append,
     )
     assert result == "Original draft text."
+    assert fallbacks[0]["reason"] == "empty_corrected_text"
 
 
 def test_pass2_fidelity_false_non_identical_corrected_text_ignored() -> None:

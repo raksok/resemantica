@@ -6,6 +6,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
+from loguru import logger
+
 from resemantica.chapters.manifest import ChapterRef
 from resemantica.glossary.candidate_gen import (
     RawCandidate,
@@ -100,9 +102,12 @@ def discover_candidates_from_extracted(
         text = _collect_source_text(payload)
 
         if not text:
+            logger.debug("Chapter {}: empty text, skipping", chapter_number)
             if event_callback:
                 event_callback("chapter_skipped", chapter_number, {"reason": "empty_text"})
             continue
+
+        logger.debug("Chapter {}: {} chars of source text collected", chapter_number, len(text))
 
         # Extract candidates for this chapter
         raw_candidates = generate_chapter_candidates(text)
@@ -141,6 +146,11 @@ def discover_candidates_from_extracted(
     )
 
     global_raw = list(merged_accumulator.values())
+    logger.debug(
+        "Corpus aggregation: {} unique terms across {} chapters, scoring...",
+        len(global_raw),
+        total_chapters,
+    )
     scored_list = score_candidates(global_raw, stats)
 
     # 3. Convert to GlossaryCandidate

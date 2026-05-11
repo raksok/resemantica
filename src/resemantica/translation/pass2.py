@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import logging
+from collections.abc import Callable
 from typing import Any
+
+from loguru import logger
 
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
-
-logger = logging.getLogger(__name__)
 
 
 def translate_pass2(
@@ -19,6 +19,10 @@ def translate_pass2(
     draft_text: str,
     full_source_block: str,
     prior_segment_translations: list[str] | None = None,
+    chapter_number: int | None = None,
+    block_id: str | None = None,
+    segment_id: str | None = None,
+    fallback_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     prior_segments = "\n".join(prior_segment_translations or [])
     prompt = render_named_sections(
@@ -35,7 +39,23 @@ def translate_pass2(
     try:
         result: dict[str, Any] = json.loads(response)
     except json.JSONDecodeError:
-        logger.warning("Pass 2 JSON parse failed, falling back to original draft")
+        payload = {
+            "reason": "json_parse_failed",
+            "model_name": model_name,
+            "chapter_number": chapter_number,
+            "block_id": block_id,
+            "segment_id": segment_id,
+        }
+        logger.warning(
+            "Pass 2 JSON parse failed; falling back to original draft "
+            "(model={}, chapter={}, block={}, segment={})",
+            model_name,
+            chapter_number,
+            block_id,
+            segment_id,
+        )
+        if fallback_callback is not None:
+            fallback_callback(payload)
         return draft_text
 
     fidelity_errors_found = result.get("fidelity_errors_found", False)
@@ -44,7 +64,23 @@ def translate_pass2(
 
     corrected_text = result.get("corrected_text", "")
     if not corrected_text:
-        logger.warning("Pass 2 fidelity errors found but corrected_text empty, falling back to original draft")
+        payload = {
+            "reason": "empty_corrected_text",
+            "model_name": model_name,
+            "chapter_number": chapter_number,
+            "block_id": block_id,
+            "segment_id": segment_id,
+        }
+        logger.warning(
+            "Pass 2 fidelity errors found but corrected_text is empty; falling back to original draft "
+            "(model={}, chapter={}, block={}, segment={})",
+            model_name,
+            chapter_number,
+            block_id,
+            segment_id,
+        )
+        if fallback_callback is not None:
+            fallback_callback(payload)
         return draft_text
 
     return str(corrected_text)

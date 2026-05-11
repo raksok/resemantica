@@ -4,6 +4,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Callable
 
+from loguru import logger
+
 from resemantica.glossary.models import GlossaryCandidate
 from resemantica.llm.client import LLMClient
 from resemantica.settings import AppConfig
@@ -64,7 +66,15 @@ def evaluate_candidate_batch(
                     for item in cached_data:
                         results.append(EvalResult(**item))
                     if event_callback:
-                        event_callback("eval_batch_cached", {"batch_size": len(batch)})
+                        event_callback("eval_batch_cached", {
+                            "batch_size": len(batch),
+                            "message": f"Eval batch {i // batch_size + 1}: {len(batch)} candidates (cached)",
+                        })
+                    logger.debug(
+                        "Eval batch {}: {} candidates loaded from cache",
+                        i // batch_size + 1,
+                        len(batch),
+                    )
                     continue
                 except Exception:
                     pass
@@ -90,7 +100,15 @@ def evaluate_candidate_batch(
         prompt = prompt_template.replace("{CANDIDATES_JSON}", json.dumps(candidates_json, ensure_ascii=False, indent=2))
 
         if event_callback:
-            event_callback("eval_batch_start", {"batch_size": len(batch)})
+            event_callback("eval_batch_start", {
+                "batch_size": len(batch),
+                "message": f"Evaluating batch {i // batch_size + 1}: {len(batch)} candidates",
+            })
+        logger.info(
+            "Eval batch {}: sending {} candidates to LLM",
+            i // batch_size + 1,
+            len(batch),
+        )
 
         try:
             resp_text = llm_client.generate_text(prompt=prompt, model_name=model_name)
@@ -132,11 +150,31 @@ def evaluate_candidate_batch(
                     json.dump([dataclasses.asdict(r) for r in batch_results], f, ensure_ascii=False, indent=2)
 
             if event_callback:
-                event_callback("eval_batch_success", {"batch_size": len(batch)})
+                event_callback("eval_batch_success", {
+                    "batch_size": len(batch),
+                    "message": f"Eval batch {i // batch_size + 1}: {len(batch_results)} results",
+                })
+            logger.debug(
+                "Eval batch {}: {} results (kept={}, rejected={})",
+                i // batch_size + 1,
+                len(batch_results),
+                sum(1 for r in batch_results if r.keep),
+                sum(1 for r in batch_results if not r.keep),
+            )
 
         except Exception as e:
             if event_callback:
-                event_callback("eval_batch_error", {"error": str(e), "batch_size": len(batch)})
+                event_callback("eval_batch_error", {
+                    "error": str(e),
+                    "batch_size": len(batch),
+                    "message": f"Eval batch {i // batch_size + 1} failed: {e}",
+                })
+            logger.warning(
+                "Eval batch {} failed ({}), defaulting {} candidates to rejected",
+                i // batch_size + 1,
+                e,
+                len(batch),
+            )
             # Default to reject if LLM fails
             for c in batch:
                 results.append(

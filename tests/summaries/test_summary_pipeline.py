@@ -263,7 +263,7 @@ def test_preprocess_summaries_emits_progress_events(tmp_path: Path, monkeypatch)
         unsubscribe("*", callback)
 
     event_types = [event.event_type for event in received]
-    assert event_types == [
+    expected_progress = [
         "preprocess-summaries.started",
         "preprocess-summaries.chapter_started",
         "preprocess-summaries.draft_generated",
@@ -271,6 +271,14 @@ def test_preprocess_summaries_emits_progress_events(tmp_path: Path, monkeypatch)
         "preprocess-summaries.chapter_completed",
         "preprocess-summaries.completed",
     ]
+    positions = [event_types.index(event_type) for event_type in expected_progress]
+    assert positions == sorted(positions)
+    assert "preprocess-summaries.generation_started" in event_types
+    assert "preprocess-summaries.generation_completed" in event_types
+    assert "preprocess-summaries.llm_validation_started" in event_types
+    assert "preprocess-summaries.llm_validation_completed" in event_types
+    assert "preprocess-summaries.english_derivation_started" in event_types
+    assert "preprocess-summaries.english_derivation_completed" in event_types
     assert received[0].payload["total_chapters"] == 1
     assert received[1].chapter_number == 1
     assert received[-1].payload["done"] == 1

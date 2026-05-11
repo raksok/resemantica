@@ -134,7 +134,7 @@ def extract_idioms(
     config: AppConfig | None = None,
     chapter_refs: list[ChapterRef] | None = None,
     cache_root: Path | None = None,
-    event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
+    event_callback: Callable[[str, int | None, dict[str, object]], None] | None = None,
     stop_token: StopToken | None = None,
     skip_llm_eval: bool = False,
     eval_batch_size: int = 50,
@@ -269,6 +269,11 @@ def extract_idioms(
             prompt_version=prompt_version,
             batch_size=eval_batch_size,
             cache_root=cache_root,
+            event_callback=(
+                (lambda event_name, payload: event_callback(event_name, None, payload))
+                if event_callback is not None
+                else None
+            ),
         )
         eval_by_id = {result.candidate_id: result for result in eval_results}
         for candidate in pending_eval:
