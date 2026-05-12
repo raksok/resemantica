@@ -156,3 +156,123 @@ def test_generate_text_logs_retry_warning(monkeypatch) -> None:
     assert "max_retries=2" in log_output
     assert "temporary outage" in log_output
     assert flaky.completions.calls == 2
+
+
+def test_translate_glossary_candidate_cleans_markdown_bold() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "**Azure Sect**")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="Azure Sect", category="faction", evidence_snippet="ctx",
+    )
+    assert result == "Azure Sect"
+
+
+def test_translate_glossary_candidate_cleans_markdown_italic() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "*small town*")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="small town", category="location", evidence_snippet="ctx",
+    )
+    assert result == "small town"
+
+
+def test_translate_glossary_candidate_cleans_think_tag() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "</think>\nChen Ping'an")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="Chen Ping'an", category="character", evidence_snippet="ctx",
+    )
+    assert result == "Chen Ping'an"
+
+
+def test_translate_glossary_candidate_cleans_parenthetical() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "xianxia (traditional Chinese fantasy)")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="xianxia", category="concept", evidence_snippet="ctx",
+    )
+    assert result == "xianxia"
+
+
+def test_translate_glossary_candidate_cleans_semicolons() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "Peaceful; safe; secure.")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="peaceful", category="concept", evidence_snippet="ctx",
+    )
+    assert result == "Peaceful"
+
+
+def test_translate_glossary_candidate_rejects_chinese_chars() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "Azure Sect崔东山")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="崔东山", category="character", evidence_snippet="ctx",
+    )
+    assert result == ""
+
+
+def test_translate_glossary_candidate_cleans_smart_quotes() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "\u201cAzure Sect\u201d")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="Azure Sect", category="faction", evidence_snippet="ctx",
+    )
+    assert result == "Azure Sect"
+
+
+def test_translate_glossary_candidate_cleans_label_prefix() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "Translation: Azure Sect")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="Azure Sect", category="faction", evidence_snippet="ctx",
+    )
+    assert result == "Azure Sect"
+
+
+def test_translate_glossary_candidate_cleans_english_prefix() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "English: Azure Sect")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="Azure Sect", category="faction", evidence_snippet="ctx",
+    )
+    assert result == "Azure Sect"
+
+
+def test_translate_glossary_candidate_cleans_trailing_period() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "small town.")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="small town", category="location", evidence_snippet="ctx",
+    )
+    assert result == "small town"
+
+
+def test_translate_glossary_candidate_cleans_cot_then_answer() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "I think this refers to a sect.\nAzure Sect")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="Azure Sect", category="faction", evidence_snippet="ctx",
+    )
+    assert result == "Azure Sect"
+
+
+def test_translate_glossary_candidate_passes_clean_term() -> None:
+    client = LLMClient(base_url="http://local", timeout_seconds=30,
+                       generation_hook=lambda m, p: "Chen Ping'an")
+    result = client.translate_glossary_candidate(
+        model_name="test", prompt_template="translate {SOURCE_TERM}",
+        source_term="Chen Ping'an", category="character", evidence_snippet="ctx",
+    )
+    assert result == "Chen Ping'an"

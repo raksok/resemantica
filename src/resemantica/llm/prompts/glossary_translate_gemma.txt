@@ -1,0 +1,15 @@
+# version: 2.1
+
+CONTEXT: {EVIDENCE_SNIPPET}
+
+Translate the Chinese glossary term ({CATEGORY}) to English.
+
+STRICT RULES:
+- Output ONLY the English translation (1-5 words max)
+- NO definitions, NO explanations, NO semicolons
+- NO parentheses, NO slashes, NO Chinese characters
+- If uncertain, give your best concise guess
+
+Term: {SOURCE_TERM}
+
+English:

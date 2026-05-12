@@ -151,13 +151,32 @@ class LLMClient:
         translated = self.generate_text(model_name=model_name, prompt=prompt).strip()
         # Strip common label prefixes that LLMs sometimes echo back
         translated = re.sub(
-            r'^(Category|Translation|Term|Evidence|Output|Result)\s*:\s*',
+            r'^(Category|Translation|Term|Evidence|Output|Result|English)\s*:\s*',
             '', translated, flags=re.IGNORECASE | re.MULTILINE
         ).strip()
         # Take last non-empty line (defense against chain-of-thought before answer)
         lines = [ln.strip() for ln in translated.splitlines() if ln.strip()]
         if lines:
             translated = lines[-1]
+        # Strip think/thought artifacts (Qwen CoT leakage)
+        translated = re.sub(r'</?think>', '', translated, flags=re.IGNORECASE).strip()
+        translated = re.sub(r'</?thought>', '', translated, flags=re.IGNORECASE).strip()
+        # Strip markdown bold and italic (unwrapped)
+        translated = re.sub(r'\*\*(.+?)\*\*', r'\1', translated)
+        translated = re.sub(r'\*(.+?)\*', r'\1', translated)
+        # Strip smart quotes that wrap the entire term
+        translated = translated.strip('\u201c\u201d\u2018\u2019"\'"')
+        # Strip parenthetical annotations (definitions, literal translations)
+        translated = re.sub(r'\s*\([^)]*\)\s*', ' ', translated).strip()
+        # Strip trailing period for multi-word results
+        if ' ' in translated:
+            translated = translated.rstrip('.。')
+        # Handle semicolons: take first segment
+        if ';' in translated:
+            translated = translated.split(';')[0].strip()
+        # Reject if Chinese characters remain
+        if re.search(r'[\u4e00-\u9fff]', translated):
+            translated = ''
         return translated
 
     def _record_response_usage(self, response: Any) -> None:
