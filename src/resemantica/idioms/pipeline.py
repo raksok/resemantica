@@ -551,10 +551,20 @@ def preprocess_idioms(
             reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
         for candidate_id, reasons in reasons_by_candidate.items():
             mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
+        promoted_ids: list[str] = []
         for candidate_id in validation.promoted_candidate_ids:
             if candidate_id in reasons_by_candidate:
                 continue
             mark_candidate_promoted(conn, candidate_id=candidate_id)
+            promoted_ids.append(candidate_id)
+
+        if promoted_ids:
+            _placeholders = ",".join("?" for _ in promoted_ids)
+            conn.execute(
+                f"DELETE FROM idiom_conflicts "
+                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                [*promoted_ids, release_id],
+            )
 
         _write_candidate_snapshot(
             conn,
@@ -854,10 +864,20 @@ def promote_idiom_candidates(
             reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
         for candidate_id, reasons in reasons_by_candidate.items():
             mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
+        promoted_ids: list[str] = []
         for candidate_id in validation.promoted_candidate_ids:
             if candidate_id in reasons_by_candidate:
                 continue
             mark_candidate_promoted(conn, candidate_id=candidate_id)
+            promoted_ids.append(candidate_id)
+
+        if promoted_ids:
+            _placeholders = ",".join("?" for _ in promoted_ids)
+            conn.execute(
+                f"DELETE FROM idiom_conflicts "
+                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                [*promoted_ids, release_id],
+            )
 
         _write_candidate_snapshot(
             conn,

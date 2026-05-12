@@ -839,6 +839,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"conflict_count={result['conflict_count']}")
             print(f"candidates_artifact={result['candidates_artifact']}")
             print(f"conflicts_artifact={result['conflicts_artifact']}")
+            if result.get("conflict_count", 0) > 0:
+                import json as _json
+                _conflicts_path = result["conflicts_artifact"]
+                try:
+                    _conflicts = _json.loads(Path(_conflicts_path).read_text(encoding="utf-8"))
+                    for _c in _conflicts:
+                        print(f"  conflict: {_c.get('candidate_id', '?')} — {_c.get('conflict_reason', '?')}")
+                except Exception:
+                    pass
             return 0
 
         if args.preprocess_command == "summaries":
@@ -915,6 +924,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"candidates_artifact={result['candidates_artifact']}")
             print(f"policies_artifact={result['policies_artifact']}")
             print(f"conflicts_artifact={result['conflicts_artifact']}")
+            if result.get("conflict_count", 0) > 0:
+                import json as _json
+                _conflicts_path = result["conflicts_artifact"]
+                try:
+                    _conflicts = _json.loads(Path(_conflicts_path).read_text(encoding="utf-8"))
+                    for _c in _conflicts:
+                        print(f"  conflict: {_c.get('candidate_id', '?')} — {_c.get('conflict_reason', '?')}")
+                except Exception:
+                    pass
             return 0
 
         if args.preprocess_command == "graph":

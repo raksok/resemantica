@@ -645,6 +645,15 @@ def promote_glossary_candidates(
         for entry in promotable_without_conflicts:
             mark_candidate_promoted(conn, candidate_id=entry.source_candidate_id)
 
+        if promotable_without_conflicts:
+            _promoted_ids = [e.source_candidate_id for e in promotable_without_conflicts]
+            _placeholders = ",".join("?" for _ in _promoted_ids)
+            conn.execute(
+                f"DELETE FROM glossary_conflicts "
+                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                [*_promoted_ids, release_id],
+            )
+
         _write_candidate_snapshot(
             conn,
             release_id=release_id,
