@@ -318,6 +318,25 @@ def generate_chapter_summary(
     cache_root: Path | None = None,
 ) -> GeneratedChapterSummary | None:
     config_obj = config or load_config()
+
+    _existing = conn.execute(
+        """
+        SELECT is_story_chapter
+        FROM summary_drafts
+        WHERE release_id = ?
+          AND chapter_number = ?
+          AND summary_type = 'chapter_summary_zh_structured'
+        LIMIT 1
+        """,
+        (release_id, chapter_number),
+    ).fetchone()
+    if _existing is not None and int(_existing["is_story_chapter"]) == 0:
+        logger.info(
+            "Chapter {}: respecting existing non-story flag, skipping LLM",
+            chapter_number,
+        )
+        return None
+
     try:
         parsed, raw_output = _generate_structured_summary(
             release_id=release_id,
