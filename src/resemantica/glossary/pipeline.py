@@ -628,6 +628,15 @@ def promote_glossary_candidates(
             approval_run_id=run_id,
         )
 
+        # Wipe old conflicts for all candidates — only current results appear
+        if promotable_candidates:
+            _all_ids = [c.candidate_id for c in promotable_candidates]
+            _placeholders = ",".join("?" for _ in _all_ids)
+            conn.execute(
+                f"DELETE FROM glossary_conflicts "
+                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                [*_all_ids, release_id],
+            )
         insert_conflicts(conn, conflicts=conflicts)
 
         reasons_by_candidate: dict[str, list[str]] = {}
@@ -644,15 +653,6 @@ def promote_glossary_candidates(
         promote_locked_entries(conn, entries=promotable_without_conflicts)
         for entry in promotable_without_conflicts:
             mark_candidate_promoted(conn, candidate_id=entry.source_candidate_id)
-
-        if promotable_without_conflicts:
-            _promoted_ids = [e.source_candidate_id for e in promotable_without_conflicts]
-            _placeholders = ",".join("?" for _ in _promoted_ids)
-            conn.execute(
-                f"DELETE FROM glossary_conflicts "
-                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
-                [*_promoted_ids, release_id],
-            )
 
         _write_candidate_snapshot(
             conn,

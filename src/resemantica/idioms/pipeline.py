@@ -543,6 +543,16 @@ def preprocess_idioms(
             existing_policies=existing_policies,
             approval_run_id=run_id,
         )
+
+        # Wipe old conflicts for all candidates — only current results appear
+        if pending_candidates:
+            _all_ids = [c.candidate_id for c in pending_candidates]
+            _placeholders = ",".join("?" for _ in _all_ids)
+            conn.execute(
+                f"DELETE FROM idiom_conflicts "
+                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                [*_all_ids, release_id],
+            )
         insert_conflicts(conn, conflicts=validation.conflicts)
         promote_policies(conn, policies=validation.promotion_entries)
 
@@ -551,20 +561,10 @@ def preprocess_idioms(
             reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
         for candidate_id, reasons in reasons_by_candidate.items():
             mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
-        promoted_ids: list[str] = []
         for candidate_id in validation.promoted_candidate_ids:
             if candidate_id in reasons_by_candidate:
                 continue
             mark_candidate_promoted(conn, candidate_id=candidate_id)
-            promoted_ids.append(candidate_id)
-
-        if promoted_ids:
-            _placeholders = ",".join("?" for _ in promoted_ids)
-            conn.execute(
-                f"DELETE FROM idiom_conflicts "
-                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
-                [*promoted_ids, release_id],
-            )
 
         _write_candidate_snapshot(
             conn,
@@ -856,6 +856,16 @@ def promote_idiom_candidates(
             existing_policies=existing_policies,
             approval_run_id=run_id,
         )
+
+        # Wipe old conflicts for all candidates — only current results appear
+        if pending_candidates:
+            _all_ids = [c.candidate_id for c in pending_candidates]
+            _placeholders = ",".join("?" for _ in _all_ids)
+            conn.execute(
+                f"DELETE FROM idiom_conflicts "
+                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                [*_all_ids, release_id],
+            )
         insert_conflicts(conn, conflicts=validation.conflicts)
         promote_policies(conn, policies=validation.promotion_entries)
 
@@ -864,20 +874,10 @@ def promote_idiom_candidates(
             reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
         for candidate_id, reasons in reasons_by_candidate.items():
             mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
-        promoted_ids: list[str] = []
         for candidate_id in validation.promoted_candidate_ids:
             if candidate_id in reasons_by_candidate:
                 continue
             mark_candidate_promoted(conn, candidate_id=candidate_id)
-            promoted_ids.append(candidate_id)
-
-        if promoted_ids:
-            _placeholders = ",".join("?" for _ in promoted_ids)
-            conn.execute(
-                f"DELETE FROM idiom_conflicts "
-                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
-                [*promoted_ids, release_id],
-            )
 
         _write_candidate_snapshot(
             conn,
