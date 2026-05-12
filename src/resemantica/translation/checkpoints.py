@@ -15,6 +15,7 @@ class CheckpointRecord:
     pass_name: str
     source_hash: str
     prompt_version: str
+    packet_version_hash: str
     status: str
     artifact_path: str
     updated_at: str
@@ -36,11 +37,13 @@ def load_checkpoint(
     pass_name: str,
     source_hash: str,
     prompt_version: str,
+    packet_version_hash: str = "",
 ) -> CheckpointRecord | None:
     row = conn.execute(
         """
         SELECT release_id, run_id, chapter_number, pass_name,
-               source_hash, prompt_version, status, artifact_path, updated_at
+               source_hash, prompt_version, packet_version_hash,
+               status, artifact_path, updated_at
         FROM translation_checkpoints
         WHERE release_id = ?
           AND run_id = ?
@@ -48,8 +51,9 @@ def load_checkpoint(
           AND pass_name = ?
           AND source_hash = ?
           AND prompt_version = ?
+          AND packet_version_hash = ?
         """,
-        (release_id, run_id, chapter_number, pass_name, source_hash, prompt_version),
+        (release_id, run_id, chapter_number, pass_name, source_hash, prompt_version, packet_version_hash),
     ).fetchone()
     if row is None:
         return None
@@ -60,6 +64,7 @@ def load_checkpoint(
         pass_name=str(row["pass_name"]),
         source_hash=str(row["source_hash"]),
         prompt_version=str(row["prompt_version"]),
+        packet_version_hash=str(row["packet_version_hash"]),
         status=str(row["status"]),
         artifact_path=str(row["artifact_path"]),
         updated_at=str(row["updated_at"]),
@@ -75,6 +80,7 @@ def save_checkpoint(
     pass_name: str,
     source_hash: str,
     prompt_version: str,
+    packet_version_hash: str = "",
     status: str,
     artifact_path: str,
 ) -> CheckpointRecord:
@@ -84,13 +90,15 @@ def save_checkpoint(
             """
             INSERT INTO translation_checkpoints(
                 release_id, run_id, chapter_number, pass_name,
-                source_hash, prompt_version, status, artifact_path, updated_at
+                source_hash, prompt_version, packet_version_hash,
+                status, artifact_path, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(release_id, run_id, chapter_number, pass_name)
             DO UPDATE SET
                 source_hash = excluded.source_hash,
                 prompt_version = excluded.prompt_version,
+                packet_version_hash = excluded.packet_version_hash,
                 status = excluded.status,
                 artifact_path = excluded.artifact_path,
                 updated_at = excluded.updated_at
@@ -102,6 +110,7 @@ def save_checkpoint(
                 pass_name,
                 source_hash,
                 prompt_version,
+                packet_version_hash,
                 status,
                 artifact_path,
                 updated_at,
@@ -114,6 +123,7 @@ def save_checkpoint(
         pass_name=pass_name,
         source_hash=source_hash,
         prompt_version=prompt_version,
+        packet_version_hash=packet_version_hash,
         status=status,
         artifact_path=artifact_path,
         updated_at=updated_at,

@@ -365,11 +365,11 @@ produce provisional English renderings. Updates candidates.json.""",
 
     glossary_review = preprocess_subparsers.add_parser(
         "glossary-review", aliases=["gls-review"],
-        help="Generate a human-editable review file for translated candidates.",
+        help="Generate a human-editable review file(s) for translated candidates.",
         description="""\
-Generates a human-editable JSON review file of translated glossary
-candidates. Edit the file to override translations, mark deletions, or
-add entries, then run glossary-promote to apply changes.""",
+Generates a human-editable review file (review.json and review.tsv) of translated
+glossary candidates. Edit review.tsv in Excel to override translations, mark
+deletions, or add entries, then run glossary-promote to apply changes.""",
     )
     _add_common_release_args(glossary_review, default_run="glossary-review")
     _add_chapter_scope_args(glossary_review)
@@ -391,7 +391,7 @@ glossary-review run before promotion.""",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to a review.json file from glossary-review. Applies user edits before promotion.",
+        help="Path to review.json or review.tsv from glossary-review. Applies user edits before promotion.",
     )
 
     summaries = preprocess_subparsers.add_parser(

@@ -325,6 +325,230 @@ def test_multi_model_glossary_translation_majority_and_review_alternatives(
     ]
 
 
+def test_review_tsv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-tsv"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    translator = ModelMappedGlossaryTranslator({
+        ("model-a", "青云门"): "Azure Sect",
+        ("model-b", "青云门"): "Azure Sect",
+        ("model-c", "青云门"): "Blue Cloud Gate",
+        ("model-a", "苍云门"): "Cangyun Gate",
+        ("model-b", "苍云门"): "Azure Cloud Sect",
+        ("model-c", "苍云门"): "Blue Cloud Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    translate_glossary_candidates(
+        release_id=release_id, run_id="translate-001", config=config, llm_client=translator,
+    )
+
+    review = review_glossary_candidates(release_id=release_id, run_id="review-001")
+    assert review["entries_written"] == 2
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
+    assert tsv_path.exists(), f"TSV review file not found: {tsv_path}"
+
+    import csv
+    with open(tsv_path, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        rows = list(reader)
+    assert len(rows) == 3  # header + 2 entries
+    assert rows[0] == ["action", "source_term", "category", "translation",
+                       "candidate_id", "evidence_snippet", "alternatives"]
+    row_keep = next(r for r in rows[1:] if r[1] == "青云门")
+    assert row_keep[0] == "keep"
+    assert row_keep[3] == "Azure Sect"
+    assert "Azure Sect" in row_keep[6] and "Blue Cloud Gate" in row_keep[6]
+
+    json_data = json.loads(paths.glossary_review_path.read_text(encoding="utf-8"))
+    tsv_sources = {r[1] for r in rows[1:]}
+    json_sources = {e["source_term"] for e in json_data["entries"]}
+    assert tsv_sources == json_sources
+
+
+def test_promote_with_tsv_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-tsv-promote"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+
+    translator = ModelMappedGlossaryTranslator({
+        ("model-a", "青云门"): "Azure Sect",
+        ("model-b", "青云门"): "Azure Sect",
+        ("model-c", "青云门"): "Blue Cloud Gate",
+        ("model-a", "苍云门"): "Cangyun Gate",
+        ("model-b", "苍云门"): "Azure Cloud Sect",
+        ("model-c", "苍云门"): "Blue Cloud Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    translate_glossary_candidates(
+        release_id=release_id, run_id="translate-001", config=config, llm_client=translator,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        rows = conn.execute(
+            "SELECT candidate_id, source_term FROM glossary_candidates WHERE release_id = ?",
+            (release_id,),
+        ).fetchall()
+        ids = {str(r["source_term"]): str(r["candidate_id"]) for r in rows}
+    finally:
+        conn.close()
+
+    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
+    tsv_content = (
+        "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives\n"
+        f"keep\t青云门\tfaction\tOverridden Azure\t{ids['青云门']}\t\t\n"
+        f"delete\t苍云门\tfaction\t\t{ids['苍云门']}\t\t\n"
+    )
+    tsv_path.write_text(tsv_content, encoding="utf-8")
+
+    result = promote_glossary_candidates(
+        release_id=release_id, run_id="promote-001", review_file_path=tsv_path,
+    )
+    assert result["status"] == "success"
+
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        locked = list_locked_entries(conn, release_id=release_id)
+        locked_names = {e.source_term: e.target_term for e in locked}
+        assert "青云门" in locked_names, "Overridden keep entry should be promoted"
+        assert locked_names["青云门"] == "Overridden Azure"
+        assert "苍云门" not in locked_names, "Deleted entry should not be promoted"
+    finally:
+        conn.close()
+
+
+def test_promote_with_tsv_add_entry(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-tsv-add"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+
+    translator = ModelMappedGlossaryTranslator({
+        ("model-a", "青云门"): "Azure Sect",
+        ("model-b", "青云门"): "Azure Sect",
+        ("model-c", "青云门"): "Blue Cloud Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    translate_glossary_candidates(
+        release_id=release_id, run_id="translate-001", config=config, llm_client=translator,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        row = conn.execute(
+            "SELECT candidate_id FROM glossary_candidates WHERE release_id = ? AND source_term = ?",
+            (release_id, "青云门"),
+        ).fetchone()
+        qingyun_id = str(row["candidate_id"]) if row else ""
+    finally:
+        conn.close()
+
+    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
+    tsv_content = (
+        "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives\n"
+        f"keep\t青云门\tfaction\tAzure Sect\t{qingyun_id}\t\t\n"
+        "add\t新门派\tfaction\tNew Sect\t\t源自新章节的文本\t\n"
+    )
+    tsv_path.write_text(tsv_content, encoding="utf-8")
+
+    result = promote_glossary_candidates(
+        release_id=release_id, run_id="promote-001", review_file_path=tsv_path,
+    )
+    assert result["status"] == "success"
+
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        locked = list_locked_entries(conn, release_id=release_id)
+        locked_names = {e.source_term: e.target_term for e in locked}
+        assert "青云门" in locked_names
+        assert "新门派" in locked_names
+        assert locked_names["新门派"] == "New Sect"
+    finally:
+        conn.close()
+
+
+def test_promote_tsv_bad_header_raises(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "bad.tsv"
+    tsv_path.write_text("col1\tcol2\tcol3\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid header"):
+        from resemantica.glossary.pipeline import _read_review_data
+        _read_review_data(tsv_path)
+
+
+def test_promote_tsv_empty_is_noop(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-tsv-empty"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+
+    translator = ModelMappedGlossaryTranslator({
+        ("model-a", "青云门"): "Azure Sect",
+        ("model-b", "青云门"): "Azure Sect",
+        ("model-c", "青云门"): "Blue Cloud Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    translate_glossary_candidates(
+        release_id=release_id, run_id="translate-001", config=config, llm_client=translator,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
+    tsv_content = "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives\n"
+    tsv_path.write_text(tsv_content, encoding="utf-8")
+
+    result = promote_glossary_candidates(
+        release_id=release_id, run_id="promote-001", review_file_path=tsv_path,
+    )
+    assert result["status"] == "success"
+
+
+def test_promote_json_still_works(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-json-backward"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+
+    translator = ModelMappedGlossaryTranslator({
+        ("model-a", "青云门"): "Azure Sect",
+        ("model-b", "青云门"): "Azure Sect",
+        ("model-c", "青云门"): "Blue Cloud Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    translate_glossary_candidates(
+        release_id=release_id, run_id="translate-001", config=config, llm_client=translator,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    json_path = paths.glossary_review_path
+    review = review_glossary_candidates(release_id=release_id, run_id="review-001")
+    assert review["entries_written"] == 1
+
+    result = promote_glossary_candidates(
+        release_id=release_id, run_id="promote-001", review_file_path=json_path,
+    )
+    assert result["status"] == "success"
+
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        locked = list_locked_entries(conn, release_id=release_id)
+        assert any(e.source_term == "青云门" for e in locked)
+    finally:
+        conn.close()
+
+
 def test_discovery_builds_llm_client_from_config(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _extract_one_chapter(
@@ -586,3 +810,19 @@ def test_exact_match_precedence_over_fallback(tmp_path: Path, monkeypatch) -> No
         fallback_target_term="Fuzzy Candidate Name",
     )
     assert resolved == "Azure Sect"
+
+
+def test_prompt_name_for_model() -> None:
+    from resemantica.glossary.pipeline import _prompt_name_for_model
+
+    # Default: HY-MT keeps the original prompt
+    assert _prompt_name_for_model("HY-MT1.5-7B") == "glossary_translate.txt"
+
+    # Gemma: gets model-specific prompt
+    assert _prompt_name_for_model("Gemma-4-E4B-it-UD-Q6_K_XL") == "glossary_translate_gemma.txt"
+
+    # Qwen: gets model-specific prompt
+    assert _prompt_name_for_model("Qwopus3.5-9B") == "glossary_translate_qwen.txt"
+
+    # Unknown model falls back to default
+    assert _prompt_name_for_model("Some-Other-Model") == "glossary_translate.txt"

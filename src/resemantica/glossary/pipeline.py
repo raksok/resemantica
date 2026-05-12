@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -350,6 +351,15 @@ def discover_glossary_candidates(
     }
 
 
+def _prompt_name_for_model(model_name: str) -> str:
+    lowered = model_name.lower()
+    if "gemma" in lowered:
+        return "glossary_translate_gemma.txt"
+    if "qwen" in lowered or "qwopus" in lowered:
+        return "glossary_translate_qwen.txt"
+    return "glossary_translate.txt"
+
+
 def translate_glossary_candidates(
     *,
     release_id: str,
@@ -361,10 +371,18 @@ def translate_glossary_candidates(
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
-    prompt = load_prompt("glossary_translate.txt")
     client = _build_llm_client(config_obj, llm_client)
     usage_before = capture_usage_snapshot(client)
     translator_names = config_obj.models.effective_preprocess_translator_names()
+
+    # Load per-model prompts so each model gets the right instruction format
+    model_prompts: dict[str, str] = {}
+    model_prompt_versions: dict[str, str] = {}
+    for model_name in translator_names:
+        prompt_name = _prompt_name_for_model(model_name)
+        pt = load_prompt(prompt_name)
+        model_prompts[model_name] = pt.template
+        model_prompt_versions[model_name] = pt.version
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
@@ -420,10 +438,12 @@ def translate_glossary_candidates(
                     chapter_number=chapter,
                 )
         for model_name in translator_names:
+            prompt_template = model_prompts.get(model_name, model_prompts.get(translator_names[0], ""))
+            prompt_version = model_prompt_versions.get(model_name, "unknown")
             for candidate in pending:
                 translated = client.translate_glossary_candidate(
                     model_name=model_name,
-                    prompt_template=prompt.template,
+                    prompt_template=prompt_template,
                     source_term=candidate.source_term,
                     category=candidate.category,
                     evidence_snippet=candidate.evidence_snippet,
@@ -434,7 +454,7 @@ def translate_glossary_candidates(
                     release_id=release_id,
                     translation_run_id=run_id,
                     model_name=model_name,
-                    prompt_version=prompt.version,
+                    prompt_version=prompt_version,
                     raw_output=translated,
                     cleaned_output=translated,
                     normalized_output=normalize_term(translated),
@@ -464,7 +484,7 @@ def translate_glossary_candidates(
                     target_term=resolution["target_term"],
                     normalized_target_term=resolution["normalized_target_term"],
                     translator_model_name=resolution["model_name"],
-                    translator_prompt_version=prompt.version,
+                    translator_prompt_version=model_prompt_versions.get(resolution.get("model_name", ""), "unknown"),
                 )
                 translated_count += 1
             else:
@@ -594,11 +614,7 @@ def promote_glossary_candidates(
         if review_file_path is not None:
             if not review_file_path.exists():
                 raise FileNotFoundError(f"Review file not found: {review_file_path}")
-            review_data = json.loads(review_file_path.read_text(encoding="utf-8"))
-            if review_data.get("review_schema_version") != 1:
-                raise ValueError(
-                    f"Unsupported review schema version: {review_data.get('review_schema_version')}"
-                )
+            review_data = _read_review_data(review_file_path)
             promotable_candidates = _apply_review_overrides(
                 conn, release_id=release_id, review_data=review_data
             )
@@ -693,6 +709,7 @@ def _apply_review_overrides(
     release_id: str,
     review_data: dict[str, Any],
 ) -> list[GlossaryCandidate]:
+    from dataclasses import replace as _dataclass_replace
     from hashlib import sha256 as _sha256
 
     from resemantica.db.glossary_repo import list_candidates as _list_candidates
@@ -734,6 +751,14 @@ def _apply_review_overrides(
                 WHERE candidate_id = ?
                 """,
                 (new_translation, normalized, cid),
+            )
+            all_candidates[cid] = _dataclass_replace(
+                candidate,
+                candidate_translation_en=new_translation,
+                normalized_target_term=normalized,
+                candidate_status="translated",
+                validation_status="pending",
+                conflict_reason=None,
             )
         applied_ids.add(cid)
 
@@ -788,6 +813,73 @@ def _apply_review_overrides(
         if candidate is not None and (candidate.candidate_translation_en or "").strip():
             result.append(candidate)
     return result
+
+
+_TSV_HEADER = ["action", "source_term", "category", "translation",
+                "candidate_id", "evidence_snippet", "alternatives"]
+
+
+def _write_review_tsv(path: Path, entries: list[dict[str, Any]]) -> None:
+    rows: list[list[str]] = [_TSV_HEADER]
+    for entry in entries:
+        snippet = (entry.get("evidence_snippet") or "")
+        snippet = snippet.replace("\n", " ").replace("\r", " ")
+        if len(snippet) > 120:
+            snippet = snippet[:117] + "..."
+        alts = [a.get("translation", "") for a in (entry.get("alternatives") or [])]
+        rows.append([
+            entry.get("action") or "keep",
+            entry.get("source_term") or "",
+            entry.get("category") or "",
+            entry.get("translation") or "",
+            entry.get("candidate_id") or "",
+            snippet,
+            "|".join(alts),
+        ])
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerows(rows)
+
+
+def _read_review_tsv(path: Path) -> dict[str, Any]:
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f, delimiter="\t")
+        raw_rows = list(reader)
+    if not raw_rows:
+        raise ValueError("Review TSV is empty")
+    header = raw_rows[0]
+    if header != _TSV_HEADER:
+        raise ValueError(
+            f"Review TSV has invalid header. Expected: {_TSV_HEADER!r}, got: {header!r}"
+        )
+    entries: list[dict[str, Any]] = []
+    for row in raw_rows[1:]:
+        if len(row) < len(_TSV_HEADER):
+            row += [""] * (len(_TSV_HEADER) - len(row))
+        action = row[0].strip().lower() if row[0].strip() else "keep"
+        entries.append({
+            "candidate_id": row[4].strip() or None,
+            "source_term": row[1].strip(),
+            "category": row[2].strip(),
+            "translation": row[3].strip(),
+            "action": action,
+            "evidence_snippet": row[5].strip(),
+        })
+    return {
+        "review_schema_version": 1,
+        "entries": entries,
+    }
+
+
+def _read_review_data(review_file_path: Path) -> dict[str, Any]:
+    if review_file_path.suffix.lower() == ".tsv":
+        return _read_review_tsv(review_file_path)
+    review_data: dict[str, Any] = json.loads(review_file_path.read_text(encoding="utf-8"))
+    if review_data.get("review_schema_version") != 1:
+        raise ValueError(
+            f"Unsupported review schema version: {review_data.get('review_schema_version')}"
+        )
+    return review_data
 
 
 def review_glossary_candidates(
@@ -850,6 +942,7 @@ def review_glossary_candidates(
         "entries": entries,
     }
     _write_json(paths.glossary_review_path, review_data)
+    _write_review_tsv(paths.glossary_review_path.with_suffix(".tsv"), entries)
     _emit(
         run_id,
         release_id,

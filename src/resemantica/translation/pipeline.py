@@ -7,6 +7,7 @@ from typing import Any
 
 from loguru import logger
 
+from resemantica.db.packet_repo import get_latest_packet_metadata
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
@@ -196,6 +197,11 @@ def translate_chapter_pass1(
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
 
+    packet_meta = get_latest_packet_metadata(
+        conn, release_id=release_id, chapter_number=chapter_number
+    )
+    packet_version_hash = packet_meta.packet_hash if packet_meta else ""
+
     try:
         _emit_translation_event(
             release_id=release_id,
@@ -215,6 +221,7 @@ def translate_chapter_pass1(
             pass_name="pass1",
             source_hash=source_hash,
             prompt_version=pass1_prompt.version,
+            packet_version_hash=packet_version_hash,
         )
 
         if (
@@ -527,6 +534,7 @@ def translate_chapter_pass1(
                 pass_name="pass1",
                 source_hash=source_hash,
                 prompt_version=pass1_prompt.version,
+                packet_version_hash=packet_version_hash,
                 status=str(pass1_payload["status"]),
                 artifact_path=str(pass1_artifact_path),
             )
@@ -882,6 +890,11 @@ def translate_chapter_pass2(
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
 
+    packet_meta = get_latest_packet_metadata(
+        conn, release_id=release_id, chapter_number=chapter_number
+    )
+    packet_version_hash = packet_meta.packet_hash if packet_meta else ""
+
     try:
         _emit_translation_event(
             release_id=release_id,
@@ -901,6 +914,7 @@ def translate_chapter_pass2(
             pass_name="pass2",
             source_hash=source_hash,
             prompt_version=pass2_prompt.version,
+            packet_version_hash=packet_version_hash,
         )
 
         if (
@@ -1015,6 +1029,7 @@ def translate_chapter_pass2(
                 pass_name="pass2",
                 source_hash=source_hash,
                 prompt_version=pass2_prompt.version,
+                packet_version_hash=packet_version_hash,
                 status=str(pass2_payload["status"]),
                 artifact_path=str(pass2_artifact_path),
             )
@@ -1199,6 +1214,11 @@ def translate_chapter_pass3(
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
 
+    packet_meta = get_latest_packet_metadata(
+        conn, release_id=release_id, chapter_number=chapter_number
+    )
+    packet_version_hash = packet_meta.packet_hash if packet_meta else ""
+
     try:
         _emit_translation_event(
             release_id=release_id,
@@ -1216,6 +1236,7 @@ def translate_chapter_pass3(
             pass_name="pass3",
             source_hash=source_hash,
             prompt_version=pass3_prompt.version,
+            packet_version_hash=packet_version_hash,
         )
 
         if (
@@ -1419,6 +1440,7 @@ def translate_chapter_pass3(
             pass_name="pass3",
             source_hash=source_hash,
             prompt_version=pass3_prompt.version,
+            packet_version_hash=packet_version_hash,
             status="success",
             artifact_path=str(pass3_artifact_path),
         )

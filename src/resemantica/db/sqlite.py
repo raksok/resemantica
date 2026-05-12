@@ -53,6 +53,7 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             pass_name TEXT NOT NULL,
             source_hash TEXT NOT NULL,
             prompt_version TEXT NOT NULL,
+            packet_version_hash TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL,
             artifact_path TEXT NOT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
