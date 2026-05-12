@@ -130,6 +130,48 @@ class TestCliDispatch:
         args = parser.parse_args(["preprocess", "graph", "--release", "r1"])
         assert args.preprocess_command == "graph"
 
+    def test_preprocess_summaries_allow_rewind_flag(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["preprocess", "summaries", "--release", "r1", "--allow-rewind"]
+        )
+        assert args.allow_rewind is True
+
+    def test_preprocess_summaries_allow_rewind_short(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["preprocess", "summaries", "--release", "r1", "-w"]
+        )
+        assert args.allow_rewind is True
+
+    def test_preprocess_summaries_no_rewind_default(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["preprocess", "summaries", "--release", "r1"]
+        )
+        assert args.allow_rewind is False
+
+    def test_preprocess_idioms_allow_rewind(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["preprocess", "idioms", "--release", "r1", "-w"]
+        )
+        assert args.allow_rewind is True
+
+    def test_preprocess_graph_allow_rewind(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["preprocess", "graph", "--release", "r1", "-w"]
+        )
+        assert args.allow_rewind is True
+
+    def test_packets_build_allow_rewind(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["packets", "build", "--release", "r1", "--chapter", "5", "-w"]
+        )
+        assert args.allow_rewind is True
+
     def test_packets_build(self):
         parser = _build_parser()
         args = parser.parse_args(["packets", "build", "--release", "r1", "--chapter", "5"])

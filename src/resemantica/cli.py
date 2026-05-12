@@ -23,11 +23,18 @@ from resemantica.settings import AppConfig, derive_paths, load_config
 
 def _add_verbose_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "-v",
-        "--verbose",
+        "-v", "--verbose",
         action="count",
         default=0,
-        help="-v for INFO, -vv for INFO with more detail, -vvv/-vvvv for DEBUG; -vvvv adds source detail.",
+        help="Increase verbosity (use -vvvv for maximum).",
+    )
+
+
+def _add_allow_rewind_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-w", "--allow-rewind",
+        action="store_true",
+        help="Allow re-running this stage even if later stages have already started.",
     )
 
 
@@ -404,6 +411,7 @@ arc_summary_zh (active narrative arc context). Stored in resemantica.db.""",
     )
     _add_common_release_args(summaries, default_run="summaries")
     _add_chapter_scope_args(summaries)
+    _add_allow_rewind_arg(summaries)
 
     idioms = preprocess_subparsers.add_parser(
         "idioms",
@@ -415,6 +423,7 @@ policies with preferred English renderings to resemantica.db.""",
     )
     _add_common_release_args(idioms, default_run="idioms")
     _add_chapter_scope_args(idioms)
+    _add_allow_rewind_arg(idioms)
 
     idiom_review = preprocess_subparsers.add_parser(
         "idiom-review", aliases=["idi-review"],
@@ -457,6 +466,7 @@ with chapter-safe spoiler filters. Outputs graph.ladybug and snapshot.json.""",
     )
     _add_common_release_args(graph, default_run="graph")
     _add_chapter_scope_args(graph)
+    _add_allow_rewind_arg(graph)
 
     packets = subparsers.add_parser(
         "packets", aliases=["pac"],
@@ -479,6 +489,7 @@ detection rebuilds automatically when upstream hashes change.""",
     )
     _add_common_release_args(packets_build, default_run="packets-build")
     _add_chapter_scope_args(packets_build)
+    _add_allow_rewind_arg(packets_build)
 
     rebuild = subparsers.add_parser(
         "rebuild", aliases=["reb"],
@@ -489,6 +500,7 @@ placeholders to original XHTML elements, and reconstructs a complete
 EPUB.""",
     )
     _add_common_release_args(rebuild, default_run="rebuild")
+    _add_allow_rewind_arg(rebuild)
 
     # The standalone translate-range and run-production commands have been removed.
 
@@ -835,6 +847,7 @@ def main(argv: list[str] | None = None) -> int:
                     "preprocess-summaries",
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -852,6 +865,7 @@ def main(argv: list[str] | None = None) -> int:
                     "preprocess-idioms",
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -909,6 +923,7 @@ def main(argv: list[str] | None = None) -> int:
                     "preprocess-graph",
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -934,6 +949,7 @@ def main(argv: list[str] | None = None) -> int:
                     chapter_number=args.chapter,
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -1049,6 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
         result = _with_cli_progress(
             lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                 "epub-rebuild",
+                allow_rewind=getattr(args, "allow_rewind", False),
                 stop_token=stop_token,
             ),
             stop_token=stop_token,

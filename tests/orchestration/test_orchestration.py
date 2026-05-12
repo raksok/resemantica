@@ -22,6 +22,7 @@ from resemantica.tracking.repo import (
     ensure_tracking_db,
     get_tracking_db_path,
     load_events,
+    load_run_state,
 )
 
 
@@ -161,6 +162,60 @@ class TestRunStage:
         assert "Unknown stage" in result.message
 
     def test_run_stage_illegal_transition(self):
+        import uuid
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        _make_run_state(release_id, run_id, "preprocess-glossary")
+
+        result = run_stage(release_id, run_id, "preprocess-summaries")
+        assert result.success is False
+        assert "Illegal stage transition" in result.message
+
+    def test_run_stage_allow_rewind_backward(self, monkeypatch):
+        import uuid
+
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        monkeypatch.setattr(
+            OrchestrationRunner, "_execute_stage",
+            lambda *a, **kw: StageResult(True, a[1], "mocked"),
+        )
+
+        _make_run_state(release_id, run_id, "preprocess-glossary")
+
+        result = run_stage(release_id, run_id, "preprocess-summaries", allow_rewind=True)
+        assert result.success is True
+
+    def test_run_stage_allow_rewind_updates_state(self, monkeypatch):
+        import uuid
+
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        monkeypatch.setattr(
+            OrchestrationRunner, "_execute_stage",
+            lambda *a, **kw: StageResult(True, a[1], "mocked"),
+        )
+
+        _make_run_state(release_id, run_id, "preprocess-glossary")
+
+        run_stage(release_id, run_id, "preprocess-summaries", allow_rewind=True)
+
+        conn = ensure_tracking_db(release_id)
+        try:
+            state = load_run_state(conn, run_id)
+            assert state is not None
+            assert state.stage_name == "preprocess-summaries"
+        finally:
+            conn.close()
+
+    def test_run_stage_allow_rewind_backward_default_false(self):
         import uuid
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"
         run_id = f"test-run-{uuid.uuid4().hex[:8]}"

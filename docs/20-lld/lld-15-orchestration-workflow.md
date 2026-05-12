@@ -114,6 +114,24 @@ The runner validates:
 
 Subsystems retain domain validation, such as placeholder validation and graph consistency.
 
+### Re-running Earlier Stages
+
+Stages are normally forward-only. Attempting an earlier stage after a later one
+has started raises an `Illegal stage transition` error.
+
+When you need to re-run an earlier stage (e.g., to fix summary generation for
+specific chapters), pass `--allow-rewind` / `-w`:
+
+    rsem pre sum -r p1 -R 001 -w -s 1 -e 20
+
+This clears the persisted run state and lets the stage execute. After
+re-running, proceed forward with `rsem run resume` or individual
+`rsem pre` / `rsem pac build` commands.
+
+The `--allow-rewind` flag is available on `summaries`, `idioms`, `graph`,
+`packets-build`, and `epub-rebuild`. It is intentionally omitted from
+`run production` and `resume` — those must stay forward-only.
+
 ## Tests
 
 - `run-production --dry-run` returns the ordered graph and writes no stage artifacts.

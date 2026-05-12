@@ -166,6 +166,7 @@ class OrchestrationRunner:
         scope: str = "run",
         dry_run: bool = False,
         force: bool = False,
+        allow_rewind: bool = False,
         batched_model_order: bool | None = None,
         stop_token: StopToken | None = None,
         enforce_gates: bool = False,
@@ -179,16 +180,19 @@ class OrchestrationRunner:
 
         state = self._get_run_state()
         if state is not None and not legal_transition(state.stage_name, stage_name):
-            msg = f"Illegal stage transition: {state.stage_name} -> {stage_name}"
-            emit_event(
-                self.run_id,
-                self.release_id,
-                "stage.transition_denied",
-                stage_name,
-                severity="error",
-                message=msg,
-            )
-            return StageResult(success=False, stage_name=stage_name, message=msg)
+            if allow_rewind:
+                self._update_run_state(stage_name, "rewound", {})
+            else:
+                msg = f"Illegal stage transition: {state.stage_name} -> {stage_name}"
+                emit_event(
+                    self.run_id,
+                    self.release_id,
+                    "stage.transition_denied",
+                    stage_name,
+                    severity="error",
+                    message=msg,
+                )
+                return StageResult(success=False, stage_name=stage_name, message=msg)
 
         active_checkpoint = checkpoint or (state.checkpoint if state else {})
         if enforce_gates and stage_name in STAGE_ORDER:
@@ -1018,6 +1022,7 @@ def run_stage(
     scope: str = "run",
     dry_run: bool = False,
     force: bool = False,
+    allow_rewind: bool = False,
     batched_model_order: bool | None = None,
     stop_token: StopToken | None = None,
     enforce_gates: bool = False,
@@ -1032,6 +1037,7 @@ def run_stage(
         scope=scope,
         dry_run=dry_run,
         force=force,
+        allow_rewind=allow_rewind,
         batched_model_order=batched_model_order,
         stop_token=stop_token,
         enforce_gates=enforce_gates,
