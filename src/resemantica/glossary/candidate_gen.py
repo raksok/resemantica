@@ -50,11 +50,32 @@ except Exception:
 FACTION_SUFFIXES = {"宗", "派", "教", "谷", "门", "岛", "宫", "阁", "殿", "会", "帮", "国"}
 LOCATION_SUFFIXES = {"山", "海", "河", "江", "湖", "城", "镇", "村", "界", "境", "洞", "天", "府"}
 TECHNIQUE_SUFFIXES = {"功", "法", "诀", "经", "术", "剑", "拳", "掌", "指", "腿", "步", "阵", "阵法"}
+REALM_SUFFIXES = {"境", "阶", "层", "重", "品"}
+PILL_SUFFIXES = {"丹", "药", "草", "果"}
+CREATURE_SUFFIXES = {"兽", "妖", "魔", "怪"}
+TALISMAN_SUFFIXES = {"符", "阵", "印", "咒"}
+TITLE_SUFFIXES = {"帝", "皇", "王", "君", "祖", "圣"}
+ARTIFACT_SUFFIXES = {"剑", "刀", "鼎", "塔", "镜", "珠"}
+
+# POS tags that indicate pure function-word spans (skip these n-grams)
+_GENERIC_FUNCTION_POS = {
+    "PN", "DT", "CD", "M", "CC", "SP", "PU",
+    "DEC", "DEG", "DEV", "ETC", "ON", "IJ",
+    "AD", "P", "BA", "LB",
+}
 
 
 def _get_context_snippet(text: str, start: int, end: int, window: int = 20) -> str:
     s = max(0, start - window)
     e = min(len(text), end + window)
+    # Extend to sentence boundaries for cleaner context
+    for boundary in ("。", "！", "？", "\n"):
+        idx = text.rfind(boundary, 0, s)
+        if idx != -1 and idx >= start - window * 2:
+            s = idx + 1
+        idx = text.find(boundary, e)
+        if idx != -1 and idx <= end + window * 2:
+            e = idx + 1
     return text[s:e].replace("\n", " ")
 
 
@@ -156,6 +177,24 @@ def extract_heuristic_patterns(tokens: list[SegmentedToken], text: str) -> list[
             # 4. Techniques
             elif surface[-1] in TECHNIQUE_SUFFIXES or (len(surface) > 2 and surface[-2:] in TECHNIQUE_SUFFIXES):
                 type_prior = CAT_TECHNIQUE
+            # 5. Realm levels / cultivation stages
+            elif surface[-1] in REALM_SUFFIXES:
+                type_prior = CAT_CONCEPT
+            # 6. Pills, herbs, elixirs
+            elif surface[-1] in PILL_SUFFIXES:
+                type_prior = CAT_ITEM
+            # 7. Creatures / beasts
+            elif surface[-1] in CREATURE_SUFFIXES:
+                type_prior = CAT_CONCEPT
+            # 8. Talismans, seals, arrays
+            elif surface[-1] in TALISMAN_SUFFIXES or (len(surface) > 2 and surface[-2:] in TALISMAN_SUFFIXES):
+                type_prior = CAT_CONCEPT
+            # 9. Titles / honorifics
+            elif surface[-1] in TITLE_SUFFIXES:
+                type_prior = CAT_CHARACTER
+            # 10. Artifacts / weapons
+            elif surface[-1] in ARTIFACT_SUFFIXES:
+                type_prior = CAT_ITEM
 
             if type_prior:
                 snippet = _get_context_snippet(text, entity_tokens[0].offset_start, entity_tokens[-1].offset_end)
@@ -207,6 +246,9 @@ def extract_ngrams(tokens: list[SegmentedToken], text: str) -> list[RawCandidate
             surface = "".join(t.text for t in entity_tokens)
             # Skip if any token is punctuation or whitespace
             if not surface.isalnum():
+                continue
+            # Skip pure function-word n-grams (e.g., "的孩子", "一阵", "那边的")
+            if all(t.pos in _GENERIC_FUNCTION_POS for t in entity_tokens):
                 continue
 
             snippet = _get_context_snippet(text, entity_tokens[0].offset_start, entity_tokens[-1].offset_end)

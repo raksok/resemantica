@@ -663,6 +663,113 @@ def upsert_alias_clusters(
         )
 
 
+def replace_candidates(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    discovery_run_id: str,
+    candidates: Sequence[GlossaryCandidate],
+) -> None:
+    """Replace ALL candidates for a release/run (used for checkpoint writes).
+    Deletes existing entries first to avoid double-counting appearance_count."""
+    if not candidates:
+        return
+    with conn:
+        conn.execute(
+            "DELETE FROM glossary_candidates WHERE release_id = ? AND discovery_run_id = ?",
+            (release_id, discovery_run_id),
+        )
+        conn.executemany(
+            """
+            INSERT INTO glossary_candidates(
+                candidate_id, release_id, source_term, normalized_source_term,
+                category, source_language, first_seen_chapter, last_seen_chapter,
+                appearance_count, evidence_snippet, candidate_translation_en,
+                normalized_target_term, discovery_run_id, translation_run_id,
+                candidate_status, validation_status, conflict_reason, critic_score,
+                analyst_model_name, analyst_prompt_version,
+                translator_model_name, translator_prompt_version, schema_version,
+                pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+                corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence,
+                updated_at
+            )
+            VALUES(
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+            )
+            """,
+            [
+                (
+                    c.candidate_id, c.release_id, c.source_term, c.normalized_source_term,
+                    c.category, c.source_language, c.first_seen_chapter, c.last_seen_chapter,
+                    c.appearance_count, c.evidence_snippet, c.candidate_translation_en,
+                    c.normalized_target_term, c.discovery_run_id, c.translation_run_id,
+                    c.candidate_status, c.validation_status, c.conflict_reason, c.critic_score,
+                    c.analyst_model_name, c.analyst_prompt_version,
+                    c.translator_model_name, c.translator_prompt_version, c.schema_version,
+                    c.pos_tags, c.ner_label, c.type_prior, c.source_strategies, c.chapter_coverage,
+                    c.corpus_score, c.context_snippets, c.llm_keep, c.llm_type, c.llm_reason_code, c.llm_confidence,
+                )
+                for c in candidates
+            ],
+        )
+
+
+def update_candidate_llm_fields(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    llm_keep: bool,
+    llm_type: str,
+    llm_reason_code: str,
+    llm_confidence: float,
+) -> None:
+    """Update LLM evaluation fields for a single candidate."""
+    conn.execute(
+        """
+        UPDATE glossary_candidates
+        SET llm_keep = ?, llm_type = ?, llm_reason_code = ?, llm_confidence = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE candidate_id = ?
+        """,
+        (1 if llm_keep else 0, llm_type, llm_reason_code, llm_confidence, candidate_id),
+    )
+
+
+def set_checkpoint(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    stage_name: str,
+) -> None:
+    """Record that a stage completed successfully."""
+    conn.execute(
+        """
+        INSERT INTO glossary_checkpoints(release_id, run_id, stage_name, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(release_id, run_id) DO UPDATE SET
+            stage_name = excluded.stage_name,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (release_id, run_id, stage_name),
+    )
+
+
+def get_checkpoint(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+) -> str | None:
+    """Return the last completed stage name, or None if no checkpoint."""
+    row = conn.execute(
+        "SELECT stage_name FROM glossary_checkpoints WHERE release_id = ? AND run_id = ?",
+        (release_id, run_id),
+    ).fetchone()
+    return str(row["stage_name"]) if row else None
+
+
 def list_alias_clusters(
     conn: sqlite3.Connection,
     *,

@@ -10,6 +10,7 @@ from loguru import logger
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import (
     find_exact_locked_entry,
+    get_checkpoint,
     insert_conflicts,
     list_candidates,
     list_candidates_for_promotion,
@@ -21,8 +22,11 @@ from resemantica.db.glossary_repo import (
     mark_candidate_conflict,
     mark_candidate_promoted,
     promote_locked_entries,
+    replace_candidates,
     save_candidate_translation,
+    set_checkpoint,
     set_translation_vote_resolution,
+    update_candidate_llm_fields,
     upsert_alias_clusters,
     upsert_discovered_candidates,
     upsert_translation_vote,
@@ -30,7 +34,7 @@ from resemantica.db.glossary_repo import (
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.glossary.critic import deduplicate_and_cluster
 from resemantica.glossary.discovery import discover_candidates_from_extracted
-from resemantica.glossary.evaluator import evaluate_candidate_batch
+from resemantica.glossary.evaluator import EvalResult, evaluate_candidate_batch
 from resemantica.glossary.models import AliasCluster, GlossaryCandidate
 from resemantica.glossary.validators import (
     apply_deterministic_filter,
@@ -87,6 +91,7 @@ def discover_glossary_candidates(
     pruning_threshold: float | None = None,
     eval_batch_size: int | None = None,
     skip_llm_eval: bool = False,
+    resume: bool = False,
     dedup_threshold: float | None = None,
     stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
@@ -99,149 +104,183 @@ def discover_glossary_candidates(
         chapter_end=chapter_end,
     )
     usage_before = capture_usage_snapshot(client)
-    _emit(
-        run_id,
-        release_id,
-        f"{_STAGE_NAME}.started",
-        total_chapters=len(chapter_refs),
-    )
-    _emit(
-        run_id,
-        release_id,
-        f"{_STAGE_NAME}.discover.started",
-        total_chapters=len(chapter_refs),
-    )
-    discovered = discover_candidates_from_extracted(
-        release_id=release_id,
-        discovery_run_id=run_id,
-        chapter_refs=chapter_refs,
-        event_callback=lambda event_name, chapter_number, payload: _emit(
-            run_id,
-            release_id,
-            f"{_STAGE_NAME}.discover.{event_name}",
-            chapter_number=chapter_number,
-            **payload,
-        ),
-        stop_token=stop_token,
-    )
-
-    logger.info("Discovery: {} raw candidates from {} chapters", len(discovered), len(chapter_refs))
-
-    # Stage 3: Deterministic Filtering
-    pre_filter_count = len(discovered)
-    discovered = apply_deterministic_filter(
-        discovered,
-        config=config_obj.glossary,
-        min_score_override=pruning_threshold,
-    )
-    filtered_count_stage3 = sum(1 for c in discovered if c.candidate_status == "filtered")
-    _emit(
-        run_id,
-        release_id,
-        f"{_STAGE_NAME}.discover.filter_completed",
-        message=f"Deterministic filter: {filtered_count_stage3} filtered from {pre_filter_count} candidates",
-        pre_filter_count=pre_filter_count,
-        filtered_count=filtered_count_stage3,
-    )
-
-    kept_after_filter = pre_filter_count - filtered_count_stage3
-    logger.info(
-        "Filter stage: {} kept (of {}), {} filtered",
-        kept_after_filter, pre_filter_count, filtered_count_stage3,
-    )
-
-    # Stage 4: LLM Batch Evaluation
-    if not skip_llm_eval:
-        pending_eval = [c for c in discovered if c.candidate_status == "discovered"]
-        if pending_eval:
-            eval_prompt = load_prompt("glossary_evaluate.txt")
-            batch_sz = (
-                eval_batch_size if eval_batch_size is not None else config_obj.glossary.eval_batch_size
-            )
-            eval_results = evaluate_candidate_batch(
-                candidates=pending_eval,
-                llm_client=client,
-                model_name=config_obj.models.eval_name,
-                prompt_template=eval_prompt.template,
-                prompt_version=eval_prompt.version,
-                batch_size=batch_sz,
-                cache_root=paths.release_root / "cache" / "llm",
-                event_callback=lambda event, payload: _emit(
-                    run_id, release_id, f"{_STAGE_NAME}.eval.{event}", **payload
-                ),
-            )
-            # Apply eval results
-            eval_map = {res.candidate_id: res for res in eval_results}
-            for c in discovered:
-                if c.candidate_id in eval_map:
-                    res = eval_map[c.candidate_id]
-                    c.llm_keep = 1 if res.keep else 0
-                    c.llm_type = res.term_type
-                    c.llm_reason_code = res.reason_code
-                    c.llm_confidence = res.confidence
-                    if not res.keep:
-                        c.candidate_status = "llm_rejected"
-
-            llm_kept = sum(1 for c in pending_eval if c.candidate_status == "discovered")
-            llm_rejected = sum(1 for c in pending_eval if c.candidate_status == "llm_rejected")
-            logger.info("LLM eval: {} kept, {} rejected", llm_kept, llm_rejected)
-
-    # Stage 5: Embedding-based Dedup / Alias Clustering
-    to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
-    clusters: list[AliasCluster] = []
-    if to_dedup:
-        _emit(
-            run_id,
-            release_id,
-            f"{_STAGE_NAME}.discover.dedup_started",
-            message=f"Alias clustering: {len(to_dedup)} candidates",
-            candidate_count=len(to_dedup),
-        )
-        conn_tmp = open_connection(paths.db_path)
-        existing_locked = list_locked_entries(conn_tmp, release_id=release_id)
-        conn_tmp.close()
-
-        sim_threshold = (
-            dedup_threshold
-            if dedup_threshold is not None
-            else config_obj.glossary.dedup_similarity_threshold
-        )
-
-        # Deduplicate and update candidates in-place
-        _, clusters = deduplicate_and_cluster(
-            candidates=to_dedup,
-            model_name=config_obj.models.embedding_name,
-            existing_entries=existing_locked,
-            similarity_threshold=sim_threshold,
-        )
-        alias_merged = sum(1 for c in to_dedup if c.candidate_status == "alias_merged")
-        _emit(
-            run_id,
-            release_id,
-            f"{_STAGE_NAME}.discover.dedup_completed",
-            message=f"Clustering complete: {len(clusters)} clusters, {alias_merged} aliases merged",
-            cluster_count=len(clusters),
-            alias_merged_count=alias_merged,
-        )
-        logger.info("Dedup: {} clusters formed, {} aliases merged", len(clusters), alias_merged)
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
+
+    resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume else None
+
     try:
-        upsert_discovered_candidates(conn, candidates=discovered)
-        if clusters:
-            upsert_alias_clusters(
-                conn,
-                clusters=clusters,
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.started",
+            total_chapters=len(chapter_refs),
+        )
+
+        # --- Stage 1-2: Discovery + Filter ---
+        if resume_stage is None:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.started",
+                total_chapters=len(chapter_refs),
+            )
+            discovered = discover_candidates_from_extracted(
                 release_id=release_id,
                 discovery_run_id=run_id,
+                chapter_refs=chapter_refs,
+                event_callback=lambda event_name, chapter_number, payload: _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.discover.{event_name}",
+                    chapter_number=chapter_number,
+                    **payload,
+                ),
+                stop_token=stop_token,
+            )
+            logger.info("Discovery: {} raw candidates from {} chapters", len(discovered), len(chapter_refs))
+
+            pre_filter_count = len(discovered)
+            discovered = apply_deterministic_filter(
+                discovered,
+                config=config_obj.glossary,
+                min_score_override=pruning_threshold,
+            )
+            filtered_count_stage3 = sum(1 for c in discovered if c.candidate_status == "filtered")
+            kept_after_filter = pre_filter_count - filtered_count_stage3
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.filter_completed",
+                message=f"Deterministic filter: {filtered_count_stage3} filtered from {pre_filter_count} candidates",
+                pre_filter_count=pre_filter_count,
+                filtered_count=filtered_count_stage3,
+            )
+            logger.info(
+                "Filter stage: {} kept (of {}), {} filtered",
+                kept_after_filter, pre_filter_count, filtered_count_stage3,
             )
 
+            # Checkpoint after discovery + filter
+            replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+            set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="filtered")
+            resume_stage = "filtered"
+        else:
+            logger.info("Resuming from checkpoint stage: {}", resume_stage)
+            discovered = list_candidates(conn, release_id=release_id)
+
+        raise_if_stop_requested(stop_token)
+
+        # --- Stage 4: LLM Batch Evaluation ---
+        if not skip_llm_eval:
+            pending_eval = [c for c in discovered if c.candidate_status == "discovered" and c.llm_confidence is None]
+            if pending_eval:
+                eval_prompt = load_prompt("glossary_evaluate.txt")
+                batch_sz = (
+                    eval_batch_size if eval_batch_size is not None else config_obj.glossary.eval_batch_size
+                )
+
+                def _persist_eval_batch(results: list[EvalResult]) -> None:
+                    for r in results:
+                        update_candidate_llm_fields(
+                            conn,
+                            candidate_id=r.candidate_id,
+                            llm_keep=r.keep,
+                            llm_type=r.term_type,
+                            llm_reason_code=r.reason_code,
+                            llm_confidence=r.confidence,
+                        )
+
+                eval_results = evaluate_candidate_batch(
+                    candidates=pending_eval,
+                    llm_client=client,
+                    model_name=config_obj.models.eval_name,
+                    prompt_template=eval_prompt.template,
+                    prompt_version=eval_prompt.version,
+                    batch_size=batch_sz,
+                    cache_root=paths.release_root / "cache" / "llm",
+                    event_callback=lambda event, payload: _emit(
+                        run_id, release_id, f"{_STAGE_NAME}.eval.{event}", **payload
+                    ),
+                    persist_callback=_persist_eval_batch,
+                )
+
+                eval_map = {res.candidate_id: res for res in eval_results}
+                for c in discovered:
+                    if c.candidate_id in eval_map:
+                        res = eval_map[c.candidate_id]
+                        c.llm_keep = 1 if res.keep else 0
+                        c.llm_type = res.term_type
+                        c.llm_reason_code = res.reason_code
+                        c.llm_confidence = res.confidence
+                        if not res.keep:
+                            c.candidate_status = "llm_rejected"
+
+                llm_kept = sum(1 for c in pending_eval if c.candidate_status == "discovered")
+                llm_rejected = sum(1 for c in pending_eval if c.candidate_status == "llm_rejected")
+                logger.info("LLM eval: {} kept, {} rejected", llm_kept, llm_rejected)
+
+                # Checkpoint after LLM eval
+                replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+                set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="eval_started")
+
+        raise_if_stop_requested(stop_token)
+
+        # --- Stage 5: Embedding-based Dedup / Alias Clustering ---
+        to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
+        clusters: list[AliasCluster] = []
+        if to_dedup:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.dedup_started",
+                message=f"Alias clustering: {len(to_dedup)} candidates",
+                candidate_count=len(to_dedup),
+            )
+            conn_tmp = open_connection(paths.db_path)
+            existing_locked = list_locked_entries(conn_tmp, release_id=release_id)
+            conn_tmp.close()
+
+            sim_threshold = (
+                dedup_threshold
+                if dedup_threshold is not None
+                else config_obj.glossary.dedup_similarity_threshold
+            )
+
+            _, clusters = deduplicate_and_cluster(
+                candidates=to_dedup,
+                model_name=config_obj.models.embedding_name,
+                existing_entries=existing_locked,
+                similarity_threshold=sim_threshold,
+            )
+            alias_merged = sum(1 for c in to_dedup if c.candidate_status == "alias_merged")
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.dedup_completed",
+                message=f"Clustering complete: {len(clusters)} clusters, {alias_merged} aliases merged",
+                cluster_count=len(clusters),
+                alias_merged_count=alias_merged,
+            )
+            logger.info("Dedup: {} clusters formed, {} aliases merged", len(clusters), alias_merged)
+
+            if clusters:
+                upsert_alias_clusters(
+                    conn,
+                    clusters=clusters,
+                    release_id=release_id,
+                    discovery_run_id=run_id,
+                )
+            set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="dedup_completed")
+
+        # --- Final snapshot write ---
         _write_candidate_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.glossary_candidates_path,
         )
+
     finally:
         conn.close()
 

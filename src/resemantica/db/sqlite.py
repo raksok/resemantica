@@ -158,6 +158,14 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS glossary_checkpoints (
+            release_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (release_id, run_id)
+        );
+
         CREATE TABLE IF NOT EXISTS summary_drafts (
             draft_id TEXT PRIMARY KEY,
             release_id TEXT NOT NULL,

@@ -343,6 +343,11 @@ candidates.json with frequency counts and context snippets.""",
         help="Skip LLM-based candidate evaluation.",
     )
     glossary_discover.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from DB checkpoint (skip completed stages).",
+    )
+    glossary_discover.add_argument(
         "--dedup-threshold",
         type=float,
         help="Embedding similarity threshold for alias clustering (Stage 5).",
@@ -747,6 +752,7 @@ def main(argv: list[str] | None = None) -> int:
                     pruning_threshold=getattr(args, "pruning_threshold", None),
                     eval_batch_size=getattr(args, "eval_batch_size", None),
                     skip_llm_eval=bool(getattr(args, "skip_llm_eval", False)),
+                    resume=bool(getattr(args, "resume", False)),
                     dedup_threshold=getattr(args, "dedup_threshold", None),
                     stop_token=stop_token,
                 ),

@@ -36,6 +36,7 @@ def evaluate_candidate_batch(
     config: AppConfig | None = None,
     cache_root: Path | None = None,
     event_callback: Callable | None = None,
+    persist_callback: Callable[[list[EvalResult]], None] | None = None,
 ) -> list[EvalResult]:
     """
     Batch candidates for LLM keep/reject evaluation.
@@ -142,6 +143,9 @@ def evaluate_candidate_batch(
                 )
 
             results.extend(batch_results)
+
+            if persist_callback:
+                persist_callback(batch_results)
 
             if cache_file:
                 cache_file.parent.mkdir(parents=True, exist_ok=True)

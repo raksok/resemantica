@@ -41,6 +41,11 @@ _COMMON_STOPLIST: set[str] = {
     "知道", "发现", "觉得", "想到", "看到", "听到", "说道",
     "起来", "出来", "过来", "回来",
     "没有", "不是", "可以", "能够", "应该",
+    # Generic nouns that appear frequently but aren't glossary-worthy
+    "先生", "汉子", "问题", "人物", "男人", "孩子", "东西", "事情",
+    "读书人", "贫道", "铜钱", "婢女", "师傅", "夫人", "丫头", "少爷", "老爷",
+    # Grammatical fragments from n-gram slicing
+    "看着", "过了", "这就", "那边", "说法",
 }
 
 try:
@@ -50,6 +55,14 @@ except Exception:
     _COMMON_WORDS = set()
 
 _PUNCT_NOISE_RE = re.compile(r"^[\s\d\W_]+$")
+
+# POS tags that indicate purely generic/function words — candidates with ALL tags
+# in this set are filtered as generic POS.
+_GENERIC_POS = {
+    "VV", "AD", "P", "CC",
+    "PN", "DT", "CD", "M", "AS", "LC",
+    "DEG", "DEC", "DEV", "SP", "ETC", "ON", "IJ", "PU",
+}
 
 
 def _match_date_pattern(term: str) -> bool:
@@ -103,10 +116,16 @@ def apply_deterministic_filter(
                 # if it starts with '[', parse it
                 pos_list = json.loads(candidate.pos_tags) if candidate.pos_tags.startswith("[") else []
                 # Check if all POS are generic
-                if pos_list and all(p in {"VV", "AD", "P", "CC"} for p in pos_list):
+                if pos_list and all(p in _GENERIC_POS for p in pos_list):
                     reasons.append("pos_generic")
             except Exception:
                 pass
+
+        # Grammatical fragments from n-gram boundary slicing
+        if term.startswith(("的", "着", "了", "在", "把", "被")):
+            reasons.append("grammatical_prefix")
+        if term.endswith(("的", "着", "了", "就", "呢", "吧", "吗")):
+            reasons.append("grammatical_suffix")
 
         if candidate.corpus_score is not None and candidate.corpus_score < min_score:
             reasons.append("low_score")

@@ -172,6 +172,19 @@ def score_candidates(
 
         composite = 0.3 * norm_tf_idf + 0.3 * norm_c_value + 0.2 * strategy_count + 0.2 * coverage_ratio
 
+        # Strategy signal multiplier: boost high-confidence strategies,
+        # penalize pure n-gram (which is mostly noise).
+        has_ner = "ner" in c.strategies
+        has_heuristic = "heuristic" in c.strategies
+        has_dict = "dictionary" in c.strategies
+        n_gram_only = len(c.strategies) == 1 and "n_gram" in c.strategies
+        if has_ner:
+            composite *= 1.2
+        elif has_heuristic or has_dict:
+            composite *= 1.1
+        elif n_gram_only:
+            composite *= 0.8
+
         scored.append(
             ScoredCandidate(
                 raw=c,
