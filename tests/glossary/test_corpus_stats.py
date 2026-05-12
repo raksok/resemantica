@@ -59,3 +59,30 @@ def test_score_candidates():
     # Check that sorting is descending by composite score
     assert scored[0] == s_long
     assert scored[1] == s_short
+
+
+def test_score_candidates_summary_boost():
+    """Summary-verified candidate scores higher than identical non-verified."""
+    c_verified = RawCandidate("青云门", "青云门", ["NR", "NR"], None, CAT_OTHER, {"ner"}, appearances=10)
+    c_unverified = RawCandidate("苍云门", "苍云门", ["NR", "NR"], None, CAT_OTHER, {"ner"}, appearances=10)
+
+    stats = compute_corpus_stats({1: [c_verified, c_unverified]})
+
+    scored = score_candidates([c_verified, c_unverified], stats, summary_term_set={"青云门"})
+    assert len(scored) == 2
+
+    s_ver = next(s for s in scored if s.raw.normalized_form == "青云门")
+    s_unv = next(s for s in scored if s.raw.normalized_form == "苍云门")
+
+    assert s_ver.composite_score > s_unv.composite_score
+
+
+def test_score_candidates_summary_boost_empty_set():
+    """Empty summary_term_set produces same scores as without."""
+    c = RawCandidate("青云门", "青云门", ["NR", "NR"], None, CAT_OTHER, {"ner"}, appearances=10)
+    stats = compute_corpus_stats({1: [c]})
+
+    scored_with = score_candidates([c], stats, summary_term_set=set())
+    scored_without = score_candidates([c], stats)
+
+    assert scored_with[0].composite_score == scored_without[0].composite_score

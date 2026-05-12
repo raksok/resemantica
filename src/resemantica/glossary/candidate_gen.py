@@ -236,6 +236,32 @@ def extract_webnovel_dict(tokens: list[SegmentedToken], text: str) -> list[RawCa
     return candidates
 
 
+def extract_summary_terms(summary_data: dict | None) -> list[RawCandidate]:
+    if not summary_data:
+        return []
+    chars = set(summary_data.get("characters_mentioned", []))
+    setting = summary_data.get("setting", "")
+    candidates = []
+    for term in summary_data.get("new_terms", []):
+        if len(term) < 2:
+            continue
+        type_prior = CAT_OTHER
+        if term in chars:
+            type_prior = CAT_CHARACTER
+        elif setting and term in setting:
+            type_prior = CAT_LOCATION
+        candidates.append(RawCandidate(
+            surface_form=term,
+            normalized_form=term,
+            pos_tags=[],
+            ner_label=None,
+            type_prior=type_prior,
+            strategies={"from_summary"},
+            context_snippets=[],
+        ))
+    return candidates
+
+
 def extract_ngrams(tokens: list[SegmentedToken], text: str) -> list[RawCandidate]:
     candidates = []
     # Simple extraction of 2-5 grams
@@ -372,7 +398,7 @@ def merge_across_chapters(
     return accumulator
 
 
-def generate_chapter_candidates(text: str) -> list[RawCandidate]:
+def generate_chapter_candidates(text: str, summary_data: dict | None = None) -> list[RawCandidate]:
     """
     Orchestrate full candidate generation for a single chapter text.
     Returns deduplicated candidates.
@@ -401,6 +427,11 @@ def generate_chapter_candidates(text: str) -> list[RawCandidate]:
     ngrams = extract_ngrams(tokens, text)
     all_candidates.extend(ngrams)
     logger.debug("N-gram strategy: {} candidates", len(ngrams))
+
+    summary_terms = extract_summary_terms(summary_data)
+    all_candidates.extend(summary_terms)
+    if summary_terms:
+        logger.debug("Summary seed strategy: {} candidates", len(summary_terms))
 
     merged = merge_candidates(all_candidates)
     logger.debug(

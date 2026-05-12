@@ -65,6 +65,7 @@ def discover_candidates_from_extracted(
     event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
     stop_token: StopToken | None = None,
     skip_chapters: set[int] | None = None,
+    chapter_summaries: dict[int, dict] | None = None,
     # The following parameters are kept for signature compatibility but ignored in deterministic mode
     extracted_chapters_dir: Path | None = None,
     llm_client: Any = None,
@@ -118,7 +119,8 @@ def discover_candidates_from_extracted(
         logger.debug("Chapter {}: {} chars of source text collected", chapter_number, len(text))
 
         # Extract candidates for this chapter
-        raw_candidates = generate_chapter_candidates(text)
+        summary_data = (chapter_summaries or {}).get(chapter_number)
+        raw_candidates = generate_chapter_candidates(text, summary_data=summary_data)
 
         # Incremental merge into single accumulator dict
         merge_across_chapters(merged_accumulator, raw_candidates)
@@ -155,13 +157,26 @@ def discover_candidates_from_extracted(
 
     global_raw = list(merged_accumulator.values())
 
+    # Build set of terms verified by summary data for score boost + pre-filter exemption.
+    summary_term_set: set[str] = set()
+    if chapter_summaries:
+        for ch_data in chapter_summaries.values():
+            summary_term_set.update(ch_data.get("new_terms", []))
+            summary_term_set.update(ch_data.get("characters_mentioned", []))
+
     # Pre-filter: drop single-chapter terms before O(n²) C-value scoring.
     # Most n-grams appear in only 1 chapter and are noise — removing them
     # cuts the candidate pool by ~80-90% with minimal impact on quality.
     # Only applies when there are multiple chapters (single-chapter would lose everything).
+    # Summary-seeded terms are exempted — a rare term flagged by the LLM as
+    # "new" is more valuable than a random n-gram appearing in only 1 chapter.
     pre_filter_count = len(global_raw)
     if total_chapters >= 2:
-        global_raw = [rc for rc in global_raw if doc_freq.get(rc.normalized_form, 0) >= 2]
+        global_raw = [
+            rc for rc in global_raw
+            if doc_freq.get(rc.normalized_form, 0) >= 2
+            or rc.normalized_form in summary_term_set
+        ]
         if pre_filter_count:
             logger.info(
                 "Pre-filter (df>=2): {} kept of {} ({:.0f}% filtered before scoring)",
@@ -174,7 +189,7 @@ def discover_candidates_from_extracted(
         len(global_raw),
         total_chapters,
     )
-    scored_list = score_candidates(global_raw, stats)
+    scored_list = score_candidates(global_raw, stats, summary_term_set=summary_term_set or None)
 
     # 3. Convert to GlossaryCandidate
     candidates: list[GlossaryCandidate] = []

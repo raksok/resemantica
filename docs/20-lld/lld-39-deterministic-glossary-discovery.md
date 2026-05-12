@@ -489,6 +489,166 @@ New statuses: `llm_rejected`, `alias_merged`. Added to `CandidateStatus` literal
 - `test_schema_migration.py` — ALTER TABLE on existing DB doesn't lose data
 - Existing tests in `tests/glossary/` must still pass
 
+## Summary → Glossary Interface (Added in Task 44)
+
+### Motivation
+
+The summaries stage runs first and produces structured per-chapter data (`new_terms`, `characters_mentioned`, `key_events`, `setting`). The glossary stage previously consumed only the `is_story_chapter` boolean flag. Passing summary content into glossary extraction improves precision (terms the LLM explicitly flagged as "new" are high-confidence), reduces noise (summary-verified terms get a score boost), and provides category hints (characters vs. locations).
+
+### Data Flow
+
+```
+summaries pipeline:
+  summary_drafts.content_json  ──►  per-chapter dict with:
+                                       new_terms: ["青云门", "张三", ...]
+                                       characters_mentioned: ["张三", "李四", ...]
+                                       key_events: [...]
+                                       setting: "..."
+                                              │
+                                              ▼
+glossary pipeline (pipeline.py):
+  query summary_drafts ──► chapter_summaries: dict[int, dict]
+                                              │
+                                              ▼
+discovery.py:  accept chapter_summaries
+              │         │
+              ▼         ▼
+  candidate_gen.py    corpus_stats.py
+  extract_summary_    score_candidates()
+  terms() → seeds     → 1.15× multiplier if
+  with "from_summary"    term in summary_terms
+  strategy               (new_terms ∪ chars_mentioned)
+```
+
+### Modified Modules
+
+#### `glossary/pipeline.py`
+
+```python
+# New query block in discover_glossary_candidates():
+chapter_summaries: dict[int, dict] = {}
+try:
+    cursor = conn.execute(
+        "SELECT chapter_number, content_json FROM summary_drafts "
+        "WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured'"
+        "  AND validation_status IN ('approved', 'pending', 'non_story_chapter')",
+        (release_id,),
+    )
+    for row in cursor.fetchall():
+        ch = int(row[0])
+        raw = json.loads(row[1])
+        content = raw.get("parsed_summary", raw)  # unwrap validation-failure wrapper
+        chapter_summaries[ch] = content
+except Exception:
+    pass  # table may not exist
+```
+
+Passed to `discover_candidates_from_extracted()` as `chapter_summaries=chapter_summaries`.
+
+#### `glossary/discovery.py`
+
+```python
+def discover_candidates_from_extracted(
+    *,
+    ...
+    chapter_summaries: dict[int, dict] | None = None,
+) -> list[GlossaryCandidate]:
+```
+
+- Passes per-chapter summary data to `generate_chapter_candidates(text, summary_data=summary_data)`.
+- Builds `summary_term_set: set[str]` from all chapters' `new_terms ∪ characters_mentioned`.
+- Passes to `score_candidates(candidates, stats, summary_term_set=summary_term_set)`.
+- Exempts summary-seeded terms from the `df >= 2` pre-filter.
+
+#### `glossary/candidate_gen.py`
+
+New extraction strategy:
+
+```python
+def extract_summary_terms(summary_data: dict | None) -> list[RawCandidate]:
+    """Seed candidates from summary new_terms, with category hints."""
+    if not summary_data:
+        return []
+    chars = set(summary_data.get("characters_mentioned", []))
+    setting = summary_data.get("setting", "")
+    candidates = []
+    for term in summary_data.get("new_terms", []):
+        if len(term) < 2:
+            continue
+        type_prior = CAT_OTHER
+        if term in chars:
+            type_prior = CAT_CHARACTER
+        elif setting and term in setting:
+            type_prior = CAT_LOCATION
+        candidates.append(RawCandidate(
+            surface_form=term,
+            normalized_form=term,
+            pos_tags=[],
+            ner_label=None,
+            type_prior=type_prior,
+            strategies={"from_summary"},
+            context_snippets=[],
+        ))
+    return candidates
+```
+
+Category hint rules: only overrides `CAT_OTHER` (if extraction strategies disagree, the higher-priority type wins via `merge_candidates` type_priority dict). Called in `generate_chapter_candidates()` alongside NER/POS/heuristic/dict/ngram.
+
+#### `glossary/corpus_stats.py`
+
+```python
+def score_candidates(
+    candidates: list[RawCandidate],
+    stats: CorpusStats,
+    summary_term_set: set[str] | None = None,
+) -> list[ScoredCandidate]:
+```
+
+- After the strategy multiplier block, applies a 1.15× multiplier if `c.normalized_form in summary_term_set`.
+- The `from_summary` strategy also contributes to `strategy_count` (0.2 weight in composite).
+
+### Graceful Degradation
+
+Every summary-aware parameter defaults to `None`. If `summary_drafts` table doesn't exist (summaries never ran), all try/except catches → `chapter_summaries = {}` → no seed candidates, no boost → identical behavior to pre-Task-44.
+
+### Updated Data Flow Diagram
+
+```
+[Stage 0: Query summary data]
+  Read summary_drafts.content_json for each chapter
+       ↓
+[Stage 1: Deterministic candidate generation]
+  HanLP segmentation + POS + NER
+  Suffix/prefix pattern heuristics
+  Webnovel seed dictionary lookup
+  N-gram frequency extraction
+  Summary new_terms seed candidates     ← NEW
+       ↓
+[Stage 2: Corpus statistics + scoring]
+  TF-IDF across chapters
+  C-value for multi-word terms
+  Chapter document frequency
+  Composite candidate score
+  Summary-verified term boost (1.15×)    ← NEW
+       ↓
+[Stage 3: Deterministic prefilter]
+  ... (unchanged)
+       ↓
+[Stage 4: LLM batch evaluator]
+  ... (unchanged)
+       ↓
+[Stage 5: Embedding dedup / alias clustering]
+  ... (unchanged)
+       ↓
+[DB upsert + candidates.json]
+```
+
+### Tests (New)
+
+- `test_candidate_gen.py`: test `extract_summary_terms` with empty data, new_terms list, character cross-reference, setting cross-reference, single-character filter.
+- `test_corpus_stats.py`: verify summary-verified candidate gets higher composite score than non-verified candidate with identical features.
+- `test_glossary_pipeline.py`: integration test with mocked summary data verifying skip+seed flow.
+
 ## Out Of Scope
 
 - Summary generation

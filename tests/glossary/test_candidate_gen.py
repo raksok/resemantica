@@ -10,6 +10,7 @@ from resemantica.glossary.candidate_gen import (
     extract_heuristic_patterns,
     extract_ner_candidates,
     extract_pos_noun_phrases,
+    extract_summary_terms,
     extract_webnovel_dict,
     merge_across_chapters,
     merge_candidates,
@@ -137,3 +138,80 @@ def test_merge_across_chapters():
 
     assert accumulator["李小明"].type_prior == CAT_CHARACTER
     assert accumulator["李小明"].appearances == 1
+
+
+def test_extract_summary_terms_empty():
+    assert extract_summary_terms(None) == []
+    assert extract_summary_terms({}) == []
+
+
+def test_extract_summary_terms_basic():
+    result = extract_summary_terms({
+        "new_terms": ["青云门", "张三", "紫霄功法"],
+        "characters_mentioned": ["张三", "李四"],
+        "setting": "青云山",
+    })
+    terms = {c.surface_form: c for c in result}
+    assert len(terms) == 3
+
+    assert terms["青云门"].type_prior == CAT_OTHER
+    assert "from_summary" in terms["青云门"].strategies
+    assert len(terms["青云门"].pos_tags) == 0
+
+    assert terms["张三"].type_prior == CAT_CHARACTER
+    assert "from_summary" in terms["张三"].strategies
+
+    assert terms["紫霄功法"].type_prior == CAT_OTHER
+
+
+def test_extract_summary_terms_setting_hint():
+    result = extract_summary_terms({
+        "new_terms": ["青云山", "紫霄洞"],
+        "characters_mentioned": ["张三"],
+        "setting": "青云山是主角所在的门派",
+    })
+    terms = {c.surface_form: c for c in result}
+    assert terms["青云山"].type_prior == CAT_LOCATION
+    # Term appears in setting text → location hint
+    assert terms["紫霄洞"].type_prior == CAT_OTHER
+
+
+def test_extract_summary_terms_character_before_setting():
+    """character_mentioned match overrides setting match."""
+    result = extract_summary_terms({
+        "new_terms": ["青云"],
+        "characters_mentioned": ["青云"],
+        "setting": "青云山",
+    })
+    assert result[0].type_prior == CAT_CHARACTER
+
+
+def test_extract_summary_terms_filters_short():
+    result = extract_summary_terms({
+        "new_terms": ["门", "青云门", "李"],
+        "characters_mentioned": [],
+        "setting": "",
+    })
+    surfaces = {c.surface_form for c in result}
+    assert "门" not in surfaces
+    assert "李" not in surfaces
+    assert "青云门" in surfaces
+
+
+def test_extract_summary_terms_merge_with_strategies():
+    """Summary terms merge correctly with other extraction strategies."""
+    summary = extract_summary_terms({
+        "new_terms": ["青云门"],
+        "characters_mentioned": [],
+        "setting": "",
+    })
+    ner = extract_ner_candidates([
+        SegmentedToken(text="青云", pos="NR", ner="ORG", offset_start=0, offset_end=2),
+        SegmentedToken(text="门", pos="NR", ner="ORG", offset_start=2, offset_end=3),
+    ], "青云门")
+    merged = merge_candidates(summary + ner)
+    assert len(merged) == 1
+    # NER category should override summary's CAT_OTHER
+    assert merged[0].type_prior == CAT_FACTION
+    assert "from_summary" in merged[0].strategies
+    assert "ner" in merged[0].strategies

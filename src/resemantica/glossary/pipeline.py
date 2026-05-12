@@ -108,16 +108,26 @@ def discover_glossary_candidates(
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
 
-    # Query non-story chapters from summaries data (if summaries have run)
+    # Load summary data and build skip/seed maps (if summaries have run)
     skip_chapters: set[int] = set()
+    chapter_summaries: dict[int, dict] = {}
     try:
         cursor = conn.execute(
-            "SELECT chapter_number FROM summary_drafts "
-            "WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured' AND is_story_chapter = 0",
+            "SELECT chapter_number, content_json, is_story_chapter FROM summary_drafts "
+            "WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured'"
+            "  AND validation_status IN ('approved', 'pending', 'non_story_chapter')",
             (release_id,),
         )
         for row in cursor.fetchall():
-            skip_chapters.add(int(row[0]))
+            ch = int(row[0])
+            if int(row[2]) == 0:
+                skip_chapters.add(ch)
+            raw = json.loads(row[1])
+            # Unwrap validation-failure wrapper: failed drafts store parsed
+            # summary inside a "parsed_summary" key.
+            content = raw.get("parsed_summary", raw)
+            if isinstance(content, dict):
+                chapter_summaries[ch] = content
     except Exception:
         pass  # Table may not exist if summaries haven't run yet
 
@@ -144,6 +154,7 @@ def discover_glossary_candidates(
                 discovery_run_id=run_id,
                 chapter_refs=chapter_refs,
                 skip_chapters=skip_chapters or None,
+                chapter_summaries=chapter_summaries or None,
                 event_callback=lambda event_name, chapter_number, payload: _emit(
                     run_id,
                     release_id,

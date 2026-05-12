@@ -121,6 +121,7 @@ def compute_c_value(
 def score_candidates(
     candidates: list[RawCandidate],
     stats: CorpusStats,
+    summary_term_set: set[str] | None = None,
 ) -> list[ScoredCandidate]:
     """
     Compute TF-IDF and C-value for each candidate.
@@ -184,6 +185,11 @@ def score_candidates(
             composite *= 1.1
         elif n_gram_only:
             composite *= 0.8
+
+        # Summary-verified term boost: terms appearing in new_terms or
+        # characters_mentioned get a moderate lift.
+        if summary_term_set and norm in summary_term_set:
+            composite *= 1.15
 
         scored.append(
             ScoredCandidate(
