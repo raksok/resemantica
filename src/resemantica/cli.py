@@ -1123,6 +1123,7 @@ def main(argv: list[str] | None = None) -> int:
             chapter_number=args.chapter,
             is_story=args.is_story,
         )
+        conn.commit()
         conn.close()
         label = "story" if args.is_story else "non-story"
         if updated:
