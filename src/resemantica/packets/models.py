@@ -18,6 +18,7 @@ class ChapterPacket:
     previous_3_summaries: list[dict[str, object]]
     story_so_far_summary: str
     chapter_summary_short: str
+    chapter_summary_structured: dict[str, object] | None
     active_arc_summary: str | None
     chapter_local_idioms: list[dict[str, object]]
     graph_snapshot_reference: dict[str, object]

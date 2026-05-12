@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from datetime import UTC, datetime
@@ -338,8 +339,13 @@ def _apply_packet_budget(
 ) -> tuple[list[str], dict[str, dict[str, int]]]:
     degraded_sections: list[str] = []
     section_counts: dict[str, dict[str, int]] = {}
-    effective_budget = budget_tokens if budget_tokens is not None else config.budget.max_context_per_pass
+    effective_budget = (
+        budget_tokens
+        if budget_tokens is not None
+        else config.packets.budget_tokens or config.budget.max_context_per_pass
+    )
     section_map = {
+        "structured_summary": "chapter_summary_structured",
         "broad_continuity": "previous_3_summaries",
         "fuzzy_candidates": "alias_resolution_candidates",
         "rerank_depth": "relationship_context",
@@ -461,7 +467,11 @@ def build_chapter_packet(
     ensure_schema(conn, "graph")
     ensure_schema(conn, "packets")
 
-    if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
+    try:
+        _is_non_story = is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number)
+    except Exception:
+        _is_non_story = False
+    if _is_non_story:
         _emit(
             run_id,
             release_id,
@@ -561,9 +571,29 @@ def build_chapter_packet(
             chapter_number=chapter_number,
             summary_type="arc_summary_zh",
         )
+        structured_summary: dict[str, object] | None = None
+        structured_rec: Any = None
+        try:
+            structured_rec = get_validated_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                summary_type="chapter_summary_zh_structured",
+            )
+            if structured_rec is not None:
+                parsed = json.loads(structured_rec.content_zh)
+                if isinstance(parsed, dict):
+                    structured_summary = {
+                        k: parsed.get(k)
+                        for k in ("new_terms", "characters_mentioned", "key_events", "setting", "tone")
+                    }
+        except Exception:
+            pass
         summary_rows_for_hash = [*previous_three, chapter_short, story_so_far]
         if active_arc is not None:
             summary_rows_for_hash.append(active_arc)
+        if structured_rec is not None:
+            summary_rows_for_hash.append(structured_rec)
         summary_version_hash = _hash_summary_rows(summary_rows_for_hash)
 
         idiom_policies = list_policies(conn, release_id=release_id)
@@ -688,6 +718,7 @@ def build_chapter_packet(
             ],
             story_so_far_summary=story_so_far.content_zh,
             chapter_summary_short=chapter_short.content_zh,
+            chapter_summary_structured=structured_summary,
             active_arc_summary=None if active_arc is None else active_arc.content_zh,
             chapter_local_idioms=[row.to_json_dict() for row in idiom_subset],
             graph_snapshot_reference=latest_snapshot.to_json_dict(),

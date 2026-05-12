@@ -97,6 +97,13 @@ class EventsConfig:
 
 
 @dataclass(slots=True)
+class PacketConfig:
+    budget_tokens: int | None = None
+    max_bundle_bytes: int = 4096
+    max_paragraph_chars: int = 2000
+
+
+@dataclass(slots=True)
 class GlossaryConfig:
     min_term_length: int = 2
     max_term_length: int = 20
@@ -115,6 +122,7 @@ class AppConfig:
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
     events: EventsConfig = field(default_factory=EventsConfig)
     glossary: GlossaryConfig = field(default_factory=GlossaryConfig)
+    packets: PacketConfig = field(default_factory=PacketConfig)
 
 
 @dataclass(slots=True)
@@ -225,6 +233,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     summaries = _table(raw, "summaries")
     events = _table(raw, "events")
     glossary = _table(raw, "glossary")
+    packets = _table(raw, "packets")
 
     config = AppConfig(
         models=ModelsConfig(
@@ -381,6 +390,20 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             dedup_similarity_threshold=_as_float(
                 glossary.get("dedup_similarity_threshold", GlossaryConfig().dedup_similarity_threshold),
                 "glossary.dedup_similarity_threshold",
+            ),
+        ),
+        packets=PacketConfig(
+            budget_tokens=(
+                _as_int(packets["budget_tokens"], "packets.budget_tokens")
+                if "budget_tokens" in packets else None
+            ),
+            max_bundle_bytes=_as_int(
+                packets.get("max_bundle_bytes", PacketConfig().max_bundle_bytes),
+                "packets.max_bundle_bytes",
+            ),
+            max_paragraph_chars=_as_int(
+                packets.get("max_paragraph_chars", PacketConfig().max_paragraph_chars),
+                "packets.max_paragraph_chars",
             ),
         ),
     )

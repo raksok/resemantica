@@ -118,6 +118,7 @@ def _seed_summaries(
     chapter_hash: str,
     chapter_short: str,
     story_so_far: str,
+    structured: dict | None = None,
 ) -> None:
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
@@ -144,6 +145,17 @@ def _seed_summaries(
             run_id="seed-summaries",
             validation_status="approved",
         )
+        if structured is not None:
+            save_validated_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                summary_type="chapter_summary_zh_structured",
+                content_zh=json.dumps(structured, ensure_ascii=False),
+                derived_from_chapter_hash=chapter_hash,
+                run_id="seed-summaries",
+                validation_status="approved",
+            )
     finally:
         conn.close()
 
@@ -636,17 +648,18 @@ def test_apply_packet_budget_respects_budget_tokens_override(monkeypatch) -> Non
     monkeypatch.setattr("resemantica.packets.builder.count_tokens", fake_count_tokens)
     config = load_config()
     packet = ChapterPacket(
-        packet_id="",
-        release_id="test",
-        run_id="test",
-        chapter_number=1,
-        chapter_metadata={},
-        chapter_glossary_subset=[],
-        previous_3_summaries=[{"summary_id": "s1", "chapter_number": 0, "content_zh": "x" * 200}],
-        story_so_far_summary="",
-        chapter_summary_short="",
-        active_arc_summary=None,
-        chapter_local_idioms=[],
+            packet_id="",
+            release_id="test",
+            run_id="test",
+            chapter_number=1,
+            chapter_metadata={},
+            chapter_glossary_subset=[],
+            previous_3_summaries=[{"summary_id": "s1", "chapter_number": 0, "content_zh": "x" * 200}],
+            story_so_far_summary="",
+            chapter_summary_short="",
+            chapter_summary_structured=None,
+            active_arc_summary=None,
+            chapter_local_idioms=[],
         graph_snapshot_reference={},
         entity_context=[],
         relationship_context=[],
@@ -668,3 +681,96 @@ def test_apply_packet_budget_respects_budget_tokens_override(monkeypatch) -> Non
     degraded, counts = _apply_packet_budget(packet=packet, config=config, budget_tokens=25)
     assert "broad_continuity" in degraded
     assert isinstance(counts, dict)
+
+
+def test_packet_structured_summary_included(tmp_path: Path, monkeypatch) -> None:
+    """Verify structured summary (new_terms, characters_mentioned) is in packet."""
+    monkeypatch.chdir(tmp_path)
+    release_id = "m8-structured"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三加入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction")],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+        structured={
+            "new_terms": ["青云门"],
+            "characters_mentioned": ["张三"],
+            "key_events": ["张三加入青云门"],
+            "setting": "青云门",
+            "tone": "neutral",
+        },
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        graph_client=graph_client,
+    )
+    assert result.status in {"built", "rebuilt_stale"}
+
+    packet_payload = _read_json(Path(result.packet_path))
+    structured = packet_payload.get("chapter_summary_structured")
+    assert structured is not None
+    assert "青云门" in structured.get("new_terms", [])
+    assert "张三" in structured.get("characters_mentioned", [])
+    assert structured.get("setting") == "青云门"
+
+
+def test_packet_structured_summary_missing_is_graceful(tmp_path: Path, monkeypatch) -> None:
+    """Verify packet builds fine when structured summary doesn't exist."""
+    monkeypatch.chdir(tmp_path)
+    release_id = "m8-no-structured"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三加入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction")],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        graph_client=graph_client,
+    )
+    assert result.status in {"built", "rebuilt_stale"}
+
+    packet_payload = _read_json(Path(result.packet_path))
+    assert packet_payload.get("chapter_summary_structured") is None
