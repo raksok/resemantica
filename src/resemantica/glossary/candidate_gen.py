@@ -160,6 +160,10 @@ def extract_heuristic_patterns(tokens: list[SegmentedToken], text: str) -> list[
             entity_tokens = tokens[i : j + 1]
             surface = "".join(t.text for t in entity_tokens)
 
+            # Skip windows containing punctuation-only tokens (e.g. `，小镇`)
+            if any(not t.text.isalnum() for t in entity_tokens):
+                continue
+
             if not surface or len(surface) < 2 or len(surface) > 6:
                 continue
 

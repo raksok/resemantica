@@ -70,6 +70,49 @@ def test_extract_heuristic_patterns():
     assert factions[0].type_prior == CAT_FACTION
 
 
+def test_extract_heuristic_patterns_skips_punctuation():
+    # Leading punctuation like `，小镇` should NOT create a candidate
+    tokens = [
+        SegmentedToken(text="，", pos="PU", ner=None, offset_start=0, offset_end=1),
+        SegmentedToken(text="小", pos="NN", ner=None, offset_start=1, offset_end=2),
+        SegmentedToken(text="镇", pos="NN", ner=None, offset_start=2, offset_end=3),
+    ]
+    text = "，小镇"
+    candidates = extract_heuristic_patterns(tokens, text)
+    assert all(c.surface_form != "，小镇" for c in candidates)
+
+    # Trailing punctuation like `紫霄宗，` should NOT create a candidate
+    tokens2 = [
+        SegmentedToken(text="紫", pos="JJ", ner=None, offset_start=0, offset_end=1),
+        SegmentedToken(text="霄", pos="NN", ner=None, offset_start=1, offset_end=2),
+        SegmentedToken(text="宗", pos="NN", ner=None, offset_start=2, offset_end=3),
+        SegmentedToken(text="，", pos="PU", ner=None, offset_start=3, offset_end=4),
+    ]
+    text2 = "紫霄宗，"
+    candidates2 = extract_heuristic_patterns(tokens2, text2)
+    assert all(c.surface_form != "紫霄宗，" for c in candidates2)
+
+    # Quote-inclusive like `“事功` should NOT create a candidate
+    tokens3 = [
+        SegmentedToken(text="“", pos="PU", ner=None, offset_start=0, offset_end=1),
+        SegmentedToken(text="事", pos="NN", ner=None, offset_start=1, offset_end=2),
+        SegmentedToken(text="功", pos="NN", ner=None, offset_start=2, offset_end=3),
+    ]
+    text3 = "“事功"
+    candidates3 = extract_heuristic_patterns(tokens3, text3)
+    assert all(c.surface_form != "“事功" for c in candidates3)
+
+    # Clean tokens still produce candidates normally
+    tokens4 = [
+        SegmentedToken(text="紫", pos="JJ", ner=None, offset_start=0, offset_end=1),
+        SegmentedToken(text="霄", pos="NN", ner=None, offset_start=1, offset_end=2),
+        SegmentedToken(text="宗", pos="NN", ner=None, offset_start=2, offset_end=3),
+    ]
+    text4 = "紫霄宗"
+    candidates4 = extract_heuristic_patterns(tokens4, text4)
+    assert any(c.surface_form == "紫霄宗" for c in candidates4)
+
+
 def test_extract_webnovel_dict(monkeypatch):
     monkeypatch.setattr("resemantica.glossary.candidate_gen.WEBNOVEL_DICT", {"灵气", "修真"})
 

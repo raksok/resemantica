@@ -73,6 +73,54 @@ def test_apply_deterministic_filter_punct_noise():
     assert "punctuation_noise" in filtered[2].conflict_reason
 
 
+def test_apply_deterministic_filter_leading_punctuation():
+    config = GlossaryConfig(min_term_length=1, max_term_length=20, min_corpus_score=0.0)
+
+    c1 = _make_candidate("，小镇")
+    c2 = _make_candidate("“事功")
+    c3 = _make_candidate("。剑")
+    c4 = _make_candidate("、狸狐小妖")
+    c5 = _make_candidate("小镇")  # clean
+
+    filtered = apply_deterministic_filter([c1, c2, c3, c4, c5], config=config)
+
+    assert filtered[0].candidate_status == "filtered"
+    assert "leading_punctuation" in filtered[0].conflict_reason
+
+    assert filtered[1].candidate_status == "filtered"
+    assert "leading_punctuation" in filtered[1].conflict_reason
+
+    assert filtered[2].candidate_status == "filtered"
+    assert "leading_punctuation" in filtered[2].conflict_reason
+
+    assert filtered[3].candidate_status == "filtered"
+    assert "leading_punctuation" in filtered[3].conflict_reason
+
+    assert filtered[4].candidate_status == "discovered"
+
+
+def test_apply_deterministic_filter_trailing_punctuation():
+    config = GlossaryConfig(min_term_length=1, max_term_length=20, min_corpus_score=0.0)
+
+    c1 = _make_candidate("剑来，")
+    c2 = _make_candidate("小镇。")
+    c3 = _make_candidate("紫霄宗？")
+    c4 = _make_candidate("紫霄")  # clean
+
+    filtered = apply_deterministic_filter([c1, c2, c3, c4], config=config)
+
+    assert filtered[0].candidate_status == "filtered"
+    assert "trailing_punctuation" in filtered[0].conflict_reason
+
+    assert filtered[1].candidate_status == "filtered"
+    assert "trailing_punctuation" in filtered[1].conflict_reason
+
+    assert filtered[2].candidate_status == "filtered"
+    assert "trailing_punctuation" in filtered[2].conflict_reason
+
+    assert filtered[3].candidate_status == "discovered"
+
+
 def test_apply_deterministic_filter_pos_generic():
     config = GlossaryConfig(min_term_length=1, max_term_length=20, min_corpus_score=0.0)
 

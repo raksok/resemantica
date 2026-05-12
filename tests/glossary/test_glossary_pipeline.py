@@ -464,13 +464,13 @@ def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch)
     _extract_one_chapter(
         tmp_path,
         release_id="m3-conflict",
-        source_text="青云门。苍云门。",
+        source_text="紫霄宗。青冥宗。",
     )
 
     llm = ScriptedGlossaryLLM({
         1: [
-            {"source_term": "青云门", "category": "faction", "evidence_snippet": "青云门"},
-            {"source_term": "苍云门", "category": "faction", "evidence_snippet": "苍云门"},
+            {"source_term": "紫霄宗", "category": "faction", "evidence_snippet": "紫霄宗"},
+            {"source_term": "青冥宗", "category": "faction", "evidence_snippet": "青冥宗"},
         ],
     })
 
@@ -497,7 +497,9 @@ def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch)
         locked = list_locked_entries(conn, release_id="m3-conflict")
         conflicts = list_conflicts(conn, release_id="m3-conflict")
         azure_factions = [e for e in locked if e.target_term == "Azure Sect" and e.category == "faction"]
-        assert len(azure_factions) == 0, "Duplicate-target conflict should block Azure Sect faction entries"
+        assert len(azure_factions) == 0, (
+            f"Duplicate-target conflict should block Azure Sect faction entries (got {len(azure_factions)})"
+        )
         assert any(conflict.conflict_type == "duplicate_target" for conflict in conflicts)
     finally:
         conn.close()

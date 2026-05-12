@@ -108,6 +108,11 @@ def apply_deterministic_filter(
         if _PUNCT_NOISE_RE.match(term):
             reasons.append("punctuation_noise")
 
+        if term and not term[0].isalnum():
+            reasons.append("leading_punctuation")
+        if term and not term[-1].isalnum():
+            reasons.append("trailing_punctuation")
+
         if candidate.pos_tags:
             # Parse pos_tags from string if it's stored as JSON or string repr
             import json
