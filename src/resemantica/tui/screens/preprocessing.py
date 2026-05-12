@@ -14,8 +14,8 @@ from resemantica.tui.screens.run_dialog import ConfirmDialog
 
 PREPRO_STAGE_KEYS = [
     "epub-extract",
-    "preprocess-glossary",
     "preprocess-summaries",
+    "preprocess-glossary",
     "preprocess-idioms",
     "preprocess-graph",
     "packets-build",
@@ -177,16 +177,16 @@ class PreprocessingScreen(BaseScreen):
     def _fallback_stage_progress(self, state: dict | None) -> str:
         stages = [
             ("EPUB Extract", "preprocess-epub"),
-            ("Glossary", "preprocess-glossary"),
             ("Summaries", "preprocess-summaries"),
+            ("Glossary", "preprocess-glossary"),
             ("Idioms", "preprocess-idioms"),
             ("Graph MVP", "preprocess-graph"),
             ("Packets", "packets-build"),
         ]
         current_stage = state["stage_name"] if state else None
         stage_order = [
-            "preprocess-glossary",
             "preprocess-summaries",
+            "preprocess-glossary",
             "preprocess-idioms",
             "preprocess-graph",
             "packets-build",

@@ -4,8 +4,8 @@
 Production orchestration now performs deterministic preflight checks before every production stage. The checks do not run extraction and do not alter `STAGE_ORDER`; they verify that expected extracted, summary, graph, packet, translation, and rebuild inputs already exist before allowing the next stage to start.
 
 ## Gate Scope
-- `preprocess-glossary`: extracted chapter manifest and selected chapter files.
-- `preprocess-summaries`: extraction plus unresolved preprocess translation vote checks.
+- `preprocess-summaries`: extracted chapter manifest and selected chapter files.
+- `preprocess-glossary`: extraction plus unresolved preprocess translation vote checks; skips chapters marked `is_story_chapter = 0` in `summary_drafts` (if summaries exist).
 - `preprocess-idioms` and `preprocess-graph`: extraction, summary story metadata, required story summaries, and unresolved vote checks.
 - `packets-build`: summary inputs, graph snapshot inputs, and unresolved vote checks.
 - `translate-range`: packet metadata and packet/bundle artifacts for selected story chapters.

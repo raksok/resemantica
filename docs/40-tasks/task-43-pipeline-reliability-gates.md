@@ -25,7 +25,7 @@ Prevent unsafe production and resume runs from flowing into expensive LLM stages
 - `docs/20-lld/lld-43-pipeline-reliability-gates.md`
 
 ## Interfaces To Satisfy
-- `STAGE_ORDER` remains unchanged and starts at `preprocess-glossary`.
+- `STAGE_ORDER` starts with `preprocess-summaries` (summaries before glossary).
 - `run production --dry-run` returns the ordered plan with per-stage gate metadata.
 - `run production` and `run resume` enforce the same gates before launching production stages.
 - Gate failures return `StageResult(success=False, ...)` and persist a `*.gate_failed` event.
@@ -37,6 +37,7 @@ Prevent unsafe production and resume runs from flowing into expensive LLM stages
 - Gate tests cover non-story chapters being allowed to skip downstream packet, translation, and rebuild requirements.
 - Gate tests cover missing packet and rebuild artifacts.
 - Runner tests cover production failure before stage execution and dry-run gate preview metadata.
+- Glossary discovery skips chapters marked `is_story_chapter = 0` in `summary_drafts`.
 - Run focused orchestration tests, then Ruff and mypy for changed modules.
 
 ## Done Criteria

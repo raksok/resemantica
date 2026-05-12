@@ -38,24 +38,24 @@ def _make_run_state(release_id: str, run_id: str, stage: str) -> Any:
 
 class TestStageTransitions:
     def test_legal_forward_transition(self):
-        assert legal_transition("preprocess-glossary", "preprocess-summaries") is True
+        assert legal_transition("preprocess-summaries", "preprocess-glossary") is True
 
     def test_legal_same_stage(self):
         assert legal_transition("preprocess-glossary", "preprocess-glossary") is True
 
     def test_legal_none_current(self):
-        assert legal_transition(None, "preprocess-glossary") is True
+        assert legal_transition(None, "preprocess-summaries") is True
 
     def test_illegal_backward_transition(self):
-        assert legal_transition("preprocess-summaries", "preprocess-glossary") is False
+        assert legal_transition("preprocess-glossary", "preprocess-summaries") is False
 
     def test_next_stage(self):
-        assert next_stage("preprocess-glossary") == "preprocess-summaries"
+        assert next_stage("preprocess-summaries") == "preprocess-glossary"
         assert next_stage("epub-rebuild") is None
 
     def test_stage_order_valid(self):
         assert len(STAGE_ORDER) > 0
-        assert STAGE_ORDER[0] == "preprocess-glossary"
+        assert STAGE_ORDER[0] == "preprocess-summaries"
         assert STAGE_ORDER[-1] == "epub-rebuild"
 
 
@@ -165,9 +165,9 @@ class TestRunStage:
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"
         run_id = f"test-run-{uuid.uuid4().hex[:8]}"
 
-        _make_run_state(release_id, run_id, "preprocess-summaries")
+        _make_run_state(release_id, run_id, "preprocess-glossary")
 
-        result = run_stage(release_id, run_id, "preprocess-glossary")
+        result = run_stage(release_id, run_id, "preprocess-summaries")
         assert result.success is False
         assert "Illegal stage transition" in result.message
 

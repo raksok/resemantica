@@ -26,8 +26,8 @@ Python:
 
 The production plan is explicit and inspectable. It should include:
 
-- `preprocess-glossary`
 - `preprocess-summaries`
+- `preprocess-glossary`
 - `preprocess-idioms`
 - `preprocess-graph`
 - `packets-build`

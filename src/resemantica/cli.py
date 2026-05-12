@@ -565,8 +565,8 @@ and cleanup of intermediate artifacts.""",
         "production", aliases=["prod"],
         help="Run full production workflow from preprocess through EPUB rebuild.",
         description="""\
-Executes all pipeline stages in canonical order: preprocess-glossary,
-preprocess-summaries, preprocess-idioms, preprocess-graph, packets-build,
+Executes all pipeline stages in canonical order: preprocess-summaries,
+preprocess-glossary, preprocess-idioms, preprocess-graph, packets-build,
 translate-range, epub-rebuild. With --dry-run, prints the ordered stage
 list without executing.""",
     )

@@ -21,8 +21,8 @@ StageKey = Literal[
 
 STAGE_DEFINITIONS: list[dict[str, Any]] = [
     {"key": "epub-extract", "label": "EPUB Extract", "extraction": True},
-    {"key": "preprocess-glossary", "label": "Glossary"},
     {"key": "preprocess-summaries", "label": "Summaries"},
+    {"key": "preprocess-glossary", "label": "Glossary"},
     {"key": "preprocess-idioms", "label": "Idioms"},
     {"key": "preprocess-graph", "label": "Graph"},
     {"key": "packets-build", "label": "Packets"},
@@ -37,9 +37,9 @@ STAGE_ORDER_KEYS: list[str] = [
 
 _STAGE_PREREQUISITE: dict[str, str | None] = {
     "epub-extract": None,
-    "preprocess-glossary": "__extraction__",
-    "preprocess-summaries": "preprocess-glossary",
-    "preprocess-idioms": "preprocess-summaries",
+    "preprocess-summaries": "__extraction__",
+    "preprocess-glossary": "preprocess-summaries",
+    "preprocess-idioms": "preprocess-glossary",
     "preprocess-graph": "preprocess-idioms",
     "packets-build": "preprocess-graph",
     "translate-range": "packets-build",

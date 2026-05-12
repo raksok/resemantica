@@ -632,8 +632,8 @@ def test_preprocessing_launch_workflow_chains_stages():
     adapter.launch_workflow("preprocessing")
 
     assert runner.calls == [
-        "preprocess-glossary",
         "preprocess-summaries",
+        "preprocess-glossary",
         "preprocess-idioms",
         "preprocess-graph",
         "packets-build",
@@ -651,7 +651,7 @@ def test_preprocessing_launch_short_circuits_on_failure():
             self.calls.append(stage_name)
 
             class Result:
-                success = stage_name != "preprocess-summaries"
+                success = stage_name != "preprocess-glossary"
 
             return Result()
 
@@ -662,7 +662,7 @@ def test_preprocessing_launch_short_circuits_on_failure():
     adapter = TUIAdapter("rel", "run", runner=runner)  # type: ignore[arg-type]
     adapter.launch_workflow("preprocessing")
 
-    assert runner.calls == ["preprocess-glossary", "preprocess-summaries"]
+    assert runner.calls == ["preprocess-summaries", "preprocess-glossary"]
 
 
 def test_chapter_spine_uses_extracted_count():

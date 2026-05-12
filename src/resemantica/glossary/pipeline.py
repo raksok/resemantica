@@ -108,6 +108,19 @@ def discover_glossary_candidates(
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
 
+    # Query non-story chapters from summaries data (if summaries have run)
+    skip_chapters: set[int] = set()
+    try:
+        cursor = conn.execute(
+            "SELECT chapter_number FROM summary_drafts "
+            "WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured' AND is_story_chapter = 0",
+            (release_id,),
+        )
+        for row in cursor.fetchall():
+            skip_chapters.add(int(row[0]))
+    except Exception:
+        pass  # Table may not exist if summaries haven't run yet
+
     resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume else None
 
     try:
@@ -130,6 +143,7 @@ def discover_glossary_candidates(
                 release_id=release_id,
                 discovery_run_id=run_id,
                 chapter_refs=chapter_refs,
+                skip_chapters=skip_chapters or None,
                 event_callback=lambda event_name, chapter_number, payload: _emit(
                     run_id,
                     release_id,

@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 STAGE_ORDER = [
-    "preprocess-glossary",
     "preprocess-summaries",
+    "preprocess-glossary",
     "preprocess-idioms",
     "preprocess-graph",
     "packets-build",

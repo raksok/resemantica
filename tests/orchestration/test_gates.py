@@ -185,7 +185,7 @@ def test_missing_extracted_manifest_blocks_preprocess(tmp_path: Path, monkeypatc
     monkeypatch.chdir(tmp_path)
 
     report = check_stage_gate(
-        stage_name="preprocess-glossary",
+        stage_name="preprocess-summaries",
         release_id="missing-extract",
         run_id="run",
         config=load_config(),
@@ -202,7 +202,7 @@ def test_dry_run_includes_gate_preview(tmp_path: Path, monkeypatch) -> None:
 
     assert result.success is True
     first_stage = result.metadata["stages"][0]
-    assert first_stage["stage_name"] == "preprocess-glossary"
+    assert first_stage["stage_name"] == "preprocess-summaries"
     assert first_stage["gate"]["success"] is False
 
 
@@ -225,7 +225,7 @@ def test_production_gate_failure_persists_event_before_execution(tmp_path: Path,
         events = load_events(conn, run_id="production", release_id="prod-gates")
     finally:
         conn.close()
-    assert any(event.event_type == "preprocess-glossary.gate_failed" for event in events)
+    assert any(event.event_type == "preprocess-summaries.gate_failed" for event in events)
 
 
 def test_unresolved_glossary_and_idiom_votes_block_downstream(tmp_path: Path, monkeypatch) -> None:
@@ -314,7 +314,7 @@ def test_unresolved_glossary_and_idiom_votes_block_downstream(tmp_path: Path, mo
         conn.close()
 
     report = check_stage_gate(
-        stage_name="preprocess-summaries",
+        stage_name="preprocess-idioms",
         release_id=release_id,
         run_id="production",
         config=load_config(),

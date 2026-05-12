@@ -312,8 +312,8 @@ class DashboardScreen(BaseScreen):
     def _build_phase_progress_static(state: dict | None) -> str:
         lines = ["[bold]Phase Progress[/bold]"]
         stages = [
-            "preprocess-glossary",
             "preprocess-summaries",
+            "preprocess-glossary",
             "preprocess-idioms",
             "preprocess-graph",
             "packets-build",

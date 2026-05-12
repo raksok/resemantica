@@ -58,7 +58,7 @@ def _collect_scope_artifacts(
             deletable.append(translation_dir)
 
     elif scope == "preprocess":
-        for subdir in ["extracted", "glossary", "summaries", "idioms", "graph", "packets"]:
+        for subdir in ["extracted", "summaries", "glossary", "idioms", "graph", "packets"]:
             target = release_root / subdir
             if target.exists():
                 deletable.append(target)

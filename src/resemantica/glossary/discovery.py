@@ -64,6 +64,7 @@ def discover_candidates_from_extracted(
     chapter_refs: list[ChapterRef],
     event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
     stop_token: StopToken | None = None,
+    skip_chapters: set[int] | None = None,
     # The following parameters are kept for signature compatibility but ignored in deterministic mode
     extracted_chapters_dir: Path | None = None,
     llm_client: Any = None,
@@ -96,6 +97,13 @@ def discover_candidates_from_extracted(
             event_callback("chapter_started", chapter_number, {})
 
         raise_if_stop_requested(stop_token)
+
+        # Skip non-story chapters (marked by summaries pipeline)
+        if skip_chapters and chapter_number in skip_chapters:
+            logger.debug("Chapter {}: non-story, skipping", chapter_number)
+            if event_callback:
+                event_callback("chapter_skipped", chapter_number, {"reason": "non_story"})
+            continue
 
         # Load chapter text
         payload = json.loads(ref.chapter_path.read_text(encoding="utf-8"))

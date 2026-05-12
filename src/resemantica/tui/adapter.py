@@ -70,8 +70,8 @@ class TUIAdapter:
         if workflow_name == "preprocessing":
             results = []
             for stage_name in (
-                "preprocess-glossary",
                 "preprocess-summaries",
+                "preprocess-glossary",
                 "preprocess-idioms",
                 "preprocess-graph",
                 "packets-build",

@@ -64,11 +64,10 @@ def check_stage_gate(
     )
     report.metadata["chapter_numbers"] = selected
 
-    if stage_name == "preprocess-glossary":
+    if stage_name in {"preprocess-summaries", "preprocess-glossary"}:
         return report
 
     if stage_name in {
-        "preprocess-summaries",
         "preprocess-idioms",
         "preprocess-graph",
         "packets-build",
