@@ -538,6 +538,11 @@ mark a chapter as non-narrative (e.g. author's commentary, afterword).""",
         "-C", "--chapter", required=True, type=int,
         help="Chapter number to reclassify.",
     )
+    set_chapter_flag.add_argument(
+        "-c", "--config",
+        type=Path, default=None, metavar="PATH",
+        help="Path to resemantica.toml (default: ./resemantica.toml).",
+    )
     flag_group = set_chapter_flag.add_mutually_exclusive_group(required=True)
     flag_group.add_argument(
         "--story", action="store_true", dest="is_story",
