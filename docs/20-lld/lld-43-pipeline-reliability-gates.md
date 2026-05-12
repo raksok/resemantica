@@ -14,6 +14,14 @@ Production orchestration now performs deterministic preflight checks before ever
 ## Non-Story Chapters
 Downstream gates use `summary_drafts.is_story_chapter = 0` as the authoritative non-story marker. Non-story chapters may omit packets and translation pass artifacts; rebuild leaves their original XHTML untouched.
 
+Chapters with **no `summary_drafts` row at all** (e.g., excluded by `exclude_chapter_patterns` in the summaries pipeline) are silently skipped by the gate — they are not added to the `story_chapters` list and do not trigger gate failures. Downstream stages handle missing data gracefully (e.g., packets skips with `missing_story_so_far_summary`).
+
+## Unresolved Preprocess Votes
+
+The gate checks for unresolved `glossary_translation_votes` and `idiom_translation_votes` before allowing `preprocess-idioms`, `preprocess-graph`, and downstream stages to run.
+
+For glossary votes, the gate applies the same `llm_keep` filter as the translation pipeline: candidates with `llm_keep = 0` (rejected by LLM evaluation) are excluded. This prevents a permanent gate deadlock where rejected candidates have orphaned unresolved votes that no downstream stage can resolve. Candidates with `llm_keep IS NULL` (legacy, never evaluated) are still checked.
+
 ## Failure Behavior
 Gate failures are normal orchestration failures:
 - `StageResult(success=False, message="Gate failed: ...")`

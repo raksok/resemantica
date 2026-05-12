@@ -235,6 +235,7 @@ def _check_unresolved_preprocess_votes(report: GateReport, *, db_path: Path, rel
                 WHERE v.release_id = ?
                   AND v.resolution_status IN (?, ?)
                   AND (c.candidate_translation_en IS NULL OR c.candidate_translation_en = '')
+                  AND (c.llm_keep = 1 OR c.llm_keep IS NULL)
                 ORDER BY v.candidate_id
                 """,
                 (release_id, *_UNRESOLVED_STATUSES),
@@ -290,7 +291,6 @@ def _check_summary_inputs(
         return chapter_numbers
 
     story_chapters: list[int] = []
-    missing_drafts: list[int] = []
     missing_summaries: list[str] = []
     missing_artifacts: list[str] = []
     try:
@@ -307,8 +307,9 @@ def _check_summary_inputs(
                 (release_id, number),
             ).fetchone()
             if row is None:
-                missing_drafts.append(number)
-                story_chapters.append(number)
+                # No draft row — chapter was excluded by pattern or never
+                # processed. Skip silently; downstream stages handle
+                # gracefully.
                 continue
             if int(row["is_story_chapter"]) == 0:
                 continue
@@ -334,8 +335,6 @@ def _check_summary_inputs(
     finally:
         conn.close()
 
-    if missing_drafts:
-        report.fail(f"Missing chapter story metadata in summary_drafts: {missing_drafts}")
     if missing_summaries:
         report.fail(f"Missing validated summary rows: {missing_summaries}")
     if missing_artifacts:

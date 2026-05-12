@@ -12,7 +12,12 @@ from resemantica.db.idiom_repo import upsert_discovered_candidates as upsert_idi
 from resemantica.db.idiom_repo import upsert_translation_vote as upsert_idiom_vote
 from resemantica.db.packet_repo import ensure_packet_schema, save_packet_metadata
 from resemantica.db.sqlite import open_connection
-from resemantica.db.summary_repo import ensure_summary_schema, save_chapter_structured_and_short, save_summary_draft
+from resemantica.db.summary_repo import (
+    ensure_summary_schema,
+    save_chapter_structured_and_short,
+    save_summary_draft,
+    save_validated_summary,
+)
 from resemantica.glossary.models import GlossaryCandidate
 from resemantica.graph.models import GraphSnapshotRecord
 from resemantica.idioms.models import IdiomCandidate
@@ -89,7 +94,18 @@ def _seed_summary(release_id: str, chapter_number: int = 1, *, is_story: bool = 
             run_id="summaries",
             validation_status="approved" if is_story else "non_story_chapter",
         )
-        if not is_story:
+        if is_story:
+            save_validated_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                summary_type="story_so_far_zh",
+                content_zh="故事继续。",
+                derived_from_chapter_hash=f"hash-{chapter_number}",
+                run_id="summaries",
+                validation_status="approved",
+            )
+        else:
             conn.execute(
                 """
                 UPDATE summary_drafts
@@ -386,3 +402,87 @@ def test_rebuild_gate_requires_translation_and_placeholders(tmp_path: Path, monk
 
     assert report.success is False
     assert "placeholder map" in report.message()
+
+
+def test_unresolved_votes_ignored_for_rejected_candidates(tmp_path: Path, monkeypatch) -> None:
+    """Gate should not fail for rejected candidates (llm_keep=0) with orphaned votes."""
+    monkeypatch.chdir(tmp_path)
+    release_id = "vote-rejected"
+    _write_extracted_chapter(release_id)
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        upsert_discovered_candidates(
+            conn,
+            candidates=[
+                GlossaryCandidate(
+                    candidate_id="gcan-rejected",
+                    release_id=release_id,
+                    source_term="张三",
+                    normalized_source_term="张三",
+                    category="character",
+                    source_language="zh",
+                    first_seen_chapter=1,
+                    last_seen_chapter=1,
+                    appearance_count=1,
+                    evidence_snippet="张三出现。",
+                    candidate_translation_en=None,
+                    normalized_target_term=None,
+                    discovery_run_id="discover",
+                    translation_run_id=None,
+                    candidate_status="llm_rejected",
+                    validation_status="pending",
+                    conflict_reason=None,
+                    llm_keep=0,
+                )
+            ],
+        )
+        upsert_translation_vote(
+            conn,
+            candidate_id="gcan-rejected",
+            release_id=release_id,
+            translation_run_id="translate",
+            model_name="m1",
+            prompt_version="v1",
+            raw_output="A",
+            cleaned_output="A",
+            normalized_output="a",
+            resolution_status="unresolved",
+        )
+    finally:
+        conn.close()
+
+    report = check_stage_gate(
+        stage_name="preprocess-idioms",
+        release_id=release_id,
+        run_id="production",
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    assert report.success is True
+    assert "Unresolved glossary" not in report.message()
+
+
+def test_no_draft_chapter_skipped_by_gate(tmp_path: Path, monkeypatch) -> None:
+    """Gate should not fail for chapters with no summary_drafts row."""
+    monkeypatch.chdir(tmp_path)
+    release_id = "no-draft-gate"
+    _write_extracted_chapter(release_id, chapter_number=1)
+    _write_extracted_chapter(release_id, chapter_number=2)
+    _seed_summary(release_id, chapter_number=2)  # Only chapter 2 has a draft
+
+    report = check_stage_gate(
+        stage_name="preprocess-idioms",
+        release_id=release_id,
+        run_id="production",
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=2,
+    )
+
+    assert report.success is True
+    assert "Missing chapter story metadata" not in report.message()
+    assert report.metadata.get("story_chapter_numbers") == [2]
