@@ -616,6 +616,38 @@ def list_policies(conn: sqlite3.Connection, *, release_id: str) -> list[IdiomPol
     return [_policy_from_row(row) for row in rows]
 
 
+def set_checkpoint(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    stage_name: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO idiom_checkpoints(release_id, run_id, stage_name, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(release_id, run_id) DO UPDATE SET
+            stage_name = excluded.stage_name,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (release_id, run_id, stage_name),
+    )
+
+
+def get_checkpoint(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+) -> str | None:
+    row = conn.execute(
+        "SELECT stage_name FROM idiom_checkpoints WHERE release_id = ? AND run_id = ?",
+        (release_id, run_id),
+    ).fetchone()
+    return str(row["stage_name"]) if row else None
+
+
 def find_exact_policy(
     conn: sqlite3.Connection,
     *,

@@ -9,6 +9,7 @@ from loguru import logger
 
 from resemantica.db.idiom_repo import (
     ensure_idiom_schema,
+    get_checkpoint,
     list_candidates,
     list_candidates_for_promotion,
     list_candidates_for_translation,
@@ -17,6 +18,7 @@ from resemantica.db.idiom_repo import (
     list_translation_votes,
     promote_policies,
     save_idiom_translation,
+    set_checkpoint,
     upsert_discovered_candidates,
 )
 from resemantica.db.sqlite import open_connection
@@ -661,3 +663,49 @@ def test_exact_match_precedence_hook_uses_locked_policy(
         assert matched[0].source_text == "一箭双雕"
     finally:
         conn.close()
+
+
+def test_idiom_checkpoint_read_write(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    paths = derive_paths(config, release_id="idi-cp-test")
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        assert get_checkpoint(conn, release_id="idi-cp-test", run_id="r1") is None
+
+        set_checkpoint(conn, release_id="idi-cp-test", run_id="r1", stage_name="detect_completed")
+        assert get_checkpoint(conn, release_id="idi-cp-test", run_id="r1") == "detect_completed"
+
+        set_checkpoint(conn, release_id="idi-cp-test", run_id="r1", stage_name="translated")
+        assert get_checkpoint(conn, release_id="idi-cp-test", run_id="r1") == "translated"
+
+        assert get_checkpoint(conn, release_id="idi-cp-test", run_id="other") is None
+    finally:
+        conn.close()
+
+
+def test_preprocess_idioms_handles_missing_summaries_table(tmp_path: Path, monkeypatch) -> None:
+    """Verify preprocess_idioms doesn't crash when summary_drafts table doesn't exist."""
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    paths = derive_paths(config, release_id="idi-no-sum")
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    conn.close()
+
+    _write_extracted_chapter(
+        release_id="idi-no-sum",
+        chapter_number=1,
+        source_text="汝此计可谓一箭双雕。",
+    )
+
+    llm = ScriptedIdiomLLM()
+    translator = ScriptedTranslatorLLM("one move, two wins")
+    result = preprocess_idioms(
+        release_id="idi-no-sum",
+        run_id="idioms-001",
+        llm_client=llm,
+        translator_llm_client=translator,
+    )
+    assert result["status"] == "success"

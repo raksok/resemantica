@@ -43,6 +43,7 @@ def evaluate_idiom_candidate_batch(
     batch_size: int = 50,
     cache_root: Path | None = None,  # noqa: ARG001
     event_callback: Callable[[str, dict[str, object]], None] | None = None,
+    persist_callback: Callable[[list[IdiomEvalResult]], None] | None = None,
 ) -> list[IdiomEvalResult]:
     results: list[IdiomEvalResult] = []
     for index in range(0, len(candidates), batch_size):
@@ -115,6 +116,8 @@ def evaluate_idiom_candidate_batch(
                         meaning_zh=str(item.get("meaning_zh", "")).strip(),
                     )
                 )
+            if persist_callback is not None:
+                persist_callback(results[-len(batch):])
             if event_callback is not None:
                 event_callback(
                     "eval_batch_success",

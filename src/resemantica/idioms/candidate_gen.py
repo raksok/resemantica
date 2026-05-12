@@ -116,6 +116,7 @@ def generate_chapter_idiom_candidates(
     *,
     chapter_number: int,
     source_text: str,
+    summary_data: dict | None = None,
 ) -> list[RawIdiomCandidate]:
     merged: dict[str, RawIdiomCandidate] = {}
 
@@ -159,6 +160,15 @@ def generate_chapter_idiom_candidates(
                 chapter_number=chapter_number,
                 snippets=snippets,
             )
+
+    # Cross-reference with summary new_terms: boost confidence for terms
+    # the LLM explicitly flagged as important in this chapter.
+    if summary_data:
+        summary_terms = set(summary_data.get("new_terms", []))
+        for term in summary_terms:
+            existing = merged.get(term)
+            if existing is not None:
+                existing.strategies.add("from_summary")
 
     return sorted(merged.values(), key=lambda item: (item.first_seen_chapter, item.normalized_form))
 

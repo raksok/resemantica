@@ -131,6 +131,7 @@ def extract_idioms(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     skip_chapters: set[int] | None = None,
+    chapter_summaries: dict[int, dict] | None = None,
     config: AppConfig | None = None,
     chapter_refs: list[ChapterRef] | None = None,
     cache_root: Path | None = None,
@@ -191,9 +192,11 @@ def extract_idioms(
                 event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
             continue
 
+        summary_data = (chapter_summaries or {}).get(chapter_number)
         chapter_candidates = generate_chapter_idiom_candidates(
             chapter_number=chapter_number,
             source_text=source_text_zh,
+            summary_data=summary_data,
         )
         merge_across_chapters(merged_raw, chapter_candidates)
         if event_callback is not None:
@@ -214,8 +217,15 @@ def extract_idioms(
             message=f"Idiom extraction stopped after chapter {chapter_number}",
         )
 
+    # Build summary term set for scoring boost
+    summary_term_set: set[str] = set()
+    if chapter_summaries:
+        for ch_data in chapter_summaries.values():
+            summary_term_set.update(ch_data.get("new_terms", []))
+
     candidates: list[IdiomCandidate] = []
-    for index, scored in enumerate(score_idiom_candidates(list(merged_raw.values()))):
+    terms = list(merged_raw.values())
+    for index, scored in enumerate(score_idiom_candidates(terms, summary_term_set=summary_term_set or None)):
         raw = scored.raw
         candidates.append(
             IdiomCandidate(

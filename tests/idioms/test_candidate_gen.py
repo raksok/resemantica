@@ -50,3 +50,29 @@ def test_merge_across_chapters_accumulates_frequency_and_strategies() -> None:
     assert merged.last_seen_chapter == 2
     assert "lexicon" in merged.strategies
     assert len(merged.context_snippets) >= 2
+
+
+def test_generate_with_summary_data_marks_from_summary_strategy() -> None:
+    candidates = generate_chapter_idiom_candidates(
+        chapter_number=1,
+        source_text="他这一招可谓一箭双雕，既救了人，也赢了局。",
+        summary_data={
+            "new_terms": ["一箭双雕", "青云门"],
+            "characters_mentioned": ["张三"],
+        },
+    )
+    match = next(c for c in candidates if c.surface_form == "一箭双雕")
+    assert "from_summary" in match.strategies
+    # Verify summary strategy doesn't break existing strategies
+    assert "lexicon" in match.strategies
+
+
+def test_generate_with_empty_summary_data_is_noop() -> None:
+    candidates = generate_chapter_idiom_candidates(
+        chapter_number=1,
+        source_text="他这一招可谓一箭双雕。",
+        summary_data=None,
+    )
+    assert len(candidates) > 0
+    match = next(c for c in candidates if c.surface_form == "一箭双雕")
+    assert "from_summary" not in match.strategies

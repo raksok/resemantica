@@ -12,6 +12,7 @@ from loguru import logger
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.idiom_repo import (
     find_exact_policy,
+    get_checkpoint,
     insert_conflicts,
     list_candidates,
     list_candidates_for_promotion,
@@ -24,6 +25,7 @@ from resemantica.db.idiom_repo import (
     mark_candidate_promoted,
     promote_policies,
     save_idiom_translation,
+    set_checkpoint,
     set_translation_vote_resolution,
     upsert_discovered_candidates,
     upsert_translation_vote,
@@ -385,6 +387,7 @@ def preprocess_idioms(
     eval_batch_size: int | None = None,
     skip_llm_eval: bool = False,
     score_threshold: float | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -407,6 +410,11 @@ def preprocess_idioms(
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "idioms")
     ensure_schema(conn, "summaries")
+
+    resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume else None
+    if resume_stage:
+        logger.info("Resuming idioms from checkpoint stage: {}", resume_stage)
+
     try:
         _emit(
             run_id,
@@ -416,17 +424,24 @@ def preprocess_idioms(
         )
         # Phase 1: Detect (Analyst)
         skip_chapters: set[int] = set()
-        cursor = conn.execute(
-            (
-                "SELECT chapter_number FROM summary_drafts "
-                "WHERE release_id = ? "
-                "AND summary_type = 'chapter_summary_zh_structured' "
-                "AND is_story_chapter = 0"
-            ),
-            (release_id,),
-        )
-        for row in cursor.fetchall():
-            skip_chapters.add(int(row[0]))
+        chapter_summaries: dict[int, dict] = {}
+        try:
+            cursor = conn.execute(
+                "SELECT chapter_number, content_json, is_story_chapter FROM summary_drafts "
+                "WHERE release_id = ? AND summary_type = 'chapter_summary_zh_structured'"
+                "  AND validation_status IN ('approved', 'pending', 'non_story_chapter')",
+                (release_id,),
+            )
+            for row in cursor.fetchall():
+                ch = int(row[0])
+                if int(row[2]) == 0:
+                    skip_chapters.add(ch)
+                raw = json.loads(row[1])
+                content = raw.get("parsed_summary", raw)
+                if isinstance(content, dict):
+                    chapter_summaries[ch] = content
+        except Exception:
+            pass  # Table may not exist if summaries haven't run yet
 
         def _emit_extract_event(
             event_name: str,
@@ -444,27 +459,34 @@ def preprocess_idioms(
                 **event_payload,
             )
 
-        detected_candidates = extract_idioms(
-            release_id=release_id,
-            extracted_chapters_dir=paths.extracted_chapters_dir,
-            detection_run_id=run_id,
-            llm_client=analyst_client,
-            model_name=config_obj.models.analyst_name,
-            prompt_template=detect_prompt.template,
-            prompt_version=detect_prompt.version,
-            chapter_start=chapter_start,
-            chapter_end=chapter_end,
-            skip_chapters=skip_chapters or None,
-            config=config_obj,
-            chapter_refs=chapter_refs,
-            cache_root=paths.release_root / "cache" / "llm",
-            event_callback=_emit_extract_event,
-            stop_token=stop_token,
-            skip_llm_eval=skip_llm_eval,
-            eval_batch_size=eval_batch_size or 50,
-            score_threshold=score_threshold,
-        )
-        upsert_discovered_candidates(conn, candidates=detected_candidates)
+        if resume_stage not in ("detect_completed", "translated", "promoted"):
+            detected_candidates = extract_idioms(
+                release_id=release_id,
+                extracted_chapters_dir=paths.extracted_chapters_dir,
+                detection_run_id=run_id,
+                llm_client=analyst_client,
+                model_name=config_obj.models.analyst_name,
+                prompt_template=detect_prompt.template,
+                prompt_version=detect_prompt.version,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+                skip_chapters=skip_chapters or None,
+                config=config_obj,
+                chapter_refs=chapter_refs,
+                cache_root=paths.release_root / "cache" / "llm",
+                event_callback=_emit_extract_event,
+                stop_token=stop_token,
+                skip_llm_eval=skip_llm_eval,
+                eval_batch_size=eval_batch_size or 50,
+                score_threshold=score_threshold,
+                chapter_summaries=chapter_summaries or None,
+            )
+            upsert_discovered_candidates(conn, candidates=detected_candidates)
+            set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="detect_completed")
+        else:
+            logger.info("Resuming idioms: skipping detect phase (checkpoint: {})", resume_stage)
+            detected_candidates = list_candidates(conn, release_id=release_id)
+
         raise_if_stop_requested(
             stop_token,
             checkpoint={
@@ -475,24 +497,30 @@ def preprocess_idioms(
         )
 
         # Phase 2: Translate (Translator) — rendering + meaning
-        translated_count = translate_idiom_candidates(
-            conn=conn,
-            release_id=release_id,
-            run_id=run_id,
-            translator_client=translator_client,
-            translator_model_names=config_obj.models.effective_preprocess_translator_names(),
-            rendering_prompt_template=translate_prompt.template,
-            rendering_prompt_version=translate_prompt.version,
-            meaning_prompt_template=meaning_prompt.template,
-            meaning_prompt_version=meaning_prompt.version,
-            stop_token=stop_token,
-            event_callback=lambda event_name, payload: _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.{event_name}",
-                **payload,
-            ),
-        )
+        if resume_stage not in ("translated", "promoted"):
+            translated_count = translate_idiom_candidates(
+                conn=conn,
+                release_id=release_id,
+                run_id=run_id,
+                translator_client=translator_client,
+                translator_model_names=config_obj.models.effective_preprocess_translator_names(),
+                rendering_prompt_template=translate_prompt.template,
+                rendering_prompt_version=translate_prompt.version,
+                meaning_prompt_template=meaning_prompt.template,
+                meaning_prompt_version=meaning_prompt.version,
+                stop_token=stop_token,
+                event_callback=lambda event_name, payload: _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.{event_name}",
+                    **payload,
+                ),
+            )
+            set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="translated")
+        else:
+            logger.info("Resuming idioms: skipping translate phase")
+            translated_count = 0
+
         raise_if_stop_requested(
             stop_token,
             checkpoint={
@@ -543,6 +571,7 @@ def preprocess_idioms(
             release_id=release_id,
             output_path=paths.idiom_conflicts_path,
         )
+        set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="promoted")
         raise_if_stop_requested(
             stop_token,
             checkpoint={

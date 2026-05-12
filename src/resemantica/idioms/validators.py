@@ -10,6 +10,16 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _TITLE_SUFFIXES = ("先生", "师兄", "师姐", "师叔", "长老", "真人", "仙师")
 _LOCATION_SUFFIXES = ("山", "城", "谷", "洞", "府", "宫", "阁", "湖", "海")
 _TECHNIQUE_SUFFIXES = ("功", "法", "诀", "术", "剑", "拳", "掌", "阵")
+_PUNCT_NOISE_RE = re.compile(r"^[\d\s\W]+$")
+
+# Common words that are unlikely to be idioms
+_COMMON_STOPLIST: frozenset[str] = frozenset({
+    "一个", "可能", "什么", "这样", "不会", "还是", "这个", "那个",
+    "怎么", "起来", "就是", "因为", "可以", "没有", "自己", "知道",
+    "所以", "但是", "如果", "虽然", "已经", "之后", "所有", "这些",
+    "那些", "时候", "为什么", "因此", "然而", "不仅", "而且", "或者",
+    "不过", "只是", "然后", "一样", "一定", "这么", "那么", "不是",
+})
 
 
 @dataclass(slots=True)
@@ -50,6 +60,10 @@ def apply_deterministic_filter(
             reasons.append("location_or_technique")
         if not candidate.dictionary_match and (candidate.corpus_score or 0.0) < min_score:
             reasons.append("low_score")
+        if source in _COMMON_STOPLIST:
+            reasons.append("common_word")
+        if _PUNCT_NOISE_RE.match(source):
+            reasons.append("punctuation_noise")
         if reasons:
             candidate.candidate_status = "filtered"
             candidate.validation_status = "pending"

@@ -220,3 +220,56 @@ uv run --extra dev mypy src/resemantica
 - large production lexicon curation
 - using graph storage for idiom policies
 - changing packet hash fields beyond existing idiom policy content
+
+---
+
+## Post-MVP Improvements
+
+The following improvements were added after the initial deterministic discovery implementation. They address crash resilience, production safety for 1000+ chapter runs, and candidate quality.
+
+### P0 — Crash Resilience
+
+#### Summary Table Error Handling
+
+The `summary_drafts` query in `preprocess_idioms()` is wrapped in `try/except` so the pipeline doesn't crash when run before summaries (graceful degradation, same as glossary pipeline).
+
+#### Checkpoint/Resume
+
+New `idiom_checkpoints` table and `set_checkpoint/get_checkpoint` repo functions, matching the glossary checkpoint pattern. `preprocess_idioms()` accepts a `resume: bool = False` parameter. On resume, the detect and translate phases are skipped if their stage name checkpoint exists.
+
+### P1 — Summary Cross-Referencing
+
+`extract_idioms()` now loads `chapter_summaries` from `summary_drafts.content_json` (same query as glossary). Summary `new_terms` are cross-referenced against idiom candidates. Idioms appearing in `new_terms` get a `"from_summary"` strategy, contributing to `strategy_count` in scoring, and a 1.15× score multiplier.
+
+### P2 — LLM Eval Persistence (persist_callback)
+
+`evaluate_idiom_candidate_batch()` accepts a `persist_callback` parameter. In `extract_idioms()`, candidates are upserted to DB before LLM eval (matching glossary's flow), and the callback writes `llm_is_idiom` fields per-batch. Crash during eval loses at most one batch instead of all batches.
+
+### P3 — Scoring Improvements
+
+Scoring formula upgraded from `0.45*dict + 0.3*strategy + 0.25*frequency` to:
+
+```
+composite = 0.35*dict + 0.25*strategy + 0.20*frequency + 0.20*c_value_norm
+```
+
+Where `c_value_norm = c_value / max_c_value`. Strategy-specific multipliers applied: 1.15× for lexicon matches, 1.1× for four-char with dictionary match, 0.9× for fixed-pattern only.
+
+### P3 — Pre-Filter Improvements
+
+Added to `apply_deterministic_filter()`:
+- Common-word stoplist matching glossary's `_COMMON_STOPLIST`
+- Punctuation noise rejection
+
+### Files Modified
+
+| File | Change |
+|---|---|
+| `db/sqlite.py` | New `idiom_checkpoints` table |
+| `db/idiom_repo.py` | `set_checkpoint()`, `get_checkpoint()` |
+| `idioms/pipeline.py` | try/except on summary query, `resume` param, checkpoint calls, load `chapter_summaries` |
+| `idioms/extractor.py` | Accept `chapter_summaries`, build `summary_term_set`, upsert before eval, `persist_callback` |
+| `idioms/candidate_gen.py` | Accept `summary_data`, cross-ref `new_terms` |
+| `idioms/corpus_stats.py` | Accept `summary_term_set`, 1.15× boost, C-value in composite, strategy multipliers |
+| `idioms/evaluator.py` | Accept `persist_callback` parameter |
+| `idioms/validators.py` | Common-word stoplist, punctuation noise filter |

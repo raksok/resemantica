@@ -127,3 +127,23 @@ def test_evaluate_idiom_candidate_batch_logs_omitted_candidates_without_changing
     assert results[0].is_idiom is False
     assert results[0].reason_code == "eval_error"
     assert any("omitted 1 of 1 candidates" in message for message in messages)
+
+
+def test_evaluate_idiom_candidate_batch_persist_callback() -> None:
+    called: list[list[str]] = []
+
+    def persist(results):
+        called.append([r.candidate_id for r in results])
+
+    results = evaluate_idiom_candidate_batch(
+        candidates=[_candidate("ican_001"), _candidate("ican_002")],
+        llm_client=ScriptedEvaluatorLLM(),
+        model_name="analyst",
+        prompt_template="# version: 1.0\n\n## TASK\nIDIOM_EVALUATE\n\n## CANDIDATES\n{CANDIDATES_JSON}",
+        prompt_version="1.0",
+        batch_size=10,
+        persist_callback=persist,
+    )
+    assert len(results) == 2
+    assert len(called) == 1
+    assert called[0] == ["ican_001", "ican_002"]
