@@ -649,6 +649,88 @@ Every summary-aware parameter defaults to `None`. If `summary_drafts` table does
 - `test_corpus_stats.py`: verify summary-verified candidate gets higher composite score than non-verified candidate with identical features.
 - `test_glossary_pipeline.py`: integration test with mocked summary data verifying skip+seed flow.
 
+---
+
+## Summary Pipeline Checkpoints (Added in Task 45)
+
+### Problem
+
+The summaries pipeline processes 1000+ chapters with two LLM phases per chapter (Chinese structured summary + English derivation). Without per-chapter checkpointing, a crash at chapter 500 loses all English derivations for chapters 1-499 and forces manual `chapter_start` calculation.
+
+### Solution
+
+Add a `summary_checkpoints` table and write position after each chapter in both phases. On resume (`resume=True`), skip already-completed chapters.
+
+### DB Table
+
+```sql
+CREATE TABLE IF NOT EXISTS summary_checkpoints (
+    release_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    zh_last_chapter INTEGER NOT NULL DEFAULT 0,
+    en_last_chapter INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (release_id, run_id)
+);
+```
+
+Two columns track the two phases independently (`zh` = Chinese structured summary, `en` = English derivation).
+
+### Repo Functions
+
+```python
+# summary_repo.py
+def set_summary_checkpoint(conn, *, release_id, run_id, zh_last_chapter=None, en_last_chapter=None):
+    """Upsert — reads existing row so one phase doesn't overwrite the other."""
+
+def get_summary_checkpoint(conn, *, release_id, run_id) -> tuple[int, int] | None:
+    """Returns (zh_last_chapter, en_last_chapter) or None."""
+```
+
+### Resume Flow
+
+```
+Pipeline start
+  │
+  ├─ if resume=True: read checkpoint → zh_skip_until, en_skip_until
+  │
+  ├─ Phase 1 (Chinese structured summary)
+  │   for each chapter:
+  │     if chapter ≤ zh_skip_until: continue (skip)
+  │     ← generate, validate, write DB, write zh_artifact →
+  │     set_summary_checkpoint(zh_last_chapter=chapter)   ← persists after each chapter
+  │
+  └─ Phase 2 (English derivation)
+      for each chapter:
+        if chapter ≤ en_skip_until: continue (skip)
+        ← derive EN, write DB, write en_artifact →
+        set_summary_checkpoint(en_last_chapter=chapter)   ← persists after each chapter
+```
+
+### Crash Recovery Walkthrough
+
+| Scenario | Behavior |
+|---|---|
+| Crash at chapter 500, phase 1 | DB has checkpoint (`zh_last_chapter=499`). Resume skips chapters 1-499. |
+| Crash at chapter 700, phase 2 | DB has checkpoint (`zh_last_chapter=1000, en_last_chapter=699`). Resume skips both phases for first 699 chapters, English-only for 700-999. |
+| Graceful stop (Ctrl+C) | `StopToken` saves in-memory checkpoint + DB has hard checkpoint from last `set_summary_checkpoint` call. |
+| Re-run without `resume=True` | Checkpoint is ignored. All chapters processed (idempotent via `ON CONFLICT DO UPDATE`). |
+| Re-run with `resume=True` | Checkpoint read → completed chapters skipped. |
+
+### Modified Modules
+
+| File | Change |
+|---|---|
+| `db/sqlite.py` | New `summary_checkpoints` table |
+| `db/summary_repo.py` | `set_summary_checkpoint()`, `get_summary_checkpoint()` |
+| `summaries/pipeline.py` | Accept `resume: bool = False`, read checkpoint at start, skip logic in both loops, write after each chapter |
+| `tests/summaries/test_summary_pipeline.py` | Unit test for checkpoint read/write + integration test verifying checkpoint is written after successful run |
+
+### Tests (New)
+
+- `test_summary_checkpoint_read_write` — verify independent zh/en tracking, cross-run isolation.
+- `test_preprocess_summaries_resume_skips_completed_zh_phase` — run 2 chapters, verify checkpoint written, verify resume skips.
+
 ## Out Of Scope
 
 - Summary generation

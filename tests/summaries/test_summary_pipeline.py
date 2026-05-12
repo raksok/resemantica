@@ -10,8 +10,10 @@ from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_
 from resemantica.db.sqlite import open_connection
 from resemantica.db.summary_repo import (
     ensure_summary_schema,
+    get_summary_checkpoint,
     get_validated_summary,
     list_derived_summaries,
+    set_summary_checkpoint,
 )
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
@@ -996,3 +998,98 @@ def test_set_chapter_story_flag(tmp_path: Path, monkeypatch) -> None:
         conn, release_id=release_id, chapter_number=99, is_story=True,
     )
     conn.close()
+
+
+def test_summary_checkpoint_read_write(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    paths = derive_paths(config, release_id="cp-test")
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        assert get_summary_checkpoint(conn, release_id="cp-test", run_id="r1") is None
+
+        set_summary_checkpoint(conn, release_id="cp-test", run_id="r1", zh_last_chapter=5)
+        cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
+        assert cp is not None
+        assert cp[0] == 5
+        assert cp[1] == 0
+
+        set_summary_checkpoint(conn, release_id="cp-test", run_id="r1", en_last_chapter=3)
+        cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
+        assert cp[0] == 5
+        assert cp[1] == 3
+
+        set_summary_checkpoint(conn, release_id="cp-test", run_id="r1", zh_last_chapter=10, en_last_chapter=8)
+        cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
+        assert cp[0] == 10
+        assert cp[1] == 8
+
+        set_summary_checkpoint(conn, release_id="cp-test", run_id="r2", zh_last_chapter=1)
+        cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
+        assert cp[0] == 10
+        assert cp[1] == 8
+    finally:
+        conn.close()
+
+
+def test_preprocess_summaries_resume_skips_completed_zh_phase(tmp_path: Path, monkeypatch) -> None:
+    """Verify checkpoint is written after a successful run, then resume skips completed chapters."""
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-resume"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三来到青云山。",
+        chapter_source_hash="hash-ch1",
+    )
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=2,
+        source_text="张三通过试炼。",
+        chapter_source_hash="hash-ch2",
+    )
+
+    llm = ScriptedSummaryLLM({
+        1: {
+            "chapter_number": 1,
+            "characters_mentioned": ["张三"],
+            "key_events": ["张三来到青云山"],
+            "new_terms": ["青云山"],
+            "relationships_changed": [],
+            "setting": "青云山",
+            "tone": "calm",
+            "narrative_progression": "张三初入山门。",
+            "is_story_chapter": True,
+        },
+        2: {
+            "chapter_number": 2,
+            "characters_mentioned": ["张三"],
+            "key_events": ["张三通过试炼"],
+            "new_terms": ["入门试炼"],
+            "relationships_changed": [],
+            "setting": "青云山",
+            "tone": "tense",
+            "narrative_progression": "张三完成第一次试炼。",
+            "is_story_chapter": True,
+        },
+    })
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="resume-001",
+        llm_client=llm,
+    )
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 2
+
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        cp = get_summary_checkpoint(conn, release_id=release_id, run_id="resume-001")
+        assert cp is not None
+        assert cp[0] == 2
+    finally:
+        conn.close()

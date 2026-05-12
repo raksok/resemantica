@@ -13,11 +13,13 @@ from resemantica.db.glossary_repo import list_locked_entries
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import (
     ValidatedSummaryZhRecord,
+    get_summary_checkpoint,
     get_validated_summary,
     is_non_story_chapter,
     list_validated_summaries,
     save_derived_summary,
     save_validated_summary,
+    set_summary_checkpoint,
 )
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.llm.budget import PromptBudgetError
@@ -93,6 +95,7 @@ def preprocess_summaries(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     stop_token: StopToken | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -119,6 +122,19 @@ def preprocess_summaries(
     ensure_schema(conn, "glossary")
     ensure_schema(conn, "summaries")
 
+    # Load per-chapter checkpoint for crash recovery
+    zh_skip_until: int = 0
+    en_skip_until: int = 0
+    if resume:
+        cp = get_summary_checkpoint(conn, release_id=release_id, run_id=run_id)
+        if cp is not None:
+            zh_skip_until = cp[0]
+            en_skip_until = cp[1]
+            logger.info(
+                "Resuming summaries: zh_skip_until={}, en_skip_until={}",
+                zh_skip_until, en_skip_until,
+            )
+
     chapter_results: list[dict[str, Any]] = []
     pending_english_jobs: list[_PendingEnglishSummaryJob] = []
 
@@ -127,6 +143,11 @@ def preprocess_summaries(
             chapter_payload = _read_json(chapter_file)
             chapter_number = int(chapter_payload["chapter_number"])
             chapter_source_hash = str(chapter_payload["chapter_source_hash"])
+
+            if zh_skip_until and chapter_number <= zh_skip_until:
+                logger.debug("Chapter {}: already completed (zh phase), skipping", chapter_number)
+                continue
+
             chapter_usage_before = capture_usage_snapshot(client)
             raise_if_stop_requested(
                 stop_token,
@@ -453,6 +474,7 @@ def preprocess_summaries(
                     zh_usage_payload=zh_usage_payload,
                 )
             )
+            set_summary_checkpoint(conn, release_id=release_id, run_id=run_id, zh_last_chapter=chapter_number)
             raise_if_stop_requested(
                 stop_token,
                 checkpoint={"chapter_artifacts": chapter_results},
@@ -460,6 +482,9 @@ def preprocess_summaries(
             )
 
         for job in pending_english_jobs:
+            if en_skip_until and job.chapter_number <= en_skip_until:
+                logger.debug("Chapter {}: already completed (en phase), skipping", job.chapter_number)
+                continue
             raise_if_stop_requested(
                 stop_token,
                 checkpoint={"chapter_artifacts": chapter_results},
@@ -568,6 +593,7 @@ def preprocess_summaries(
                 summary_count=2,
                 **usage_payload_delta(client, en_usage_before),
             )
+            set_summary_checkpoint(conn, release_id=release_id, run_id=run_id, en_last_chapter=job.chapter_number)
             _emit(
                 run_id,
                 release_id,

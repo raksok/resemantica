@@ -166,6 +166,15 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (release_id, run_id)
         );
 
+        CREATE TABLE IF NOT EXISTS summary_checkpoints (
+            release_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            zh_last_chapter INTEGER NOT NULL DEFAULT 0,
+            en_last_chapter INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (release_id, run_id)
+        );
+
         CREATE TABLE IF NOT EXISTS summary_drafts (
             draft_id TEXT PRIMARY KEY,
             release_id TEXT NOT NULL,
