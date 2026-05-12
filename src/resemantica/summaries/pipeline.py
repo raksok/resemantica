@@ -186,6 +186,33 @@ def preprocess_summaries(
             source_text_zh = _collect_source_text(chapter_payload)
             locked_glossary = list_locked_entries(conn, release_id=release_id)
 
+            if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
+                message = f"Chapter {chapter_number} skipped: non-story per existing draft flag"
+                logger.info(message)
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_skipped",
+                    chapter_number=chapter_number,
+                    message=message,
+                    reason="non_story_chapter",
+                    **usage_payload_delta(client, chapter_usage_before),
+                )
+                chapter_results.append(
+                    {
+                        "chapter_number": chapter_number,
+                        "chapter_source_hash": chapter_source_hash,
+                        "status": "skipped",
+                        "reason": "non_story_chapter",
+                    }
+                )
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"chapter_artifacts": chapter_results},
+                    message=f"Summaries preprocess stopped after chapter {chapter_number}",
+                )
+                continue
+
             _emit(
                 run_id,
                 release_id,
