@@ -258,6 +258,7 @@ def list_candidates_for_translation(
         FROM glossary_candidates
         WHERE release_id = ?
           AND (candidate_translation_en IS NULL OR candidate_translation_en = '')
+          AND llm_keep = 1
         ORDER BY first_seen_chapter, normalized_source_term, category
         """,
         (release_id,),
@@ -285,6 +286,7 @@ def list_candidates_for_promotion(
           AND candidate_translation_en IS NOT NULL
           AND candidate_translation_en != ''
           AND candidate_status != 'promoted'
+          AND llm_keep = 1
         ORDER BY first_seen_chapter, normalized_source_term, category
         """,
         (release_id,),

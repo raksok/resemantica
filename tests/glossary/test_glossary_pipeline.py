@@ -19,6 +19,7 @@ from resemantica.db.glossary_repo import (
 )
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.extractor import extract_epub
+from resemantica.glossary.evaluator import EvalResult
 from resemantica.glossary.models import GlossaryCandidate, LockedGlossaryEntry
 from resemantica.glossary.pipeline import (
     discover_glossary_candidates,
@@ -44,6 +45,20 @@ class ScriptedGlossaryLLM:
             {"glossary_terms": self.rows_by_chapter.get(chapter_number, [])},
             ensure_ascii=False,
         )
+
+
+def _eval_all_keep(*, candidates, **kwargs) -> list:
+    """Monkeypatch helper: LLM evaluator keeps every candidate."""
+    return [
+        EvalResult(
+            candidate_id=c.candidate_id,
+            keep=True,
+            term_type=c.type_prior or "unknown",
+            reason_code="test",
+            confidence=0.9,
+        )
+        for c in candidates
+    ]
 
 
 def _write_fixture_epub(epub_path: Path, chapter_xhtml: str) -> None:
@@ -175,6 +190,7 @@ def _insert_glossary_candidate(
                     candidate_status="discovered",
                     validation_status="pending",
                     conflict_reason=None,
+                    llm_keep=1,
                 )
             ],
         )
@@ -404,6 +420,7 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
         if event.run_id == "glossary-events":
             received.append(event)
 
+    monkeypatch.setattr("resemantica.glossary.pipeline.evaluate_candidate_batch", _eval_all_keep)
     subscribe("*", callback)
     try:
         discover_glossary_candidates(
@@ -457,6 +474,7 @@ def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch)
         ],
     })
 
+    monkeypatch.setattr("resemantica.glossary.pipeline.evaluate_candidate_batch", _eval_all_keep)
     discover_glossary_candidates(release_id="m3-conflict", run_id="discover-001", llm_client=llm)
     translate_glossary_candidates(
         release_id="m3-conflict",
