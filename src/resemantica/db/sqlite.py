@@ -468,6 +468,17 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             else:
                 raise
 
+    try:
+        conn.execute(
+            "ALTER TABLE translation_checkpoints ADD COLUMN packet_version_hash "
+            "TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" in str(e).lower():
+            pass
+        else:
+            raise
+
     conn.commit()
 
 
