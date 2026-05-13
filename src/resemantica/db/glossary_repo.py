@@ -683,7 +683,7 @@ def replace_candidates(
         )
         conn.executemany(
             """
-            INSERT INTO glossary_candidates(
+            INSERT OR REPLACE INTO glossary_candidates(
                 candidate_id, release_id, source_term, normalized_source_term,
                 category, source_language, first_seen_chapter, last_seen_chapter,
                 appearance_count, evidence_snippet, candidate_translation_en,
