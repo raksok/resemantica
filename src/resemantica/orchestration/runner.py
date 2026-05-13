@@ -248,6 +248,7 @@ class OrchestrationRunner:
             )
             result = self._execute_stage(
                 stage_name,
+                checkpoint=active_checkpoint,
                 chapter_number=chapter_number,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
@@ -388,6 +389,7 @@ class OrchestrationRunner:
         self,
         stage_name: str,
         *,
+        checkpoint: dict[str, Any] | None = None,
         chapter_number: int | None,
         chapter_start: int | None,
         chapter_end: int | None,
@@ -526,6 +528,7 @@ class OrchestrationRunner:
                 else batched_model_order
             )
             return self._translate_range(
+                checkpoint=checkpoint,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
                 force=force,
@@ -692,6 +695,7 @@ class OrchestrationRunner:
     def _translate_range(
         self,
         *,
+        checkpoint: dict[str, Any] | None = None,
         chapter_start: int,
         chapter_end: int,
         force: bool = False,
@@ -700,6 +704,7 @@ class OrchestrationRunner:
     ) -> StageResult:
         if batched_model_order:
             return self._translate_range_batched(
+                checkpoint=checkpoint,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
                 force=force,
@@ -752,6 +757,7 @@ class OrchestrationRunner:
     def _translate_range_batched(
         self,
         *,
+        checkpoint: dict[str, Any] | None = None,
         chapter_start: int,
         chapter_end: int,
         force: bool = False,
@@ -764,9 +770,9 @@ class OrchestrationRunner:
         )
 
         chapters = list(range(chapter_start, chapter_end + 1))
-        pass1_completed: list[int] = []
-        pass2_completed: list[int] = []
-        pass3_completed: list[int] = []
+        pass1_completed: list[int] = list(checkpoint.get("pass1_completed", [])) if checkpoint and not force else []
+        pass2_completed: list[int] = list(checkpoint.get("pass2_completed", [])) if checkpoint and not force else []
+        pass3_completed: list[int] = list(checkpoint.get("pass3_completed", [])) if checkpoint and not force else []
         failures: dict[int, str] = {}
         client = LLMClient(
             base_url=self.config.llm.base_url,
@@ -780,6 +786,8 @@ class OrchestrationRunner:
         }
 
         for chapter_number in chapters:
+            if chapter_number in pass1_completed:
+                continue
             raise_if_stop_requested(
                 stop_token,
                 checkpoint={
@@ -851,6 +859,8 @@ class OrchestrationRunner:
             )
 
         for chapter_number in pass1_completed:
+            if chapter_number in pass2_completed:
+                continue
             if failures:
                 break
             raise_if_stop_requested(
@@ -916,6 +926,8 @@ class OrchestrationRunner:
             )
 
         for chapter_number in pass2_completed:
+            if chapter_number in pass3_completed:
+                continue
             if failures:
                 break
             raise_if_stop_requested(

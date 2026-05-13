@@ -51,6 +51,17 @@ Cache may be represented as JSON artifacts plus SQLite metadata. Cached payloads
 - Batched mode records per-pass progress in run state.
 - Cache corruption or parse failure is treated as cache miss, not as successful reuse.
 
+## Resume After Stop
+
+`_translate_range_batched` consumes the run-state checkpoint on re-run to skip already-completed chapters in each pass:
+
+1. `run_stage` loads the prior run state from the tracking DB.
+2. The checkpoint's `pass1_completed` / `pass2_completed` / `pass3_completed` lists are pre-populated into the batched loop.
+3. Each loop skips chapters already recorded in the corresponding completed list from the prior run.
+4. Chapters that are NOT in the completed list get processed; old failures are NOT carried over (they are re-attempted fresh).
+
+This avoids re-iterating completed chapters through the per-pass checkpoint lookup, and makes the progress bar reflect only unprocessed work.
+
 ## Tests
 
 - Batched mode calls pass1 for all chapters before any pass2 call.
