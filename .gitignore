@@ -39,6 +39,7 @@ tmp/
 temp/
 cache/
 resemantica-pilot.toml
+rp.toml
 tests/test_epub/
 
 # Tool artifact directories

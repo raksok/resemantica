@@ -27,7 +27,7 @@ from resemantica.translation.checkpoints import (
 from resemantica.translation.pass1 import translate_pass1
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pass3 import translate_pass3
-from resemantica.translation.risk import classify_paragraph_risk_from_text
+from resemantica.translation.risk import classify_paragraph_risk, classify_paragraph_risk_from_text
 from resemantica.translation.validators import (
     validate_basic_fidelity,
     validate_pass3_integrity,
@@ -624,6 +624,7 @@ def _process_pass2_block(
     analyst_model: str,
     client: LLMClient,
     placeholders_by_block: dict[str, list[PlaceholderEntry]],
+    bundles_by_block: dict[str, Any] | None,
     release_id: str,
     run_id: str,
     chapter_number: int,
@@ -631,6 +632,14 @@ def _process_pass2_block(
     source_text = str(block["source_text_zh"])
     parent_block_id = str(block["parent_block_id"])
     placeholder_entries = placeholders_by_block.get(parent_block_id, [])
+
+    bundle = bundles_by_block.get(parent_block_id) if bundles_by_block else None
+    pass2_glossary = ""
+    if bundle is not None and bundle.matched_glossary_entries:
+        from resemantica.translation.bundle_context import _format_glossary_entry
+        glossary_lines = [_format_glossary_entry(entry) for entry in bundle.matched_glossary_entries]
+        pass2_glossary = "TERMINOLOGY:\n" + "\n".join(glossary_lines) + "\n"
+
     _emit_translation_event(
         release_id=release_id,
         run_id=run_id,
@@ -657,6 +666,7 @@ def _process_pass2_block(
                 draft_text=segment_draft,
                 full_source_block=source_text,
                 prior_segment_translations=prior_segment_translations,
+                glossary=pass2_glossary,
                 chapter_number=chapter_number,
                 block_id=parent_block_id,
                 segment_id=segment_id,
@@ -763,6 +773,7 @@ def _process_pass2_block(
         draft_text=draft_text,
         full_source_block=source_text,
         prior_segment_translations=[],
+        glossary=pass2_glossary,
         chapter_number=chapter_number,
         block_id=block_id,
         fallback_callback=lambda payload: _emit_pass2_fallback_event(
@@ -873,6 +884,13 @@ def translate_chapter_pass2(
         for key, value in dict(placeholder_payload.get("blocks", {})).items()
     }
 
+    bundles_by_block = load_bundles_for_chapter(
+        release_id=release_id,
+        chapter_number=chapter_number,
+        config=config_obj,
+        project_root=project_root,
+    )
+
     run_root = paths.release_root / "runs" / run_id
     translation_dir = run_root / "translation" / f"chapter-{chapter_number}"
     validation_dir = run_root / "validation" / f"chapter-{chapter_number}"
@@ -973,6 +991,7 @@ def translate_chapter_pass2(
                             analyst_model=analyst_model,
                             client=client,
                             placeholders_by_block=placeholders_by_block,
+                            bundles_by_block=bundles_by_block,
                             release_id=release_id,
                             run_id=run_id,
                             chapter_number=chapter_number,
@@ -1292,11 +1311,24 @@ def translate_chapter_pass3(
             pass2_output = str(block["output_text_en"])
             block_id = str(block["block_id"])
 
-            risk = classify_paragraph_risk_from_text(
-                source_text=source_text,
-                pass2_text=pass2_output,
-                threshold_high=threshold_high,
-            )
+            bundle3 = bundles_by_block.get(block_id) if bundles_by_block else None
+            if bundle3 is not None:
+                placeholder_count = len(_PLACEHOLDER_RE.findall(source_text))
+                risk = classify_paragraph_risk(
+                    idiom_count=len(bundle3.matched_idioms),
+                    title_count=0,
+                    has_reveal_gated_relationship=len(bundle3.local_relationships) > 0,
+                    ambiguous_pronoun_count=0,
+                    placeholder_count=placeholder_count,
+                    distinct_entity_count=len(bundle3.alias_resolutions),
+                    threshold_high=threshold_high,
+                )
+            else:
+                risk = classify_paragraph_risk_from_text(
+                    source_text=source_text,
+                    pass2_text=pass2_output,
+                    threshold_high=threshold_high,
+                )
             risk_record = {"block_id": block_id, **risk.to_dict()}
             risk_classifications.append(risk_record)
             if risk.risk_class != "LOW":

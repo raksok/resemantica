@@ -19,6 +19,7 @@ def translate_pass2(
     draft_text: str,
     full_source_block: str,
     prior_segment_translations: list[str] | None = None,
+    glossary: str = "",
     chapter_number: int | None = None,
     block_id: str | None = None,
     segment_id: str | None = None,
@@ -28,6 +29,7 @@ def translate_pass2(
     prompt = render_named_sections(
         prompt_template,
         sections={
+            "GLOSSARY": glossary,
             "SOURCE_TEXT": source_text,
             "DRAFT_TEXT": draft_text,
             "FULL_SOURCE_BLOCK": full_source_block,

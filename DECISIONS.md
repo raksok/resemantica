@@ -750,3 +750,6 @@ if raw.startswith("```"):
 | G29 | Skip missing-summary chapters | Return `status="skipped"` instead of raising in packet builder | Front-matter chapters excluded from summaries, should not crash packet build |
 | G30 | Chapter range in packet builder | Optional `chapter_start`/`chapter_end` with `None` defaults; forward from runner | Prevents processing all 96 chapters when pilot only needs a range |
 | G31 | CLI preprocess dead code | Move handlers into `if args.command == "preprocess"` branch | `resemantica preprocess` command broken; pilot not affected |
+| G32 | Pass 1 output cleaning | Strip CoT artifacts, markdown, smart quotes; reject if Chinese characters remain | Mirrors `translate_glossary_candidate()` in LLMClient; Chinese chars trigger hard-failure/resegmentation |
+| G33 | Pass 2 glossary context | Provide glossary from paragraph bundles to Pass 2 fidelity auditor when `matched_glossary_entries` is non-empty | Helps auditor detect terminology violations; conditional to avoid empty prompt sections |
+| G34 | Bundle-informed risk classification | Source `idiom_count`, `distinct_entity_count`, `has_reveal_gated_relationship` from paragraph bundles in Pass 3 risk classifier | Previously all zero-defaults from text-only heuristic; falls back to text-only when bundles unavailable |

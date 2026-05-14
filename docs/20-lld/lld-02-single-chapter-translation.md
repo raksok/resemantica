@@ -36,18 +36,19 @@ Artifacts:
 2. Resolve locked glossary lookups if available, without requiring glossary authority to exist yet.
 3. Load pass prompts and record prompt versions.
 4. Run Pass 1 through the shared LLM client on each block with placeholder-safe source text.
-5. Restore placeholders using the restoration algorithm defined in `lld-01`: map each opening placeholder `⟦TYPE_N⟧` to its `original_xhtml`, each closing placeholder `⟦/TYPE_N⟧` to `</element>`, and validate closing order against `closing_order`.
-6. On structural failure of block `B`:
+5. **Clean Pass 1 output:** strip `<think>`/`<thought>` chain-of-thought artifacts, markdown bold/italic, smart quotes, and label prefixes. If Chinese characters remain in the cleaned output, the block is treated as failed and triggers resegmentation.
+6. Restore placeholders using the restoration algorithm defined in `lld-01`: map each opening placeholder `⟦TYPE_N⟧` to its `original_xhtml`, each closing placeholder `⟦/TYPE_N⟧` to `</element>`, and validate closing order against `closing_order`.
+7. On structural failure of block `B`:
    a. Split the **original source block** `B` into segments `S1, S2, ...` at sentence boundaries. Assign segment IDs (`ch{NNN}_blk{NNN}_seg{NN}`).
    b. **Pass 1 retries each segment independently** — the source for each retry is the segment text alone, not the original full block.
    c. Segments are processed sequentially. **Pass 2 for segment `S_n` receives: (1) the original full source block `B` as context, (2) the translations of all prior segments `[T_1, ..., T_{n-1}]` to maintain cross-segment coherence (preventing tense, tone, and naming drift), and (3) the current segment draft `S_n` as the correction target.**
    d. On Pass 2 segment success: restore placeholders, validate, and emit artifacts per segment.
    e. Reconstruction phase concatenates all validated segment outputs in order to produce the final block output for `B`.
    f. If any segment fails after retry, the entire block `B` is marked failed.
-7. Halt if the retry still fails structural validation.
-8. Run Pass 2 through the shared LLM client against source and Pass 1 output.
-9. Emit corrected output, prompt metadata, model metadata, and fidelity flags.
-10. Persist chapter-level checkpoint state.
+8. Halt if the retry still fails structural validation.
+9. Run Pass 2 through the shared LLM client against source and Pass 1 output. **Pass 2 receives conditional glossary context from paragraph bundles: when `bundle.matched_glossary_entries` is non-empty, a `TERMINOLOGY:` section is prepended to the prompt so the fidelity auditor can check for terminology violations.**
+10. Emit corrected output, prompt metadata, model metadata, and fidelity flags.
+11. Persist chapter-level checkpoint state.
 
 ## Command Behavior
 
