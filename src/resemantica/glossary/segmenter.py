@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -20,6 +23,30 @@ class SegmentedToken:
     offset_end: int
 
 
+@contextmanager
+def _suppress_hanlp_dependency_warnings() -> Iterator[None]:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*invalid escape sequence.*",
+            category=SyntaxWarning,
+            module=r"phrasetree(\.|$).*",
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*pynvml.*deprecated.*|.*deprecated.*pynvml.*",
+            category=FutureWarning,
+            module=r"torch\.cuda(\.|$).*",
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*non-tuple.*multidimensional indexing.*",
+            category=UserWarning,
+            module=r"hanlp\.components\.parsers\.alg(\.|$).*",
+        )
+        yield
+
+
 def _load_hanlp_pipeline() -> Any | None:
     global _HANLP_PIPELINE, _HANLP_LOADED, _HANLP_AVAILABLE
     if _HANLP_LOADED:
@@ -27,12 +54,13 @@ def _load_hanlp_pipeline() -> Any | None:
 
     _HANLP_LOADED = True
     try:
-        import hanlp  # type: ignore
+        with _suppress_hanlp_dependency_warnings():
+            import hanlp  # type: ignore
 
-        # Load the MTL pipeline (tok/fine, pos/ctb, ner/msra)
-        logger.info("Loading HanLP MTL pipeline. This may take a moment...")
-        # Note: 'CLOSE_TOK_POS_NER' is a common MTL preset in HanLP
-        _HANLP_PIPELINE = hanlp.load(hanlp.pretrained.mtl.CLOSE_TOK_POS_NER_SRL_DEP_SDP_CON_ELECTRA_BASE_ZH)
+            # Load the MTL pipeline (tok/fine, pos/ctb, ner/msra)
+            logger.info("Loading HanLP MTL pipeline. This may take a moment...")
+            # Note: 'CLOSE_TOK_POS_NER' is a common MTL preset in HanLP
+            _HANLP_PIPELINE = hanlp.load(hanlp.pretrained.mtl.CLOSE_TOK_POS_NER_SRL_DEP_SDP_CON_ELECTRA_BASE_ZH)
         _HANLP_AVAILABLE = True
         logger.info("HanLP pipeline loaded successfully.")
     except ImportError:
@@ -100,7 +128,8 @@ def segment_chapter(source_text: str) -> list[SegmentedToken]:
 
         try:
             # Call pipeline on the line
-            doc = pipeline(line)
+            with _suppress_hanlp_dependency_warnings():
+                doc = pipeline(line)
             toks = cast(list[str], doc["tok/fine"])
             # 'pos/ctb' for CTB pos tags
             poses = cast(list[str], doc.get("pos/ctb", [""] * len(toks)))
