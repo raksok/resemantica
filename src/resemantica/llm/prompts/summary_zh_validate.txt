@@ -10,12 +10,20 @@ SUMMARY_ZH_VALIDATE
 ## STRUCTURED SUMMARY
 {STRUCTURED_SUMMARY}
 
+## CHAPTER IDENTITY CONTEXT
+{CHAPTER_IDENTITY_CONTEXT}
+
 ## LOCKED GLOSSARY
 {LOCKED_GLOSSARY}
 
 ## INSTRUCTIONS
 Validate this Chinese structured summary against the source text.
 Return JSON with two keys: "flags" (list of applicable flag strings) and "warnings" (list of warning strings).
+
+The pipeline chapter number is canonical. EPUB filenames and visible source headings can
+use a different story-facing number because of front matter or publisher naming. Do not
+flag a filename or visible-heading chapter-number mismatch by itself. Only flag chapter
+identity if the structured summary describes a different source text than the one shown.
 
 Available flags (include only those that apply):
 - unsupported_claim: summary asserts something not present in the source text

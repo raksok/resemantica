@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
@@ -27,6 +28,45 @@ _REQUIRED_FIELDS = {
 }
 _FUTURE_CHAPTER_ZH_RE = re.compile(r"第\s*(\d+)\s*章")
 _FUTURE_CHAPTER_EN_RE = re.compile(r"\bchapter\s+(\d+)\b", re.IGNORECASE)
+
+
+@dataclass(slots=True)
+class SummaryContentValidationResult:
+    flags: list[str]
+    warnings: list[str]
+
+
+def _parse_llm_json_object(raw: str) -> dict[str, object] | None:
+    text = raw.strip()
+    if text.startswith("```"):
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1 :]
+        else:
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3].strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _format_chapter_identity_context(chapter_identity_warnings: list[str] | None) -> str:
+    if not chapter_identity_warnings:
+        return (
+            "No chapter identity mismatch was detected. The pipeline chapter number is canonical."
+        )
+    lines = [
+        "The pipeline chapter number is canonical.",
+        "The following filename or visible-heading mismatches were already detected as metadata warnings.",
+        "Do not flag these mismatches unless the summary describes the wrong source text.",
+    ]
+    lines.extend(f"- {warning}" for warning in chapter_identity_warnings)
+    return "\n".join(lines)
 
 
 def _is_list_of_strings(value: object) -> bool:
@@ -198,8 +238,9 @@ def validate_chinese_summary_content(
     source_text_zh: str,
     structured_summary: dict[str, object],
     locked_glossary: list[LockedGlossaryEntry],
+    chapter_identity_warnings: list[str] | None = None,
     config: AppConfig | None = None,
-) -> list[str]:
+) -> SummaryContentValidationResult:
     prompt = render_named_sections(
         prompt_template,
         sections={
@@ -207,6 +248,7 @@ def validate_chinese_summary_content(
             "SOURCE_TEXT": source_text_zh,
             "STRUCTURED_SUMMARY": json.dumps(structured_summary, ensure_ascii=False, indent=2),
             "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
+            "CHAPTER_IDENTITY_CONTEXT": _format_chapter_identity_context(chapter_identity_warnings),
         },
     )
     if config is not None:
@@ -222,12 +264,17 @@ def validate_chinese_summary_content(
             max_tokens=analyst_budget,
         )
     raw = llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    parsed = _parse_llm_json_object(raw)
+    if parsed is None:
         logger.warning("Summary validation JSON parse error: raw={}", raw[:200])
-        return ["<parse_error>"]
-    flags = parsed.get("flags", []) if isinstance(parsed, dict) else []
+        return SummaryContentValidationResult(flags=["<parse_error>"], warnings=[])
+    flags = parsed.get("flags", [])
     if not isinstance(flags, list):
-        return []
-    return [str(f) for f in flags]
+        flags = []
+    warnings = parsed.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+    return SummaryContentValidationResult(
+        flags=[str(f) for f in flags],
+        warnings=[str(w) for w in warnings],
+    )

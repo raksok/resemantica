@@ -27,9 +27,14 @@ class ScriptedSummaryLLM:
         self,
         structured_by_chapter: dict[int, dict[str, object]],
         validation_flags: dict[int, list[str]] | None = None,
+        validation_warnings: dict[int, list[str]] | None = None,
+        fenced_validation_json: bool = False,
     ) -> None:
         self.structured_by_chapter = structured_by_chapter
         self.validation_flags = validation_flags or {}
+        self.validation_warnings = validation_warnings or {}
+        self.fenced_validation_json = fenced_validation_json
+        self.validation_prompts: list[str] = []
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
         if "SUMMARY_ZH_STRUCTURED" in prompt:
@@ -45,10 +50,15 @@ class ScriptedSummaryLLM:
             return f"EN::{source}"
 
         if "SUMMARY_ZH_VALIDATE" in prompt:
+            self.validation_prompts.append(prompt)
             chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
             chapter_number = int(chapter_match.group(1)) if chapter_match else 0
             flags = self.validation_flags.get(chapter_number, [])
-            return json.dumps({"flags": flags, "warnings": []}, ensure_ascii=False)
+            warnings = self.validation_warnings.get(chapter_number, [])
+            payload = json.dumps({"flags": flags, "warnings": warnings}, ensure_ascii=False)
+            if self.fenced_validation_json:
+                return f"```json\n{payload}\n```"
+            return payload
 
         raise RuntimeError("Unexpected prompt")
 
@@ -426,6 +436,8 @@ def test_summary_chapter_number_mismatch_is_normalized_with_warning(
     ]
     assert warning_events
     assert warning_events[0].chapter_number == 12
+    assert warning_events[0].message
+    assert "Chapter 12 identity warning:" in warning_events[0].message
 
 
 def test_visible_source_heading_is_allowed_in_summary_future_check(
@@ -470,6 +482,77 @@ def test_visible_source_heading_is_allowed_in_summary_future_check(
         "source_heading_chapter_mismatch" in warning
         for warning in result["chapter_artifacts"][0]["warnings"]
     )
+
+
+def test_llm_validation_fenced_json_and_warnings_are_non_blocking(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m44-validation-warning"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=13,
+        source_text="Chapter 1\n张三在小镇醒来。",
+        chapter_source_hash="hash-ch13",
+        source_document_path="OEBPS/chapter013.xhtml",
+    )
+
+    llm = ScriptedSummaryLLM(
+        {
+            13: {
+                "chapter_number": 13,
+                "characters_mentioned": ["张三"],
+                "key_events": ["张三在小镇醒来"],
+                "new_terms": ["小镇"],
+                "relationships_changed": [{"entity": "张三", "change": "woke in town"}],
+                "setting": "小镇",
+                "tone": "quiet",
+                "narrative_progression": "张三在小镇醒来。",
+                "is_story_chapter": True,
+            }
+        },
+        validation_warnings={
+            13: ["Summary claims chapter number is 13, but source text explicitly states it is Chapter 1."]
+        },
+        fenced_validation_json=True,
+    )
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 1
+    assert any(
+        "source_heading_chapter_mismatch: expected=13, detected=1" in warning
+        for warning in result["chapter_artifacts"][0]["warnings"]
+    )
+    assert llm.validation_prompts
+    validation_prompt = llm.validation_prompts[0]
+    assert "## CHAPTER IDENTITY CONTEXT" in validation_prompt
+    assert "source_heading_chapter_mismatch: expected=13, detected=1" in validation_prompt
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    zh_artifact = paths.summaries_dir / "chapter-13-zh.json"
+    payload = json.loads(zh_artifact.read_text(encoding="utf-8"))
+    assert payload["llm_validation_flags"] == []
+    assert payload["llm_validation_warnings"] == [
+        "Summary claims chapter number is 13, but source text explicitly states it is Chapter 1."
+    ]
+
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id="summaries-001", release_id=release_id, limit=100)
+    finally:
+        conn.close()
+    assert not [
+        event
+        for event in events
+        if event.event_type == "preprocess-summaries.llm_validation_warning"
+    ]
 
 
 def test_continuity_conflict_on_chapter_number_mismatch(
@@ -519,6 +602,15 @@ def test_summary_prompt_declares_pipeline_chapter_number_authoritative() -> None
     prompt = prompt_path.read_text(encoding="utf-8")
 
     assert "canonical pipeline chapter number" in prompt
+
+
+def test_summary_validation_prompt_declares_identity_context() -> None:
+    prompt_path = Path("src/resemantica/llm/prompts/summary_zh_validate.txt")
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    assert "CHAPTER IDENTITY CONTEXT" in prompt
+    assert "The pipeline chapter number is canonical" in prompt
+    assert "visible source headings" in prompt
 
 
 def test_summary_english_derivation_is_deferred_until_all_chinese_work(

@@ -319,12 +319,17 @@ def preprocess_summaries(
                 status=generated.validation.status,
             )
             if generated.warnings:
+                warning_message = (
+                    f"Chapter {chapter_number} identity warning: "
+                    + "; ".join(generated.warnings)
+                )
                 _emit(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.chapter_identity_warning",
                     chapter_number=chapter_number,
                     severity="warning",
+                    message=warning_message,
                     warnings=generated.warnings,
                 )
             _emit(run_id, release_id, f"{_STAGE_NAME}.draft_generated", chapter_number=chapter_number)
@@ -345,13 +350,14 @@ def preprocess_summaries(
                     message=f"LLM summary validation started for chapter {chapter_number}",
                     model_name=config_obj.models.analyst_name,
                 )
-                llm_validation_flags = validate_chinese_summary_content(
+                llm_validation = validate_chinese_summary_content(
                     llm_client=client,
                     model_name=config_obj.models.analyst_name,
                     prompt_template=prompt_validate.template,
                     source_text_zh=source_text_zh,
                     structured_summary=generated.structured_summary,
                     locked_glossary=locked_glossary,
+                    chapter_identity_warnings=generated.warnings,
                     config=config_obj,
                 )
             except PromptBudgetError:
@@ -408,9 +414,10 @@ def preprocess_summaries(
                 chapter_number=chapter_number,
                 message=f"LLM summary validation completed for chapter {chapter_number}",
                 model_name=config_obj.models.analyst_name,
-                flag_count=len(llm_validation_flags),
+                flag_count=len(llm_validation.flags),
+                warning_count=len(llm_validation.warnings),
             )
-            for flag in llm_validation_flags:
+            for flag in llm_validation.flags:
                 _emit(
                     run_id,
                     release_id,
@@ -473,7 +480,8 @@ def preprocess_summaries(
                         "chapter_summary_zh_short": generated.short_record.to_json_dict(),
                         "story_so_far_zh": story_record.to_json_dict(),
                     },
-                    "llm_validation_flags": llm_validation_flags,
+                    "llm_validation_flags": llm_validation.flags,
+                    "llm_validation_warnings": llm_validation.warnings,
                     "warnings": generated.warnings,
                 },
             )
