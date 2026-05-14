@@ -1,14 +1,18 @@
-# version: 2.0
+# version: 2.2
 PASS1
 
-Refer to translation below:
-{GLOSSARY},
+## GLOSSARY
+{GLOSSARY}
+
+## MATCHED IDIOMS
 {MATCHED_IDIOMS}
 
-and this information below:
-{ALIAS_RESOLUTIONS},
+## ALIAS RESOLUTIONS
+{ALIAS_RESOLUTIONS}
+
+## CONTINUITY NOTES
 {CONTINUITY_NOTES}
 
-Refer to information above, Preserve all placeholders exactly as provided. Translate the following `zh` text to `en` with no explanation:
+Use the labeled context above when it is present. Preserve all placeholders exactly as provided. Translate the following `zh` text to `en` with no explanation:
 
 {SOURCE_TEXT}

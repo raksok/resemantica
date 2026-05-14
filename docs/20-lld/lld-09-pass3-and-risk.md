@@ -58,7 +58,7 @@ Classification thresholds (configurable via `translation.risk_threshold_high`):
 
 All sub-score values are persisted in the risk classification report for auditability.
 
-**Bundle-informed risk:** When paragraph bundles are available, the risk classifier sources `idiom_count` from `bundle.matched_idioms`, `distinct_entity_count` from `bundle.alias_resolutions`, and `has_reveal_gated_relationship` from the presence of `bundle.local_relationships`. Placeholder count and pronoun count remain text-computed. When bundles are unavailable, the classifier falls back to text-only heuristics.
+**Bundle-informed risk:** When paragraph bundles are available, the risk classifier sources `idiom_count` from `bundle.matched_idioms`, `title_count` from matched glossary entries with category `title_honorific`, `distinct_entity_count` from `bundle.alias_resolutions`, and `has_reveal_gated_relationship` only from relationship rows that indicate masked or reveal-gated content (`is_masked_identity`, explicit reveal-gated flags, or a later `revealed_chapter`). Ordinary local relationships do not trigger reveal risk. Placeholder count and pronoun count remain text-computed from source text and Pass 2 output respectively. When bundles are unavailable, the classifier falls back to text-only heuristics.
 
 ## Validation Ownership
 

@@ -652,6 +652,7 @@ class OrchestrationRunner:
             run_id=self.run_id,
             config=self.config,
             llm_client=shared_client,
+            force=force,
         )
         if pass3_result.get("pass3_artifact"):
             emit_event(
@@ -948,6 +949,7 @@ class OrchestrationRunner:
                     run_id=self.run_id,
                     config=self.config,
                     llm_client=client,
+                    force=force,
                 )
                 pass3_completed.append(chapter_number)
                 if result.get("pass3_artifact"):

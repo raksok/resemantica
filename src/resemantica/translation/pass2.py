@@ -20,6 +20,11 @@ def translate_pass2(
     full_source_block: str,
     prior_segment_translations: list[str] | None = None,
     glossary: str = "",
+    alias_resolutions: str = "",
+    matched_idioms: str = "",
+    local_relationships: str = "",
+    continuity_notes: str = "",
+    retrieval_evidence: str = "",
     chapter_number: int | None = None,
     block_id: str | None = None,
     segment_id: str | None = None,
@@ -34,6 +39,11 @@ def translate_pass2(
             "DRAFT_TEXT": draft_text,
             "FULL_SOURCE_BLOCK": full_source_block,
             "PRIOR_SEGMENTS": prior_segments,
+            "ALIAS_RESOLUTIONS": alias_resolutions,
+            "MATCHED_IDIOMS": matched_idioms,
+            "LOCAL_RELATIONSHIPS": local_relationships,
+            "CONTINUITY_NOTES": continuity_notes,
+            "RETRIEVAL_EVIDENCE": retrieval_evidence,
         },
     )
     response = client.generate_text(model_name=model_name, prompt=prompt)

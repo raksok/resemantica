@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from resemantica.epub.extractor import extract_epub
+from resemantica.packets.models import ParagraphBundle
 from resemantica.settings import derive_paths, load_config
+from resemantica.translation.bundle_context import (
+    extract_glossary_target_terms_for_pass3,
+    format_bundle_for_pass3,
+)
+from resemantica.translation.pass3 import translate_pass3
 from resemantica.translation.pipeline import (
     translate_chapter_pass1,
     translate_chapter_pass2,
@@ -362,6 +368,182 @@ class TestPass3Integrity:
         )
         assert result.is_valid
 
+    def test_glossary_terms_extracted_for_integrity_validation(self) -> None:
+        bundle = ParagraphBundle(
+            bundle_id="b1",
+            release_id="rel",
+            chapter_number=1,
+            block_id="blk",
+            matched_glossary_entries=[
+                {"source_term": "张三", "target_term": "Zhang San", "category": "character"}
+            ],
+            alias_resolutions=[],
+            matched_idioms=[],
+            local_relationships=[],
+            continuity_notes=[],
+            retrieval_evidence_summary=[],
+            risk_classification="unscored",
+            packet_ref="pkt",
+        )
+        result = validate_pass3_integrity(
+            source_text="Source",
+            pass2_output="Zhang San arrived.",
+            pass3_output="He arrived.",
+            glossary_terms=extract_glossary_target_terms_for_pass3(bundle),
+        )
+
+        assert not result.is_valid
+        assert any("Zhang San" in error for error in result.errors)
+
+
+class TestBundleInformedRisk:
+    def test_bundle_path_computes_pronouns_from_pass2_output(self) -> None:
+        result = classify_paragraph_risk_from_text(
+            source_text="普通文本。",
+            pass2_text="He told her they should leave.",
+            idiom_count=0,
+            title_count=0,
+            has_reveal_gated_relationship=False,
+            distinct_entity_count=0,
+        )
+        assert result.pronoun_ambiguity_score == 1.0
+
+    def test_title_glossary_entries_increase_title_risk(self) -> None:
+        from resemantica.translation import pipeline as pipeline_mod
+
+        bundle = ParagraphBundle(
+            bundle_id="b1",
+            release_id="rel",
+            chapter_number=1,
+            block_id="blk",
+            matched_glossary_entries=[
+                {"source_term": "战神", "target_term": "War God", "category": "title_honorific"}
+            ],
+            alias_resolutions=[],
+            matched_idioms=[],
+            local_relationships=[],
+            continuity_notes=[],
+            retrieval_evidence_summary=[],
+            risk_classification="unscored",
+            packet_ref="pkt",
+        )
+
+        assert pipeline_mod._count_title_honorific_glossary_entries(bundle) == 1
+
+    def test_relationship_reveal_risk_requires_reveal_data(self) -> None:
+        from resemantica.translation import pipeline as pipeline_mod
+
+        plain = ParagraphBundle(
+            bundle_id="b1",
+            release_id="rel",
+            chapter_number=1,
+            block_id="blk",
+            matched_glossary_entries=[],
+            alias_resolutions=[],
+            matched_idioms=[],
+            local_relationships=[{"relationship_id": "r1", "is_masked_identity": False}],
+            continuity_notes=[],
+            retrieval_evidence_summary=[],
+            risk_classification="unscored",
+            packet_ref="pkt",
+        )
+        revealed_without_range = ParagraphBundle(
+            bundle_id="b0",
+            release_id="rel",
+            chapter_number=1,
+            block_id="blk",
+            matched_glossary_entries=[],
+            alias_resolutions=[],
+            matched_idioms=[],
+            local_relationships=[{"relationship_id": "r0", "revealed_chapter": 1}],
+            continuity_notes=[],
+            retrieval_evidence_summary=[],
+            risk_classification="unscored",
+            packet_ref="pkt",
+        )
+        masked = ParagraphBundle(
+            bundle_id="b2",
+            release_id="rel",
+            chapter_number=1,
+            block_id="blk",
+            matched_glossary_entries=[],
+            alias_resolutions=[],
+            matched_idioms=[],
+            local_relationships=[{"relationship_id": "r2", "is_masked_identity": True}],
+            continuity_notes=[],
+            retrieval_evidence_summary=[],
+            risk_classification="unscored",
+            packet_ref="pkt",
+        )
+        gated = ParagraphBundle(
+            bundle_id="b3",
+            release_id="rel",
+            chapter_number=1,
+            block_id="blk",
+            matched_glossary_entries=[],
+            alias_resolutions=[],
+            matched_idioms=[],
+            local_relationships=[{"relationship_id": "r3", "revealed_chapter": 5, "source_chapter": 3}],
+            continuity_notes=[],
+            retrieval_evidence_summary=[],
+            risk_classification="unscored",
+            packet_ref="pkt",
+        )
+
+        assert pipeline_mod._has_reveal_gated_relationship(plain) is False
+        assert pipeline_mod._has_reveal_gated_relationship(revealed_without_range) is False
+        assert pipeline_mod._has_reveal_gated_relationship(masked) is True
+        assert pipeline_mod._has_reveal_gated_relationship(gated) is True
+
+    def test_pass3_prompt_includes_preservation_constraints(self) -> None:
+        class CaptureClient:
+            def __init__(self) -> None:
+                self.last_prompt = ""
+
+            def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+                self.last_prompt = prompt
+                return "polished"
+
+        bundle = ParagraphBundle(
+            bundle_id="b1",
+            release_id="rel",
+            chapter_number=1,
+            block_id="blk",
+            matched_glossary_entries=[
+                {"source_term": "战神", "target_term": "War God", "category": "title_honorific"}
+            ],
+            alias_resolutions=[{"alias_text": "老张", "entity_name": "Zhang San"}],
+            matched_idioms=[{"source_text": "画蛇添足", "preferred_rendering_en": "gild the lily"}],
+            local_relationships=[{"type": "ALLY_OF", "source_entity_id": "e1", "target_entity_id": "e2"}],
+            continuity_notes=[],
+            retrieval_evidence_summary=[],
+            risk_classification="unscored",
+            packet_ref="pkt",
+        )
+        context = format_bundle_for_pass3(bundle)
+        client = CaptureClient()
+
+        translate_pass3(
+            client=client,
+            model_name="model",
+            prompt_template=(
+                "PASS3\n{GLOSSARY}\n{ALIAS_RESOLUTIONS}\n"
+                "{MATCHED_IDIOMS}\n{RELATIONSHIP_CONSTRAINTS}\n"
+                "{SOURCE_TEXT}\n{PASS2_OUTPUT}"
+            ),
+            source_text="source",
+            pass2_output="pass2",
+            glossary_text=context["glossary"],
+            alias_resolutions=context["alias_resolutions"],
+            matched_idioms=context["matched_idioms"],
+            relationship_constraints=context["relationship_constraints"],
+        )
+
+        assert "War God" in client.last_prompt
+        assert "老张" in client.last_prompt
+        assert "gild the lily" in client.last_prompt
+        assert "ALLY_OF" in client.last_prompt
+
 
 class TestPass3SkipAndPipeline:
     def test_high_risk_skips_pass3(self, tmp_path: Path, monkeypatch) -> None:
@@ -512,6 +694,49 @@ class TestPass3SkipAndPipeline:
         assert chapter_report["pass3_enabled"] is True
         assert "risk_classifications" in chapter_report
         assert len(chapter_report["risk_classifications"]) > 0
+
+    def test_force_bypasses_pass3_cache(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        _extract_one_chapter(
+            tmp_path,
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>普通文本。</p></body></html>
+""",
+            "m9-force-pass3",
+        )
+
+        first_client = ScriptedLLMPass3()
+        result = _run_full_pipeline(
+            release_id="m9-force-pass3",
+            chapter_number=1,
+            run_id="run-force-pass3",
+            llm_client=first_client,
+        )
+        assert result["pass3_artifact"] is not None
+        assert first_client.pass3_calls == 1
+
+        cached_client = ScriptedLLMPass3()
+        from resemantica.settings import AppConfig, TranslationConfig
+        pass3_config = AppConfig(translation=TranslationConfig(pass3_default=True))
+        translate_chapter_pass3(
+            release_id="m9-force-pass3",
+            chapter_number=1,
+            run_id="run-force-pass3",
+            llm_client=cached_client,
+            config=pass3_config,
+        )
+        assert cached_client.pass3_calls == 0
+
+        forced_client = ScriptedLLMPass3()
+        translate_chapter_pass3(
+            release_id="m9-force-pass3",
+            chapter_number=1,
+            run_id="run-force-pass3",
+            llm_client=forced_client,
+            config=pass3_config,
+            force=True,
+        )
+        assert forced_client.pass3_calls == 1
 
     def test_pass2_failure_still_reports(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)

@@ -12,6 +12,9 @@ def translate_pass3(
     source_text: str,
     pass2_output: str,
     glossary_text: str,
+    alias_resolutions: str = "",
+    matched_idioms: str = "",
+    relationship_constraints: str = "",
 ) -> str:
     prompt = render_named_sections(
         prompt_template,
@@ -19,6 +22,9 @@ def translate_pass3(
             "SOURCE_TEXT": source_text,
             "PASS2_OUTPUT": pass2_output,
             "GLOSSARY": glossary_text,
+            "ALIAS_RESOLUTIONS": alias_resolutions,
+            "MATCHED_IDIOMS": matched_idioms,
+            "RELATIONSHIP_CONSTRAINTS": relationship_constraints,
         },
     )
     return client.generate_text(model_name=model_name, prompt=prompt)

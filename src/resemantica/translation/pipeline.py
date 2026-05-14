@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -15,8 +16,10 @@ from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payl
 from resemantica.llm.prompts import load_prompt
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.translation.bundle_context import (
+    extract_glossary_target_terms_for_pass3,
     format_bundle_for_pass1,
-    format_glossary_for_pass3,
+    format_bundle_for_pass2,
+    format_bundle_for_pass3,
     load_bundles_for_chapter,
 )
 from resemantica.translation.checkpoints import (
@@ -27,7 +30,7 @@ from resemantica.translation.checkpoints import (
 from resemantica.translation.pass1 import translate_pass1
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pass3 import translate_pass3
-from resemantica.translation.risk import classify_paragraph_risk, classify_paragraph_risk_from_text
+from resemantica.translation.risk import classify_paragraph_risk_from_text
 from resemantica.translation.validators import (
     validate_basic_fidelity,
     validate_pass3_integrity,
@@ -138,6 +141,71 @@ def _prevalidate_source(source_text: str) -> str:
     return source_text
 
 
+def _latest_packet_version_hash(
+    conn: Any,
+    *,
+    release_id: str,
+    chapter_number: int,
+) -> str:
+    try:
+        packet_meta = get_latest_packet_metadata(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+        )
+    except sqlite3.OperationalError:
+        logger.warning("packet_metadata table not found, continuing without packet hash")
+        return ""
+    return packet_meta.packet_hash if packet_meta else ""
+
+
+def _count_title_honorific_glossary_entries(bundle: Any) -> int:
+    return sum(
+        1
+        for entry in list(getattr(bundle, "matched_glossary_entries", []))
+        if str(entry.get("category", "")).strip() == "title_honorific"
+    )
+
+
+def _is_truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return False
+
+
+def _relationship_is_reveal_gated(entry: dict[str, Any]) -> bool:
+    if _is_truthy_flag(entry.get("is_masked_identity", False)):
+        return True
+    if _is_truthy_flag(entry.get("is_reveal_gated", False)) or _is_truthy_flag(
+        entry.get("reveal_gated", False)
+    ):
+        return True
+    if _is_truthy_flag(entry.get("requires_reveal", False)):
+        return True
+
+    if "revealed_chapter" not in entry:
+        return False
+    try:
+        revealed_chapter = int(entry.get("revealed_chapter", 0))
+        chapter_markers = [
+            int(entry[key])
+            for key in ("source_chapter", "start_chapter")
+            if key in entry and entry[key] is not None
+        ]
+    except (TypeError, ValueError):
+        return False
+    return bool(chapter_markers) and revealed_chapter > max(chapter_markers)
+
+
+def _has_reveal_gated_relationship(bundle: Any) -> bool:
+    return any(
+        _relationship_is_reveal_gated(dict(entry))
+        for entry in list(getattr(bundle, "local_relationships", []))
+    )
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: Initial translation (translator model)
 # ---------------------------------------------------------------------------
@@ -197,10 +265,11 @@ def translate_chapter_pass1(
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
 
-    packet_meta = get_latest_packet_metadata(
-        conn, release_id=release_id, chapter_number=chapter_number
+    packet_version_hash = _latest_packet_version_hash(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
     )
-    packet_version_hash = packet_meta.packet_hash if packet_meta else ""
 
     try:
         _emit_translation_event(
@@ -256,12 +325,7 @@ def translate_chapter_pass1(
                 block_id = str(record["block_id"])
                 placeholder_entries = placeholders_by_block.get(parent_block_id, [])
                 bundle = bundles_by_block.get(block_id) if bundles_by_block else None
-                bundle_ctx = format_bundle_for_pass1(bundle) if bundle else {
-                    "glossary": "",
-                    "alias_resolutions": "",
-                    "matched_idioms": "",
-                    "continuity_notes": "",
-                }
+                bundle_ctx = format_bundle_for_pass1(bundle)
                 _emit_translation_event(
                     release_id=release_id,
                     run_id=run_id,
@@ -634,11 +698,7 @@ def _process_pass2_block(
     placeholder_entries = placeholders_by_block.get(parent_block_id, [])
 
     bundle = bundles_by_block.get(parent_block_id) if bundles_by_block else None
-    pass2_glossary = ""
-    if bundle is not None and bundle.matched_glossary_entries:
-        from resemantica.translation.bundle_context import _format_glossary_entry
-        glossary_lines = [_format_glossary_entry(entry) for entry in bundle.matched_glossary_entries]
-        pass2_glossary = "TERMINOLOGY:\n" + "\n".join(glossary_lines) + "\n"
+    pass2_context = format_bundle_for_pass2(bundle)
 
     _emit_translation_event(
         release_id=release_id,
@@ -666,7 +726,12 @@ def _process_pass2_block(
                 draft_text=segment_draft,
                 full_source_block=source_text,
                 prior_segment_translations=prior_segment_translations,
-                glossary=pass2_glossary,
+                glossary=pass2_context["glossary"],
+                alias_resolutions=pass2_context["alias_resolutions"],
+                matched_idioms=pass2_context["matched_idioms"],
+                local_relationships=pass2_context["local_relationships"],
+                continuity_notes=pass2_context["continuity_notes"],
+                retrieval_evidence=pass2_context["retrieval_evidence"],
                 chapter_number=chapter_number,
                 block_id=parent_block_id,
                 segment_id=segment_id,
@@ -773,7 +838,12 @@ def _process_pass2_block(
         draft_text=draft_text,
         full_source_block=source_text,
         prior_segment_translations=[],
-        glossary=pass2_glossary,
+        glossary=pass2_context["glossary"],
+        alias_resolutions=pass2_context["alias_resolutions"],
+        matched_idioms=pass2_context["matched_idioms"],
+        local_relationships=pass2_context["local_relationships"],
+        continuity_notes=pass2_context["continuity_notes"],
+        retrieval_evidence=pass2_context["retrieval_evidence"],
         chapter_number=chapter_number,
         block_id=block_id,
         fallback_callback=lambda payload: _emit_pass2_fallback_event(
@@ -908,10 +978,11 @@ def translate_chapter_pass2(
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
 
-    packet_meta = get_latest_packet_metadata(
-        conn, release_id=release_id, chapter_number=chapter_number
+    packet_version_hash = _latest_packet_version_hash(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
     )
-    packet_version_hash = packet_meta.packet_hash if packet_meta else ""
 
     try:
         _emit_translation_event(
@@ -1163,6 +1234,7 @@ def translate_chapter_pass3(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     if not config_obj.translation.pass3_default:
@@ -1233,10 +1305,11 @@ def translate_chapter_pass3(
     conn = open_connection(paths.db_path)
     ensure_checkpoint_schema(conn)
 
-    packet_meta = get_latest_packet_metadata(
-        conn, release_id=release_id, chapter_number=chapter_number
+    packet_version_hash = _latest_packet_version_hash(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
     )
-    packet_version_hash = packet_meta.packet_hash if packet_meta else ""
 
     try:
         _emit_translation_event(
@@ -1259,7 +1332,8 @@ def translate_chapter_pass3(
         )
 
         if (
-            pass3_checkpoint is not None
+            not force
+            and pass3_checkpoint is not None
             and pass3_checkpoint.status == "success"
             and Path(pass3_checkpoint.artifact_path).exists()
         ):
@@ -1313,13 +1387,12 @@ def translate_chapter_pass3(
 
             bundle3 = bundles_by_block.get(block_id) if bundles_by_block else None
             if bundle3 is not None:
-                placeholder_count = len(_PLACEHOLDER_RE.findall(source_text))
-                risk = classify_paragraph_risk(
+                risk = classify_paragraph_risk_from_text(
+                    source_text=source_text,
+                    pass2_text=pass2_output,
                     idiom_count=len(bundle3.matched_idioms),
-                    title_count=0,
-                    has_reveal_gated_relationship=len(bundle3.local_relationships) > 0,
-                    ambiguous_pronoun_count=0,
-                    placeholder_count=placeholder_count,
+                    title_count=_count_title_honorific_glossary_entries(bundle3),
+                    has_reveal_gated_relationship=_has_reveal_gated_relationship(bundle3),
                     distinct_entity_count=len(bundle3.alias_resolutions),
                     threshold_high=threshold_high,
                 )
@@ -1380,7 +1453,8 @@ def translate_chapter_pass3(
                 continue
 
             bundle3 = bundles_by_block.get(block_id) if bundles_by_block else None
-            glossary_text = format_glossary_for_pass3(bundle3) if bundle3 else ""
+            pass3_context = format_bundle_for_pass3(bundle3)
+            glossary_target_terms = extract_glossary_target_terms_for_pass3(bundle3)
 
             polished_text = translate_pass3(
                 client=client,
@@ -1388,13 +1462,17 @@ def translate_chapter_pass3(
                 prompt_template=pass3_prompt.template,
                 source_text=source_text,
                 pass2_output=pass2_output,
-                glossary_text=glossary_text,
+                glossary_text=pass3_context["glossary"],
+                alias_resolutions=pass3_context["alias_resolutions"],
+                matched_idioms=pass3_context["matched_idioms"],
+                relationship_constraints=pass3_context["relationship_constraints"],
             )
 
             integrity = validate_pass3_integrity(
                 source_text=source_text,
                 pass2_output=pass2_output,
                 pass3_output=polished_text,
+                glossary_terms=glossary_target_terms,
             )
             pass3_integrity_checks.append(
                 {

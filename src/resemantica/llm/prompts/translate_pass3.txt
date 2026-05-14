@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 1.1
 PASS3
 
 ## SOURCE TEXT
@@ -10,7 +10,16 @@ PASS3
 ## GLOSSARY
 {GLOSSARY}
 
+## ALIASES
+{ALIAS_RESOLUTIONS}
+
+## IDIOMS
+{MATCHED_IDIOMS}
+
+## RELATIONSHIPS
+{RELATIONSHIP_CONSTRAINTS}
+
 ## INSTRUCTIONS
 Polish the Pass 2 output for readability without changing meaning, terminology, facts, or event order.
-Preserve all named entities and glossary terms exactly.
+Preserve all named entities, glossary terms, aliases, idiom renderings, and relationship facts exactly.
 Preserve placeholders exactly as provided.

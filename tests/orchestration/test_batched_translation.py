@@ -235,6 +235,39 @@ def test_resume_force_bypasses_checkpoint(tmp_path: Path, monkeypatch) -> None:
     ]
 
 
+def test_batched_passes_force_into_pass3(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "batched-force-pass3"
+    for n in range(1, 3):
+        _write_chapter(release_id, n)
+    pass3_forces: list[bool] = []
+
+    def pass1(**kwargs):
+        return {"status": "success", "pass1_artifact": f"p1-{kwargs['chapter_number']}.json"}
+
+    def pass2(**kwargs):
+        return {"status": "success", "pass2_artifact": f"p2-{kwargs['chapter_number']}.json"}
+
+    def pass3(**kwargs):
+        pass3_forces.append(bool(kwargs["force"]))
+        return {"status": "success", "pass3_artifact": f"p3-{kwargs['chapter_number']}.json"}
+
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass1", pass1)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass3", pass3)
+
+    result = OrchestrationRunner(release_id, "run").run_stage(
+        "translate-range",
+        chapter_start=1,
+        chapter_end=2,
+        batched_model_order=True,
+        force=True,
+    )
+
+    assert result.success is True
+    assert pass3_forces == [True, True]
+
+
 def test_resume_no_checkpoint_processes_all(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "resume-none"
