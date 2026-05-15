@@ -668,12 +668,14 @@ def test_preprocessing_launch_short_circuits_on_failure():
 def test_chapter_spine_uses_extracted_count():
     from resemantica.tui.screens.base import BaseScreen
 
-    chapter_data = [(i, "not-started") for i in range(1, 6)]
+    chapter_data = [
+        (i, "not-started", f"chapter{i:03d}.xhtml") for i in range(1, 6)
+    ]
     items = BaseScreen._render_spine_items(chapter_data)
     assert len(items) == 5
-    assert "Ch 1" in str(items[0].prompt)
+    assert "Ch 1 chapter001.xhtml" in str(items[0].prompt)
     assert items[0].id == "ch-1"
-    assert "Ch 5" in str(items[4].prompt)
+    assert "Ch 5 chapter005.xhtml" in str(items[4].prompt)
     assert items[4].id == "ch-5"
 
 
@@ -681,11 +683,11 @@ def test_chapter_spine_status_chars():
     from resemantica.tui.screens.base import BaseScreen
 
     chapter_data = [
-        (1, "complete"),
-        (2, "in-progress"),
-        (3, "failed"),
-        (4, "high-risk"),
-        (5, "not-started"),
+        (1, "complete", "chapter001.xhtml"),
+        (2, "in-progress", "chapter002.xhtml"),
+        (3, "failed", "chapter003.xhtml"),
+        (4, "high-risk", "chapter004.xhtml"),
+        (5, "not-started", "chapter005.xhtml"),
     ]
     items = BaseScreen._render_spine_items(chapter_data)
     assert "■" in str(items[0].prompt)
@@ -693,6 +695,15 @@ def test_chapter_spine_status_chars():
     assert "✗" in str(items[2].prompt)
     assert "◈" in str(items[3].prompt)
     assert "□" in str(items[4].prompt)
+
+
+def test_chapter_spine_label_falls_back_without_source_name():
+    from resemantica.tui.screens.base import BaseScreen
+
+    items = BaseScreen._render_spine_items([(1, "not-started", None)])
+
+    assert "Ch 1" in str(items[0].prompt)
+    assert "xhtml" not in str(items[0].prompt)
 
 
 def test_translation_build_block_options():

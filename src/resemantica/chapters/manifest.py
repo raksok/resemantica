@@ -19,6 +19,21 @@ class ChapterRef:
     placeholder_path: Path
     source_document_path: str | None
     chapter_source_hash: str | None
+    source_document_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.source_document_name is None:
+            self.source_document_name = _source_document_name(self.source_document_path)
+
+
+def _source_document_name(source_document_path: str | None) -> str | None:
+    if not source_document_path:
+        return None
+    normalized = source_document_path.strip().replace("\\", "/")
+    if not normalized:
+        return None
+    name = normalized.rsplit("/", maxsplit=1)[-1]
+    return name or None
 
 
 def _read_chapter_ref(paths: DerivedPaths, chapter_path: Path) -> ChapterRef:
@@ -31,12 +46,14 @@ def _read_chapter_ref(paths: DerivedPaths, chapter_path: Path) -> ChapterRef:
     chapter_number = int(payload.get("chapter_number") or _chapter_number_from_path(chapter_path))
     source_document_path = payload.get("source_document_path")
     chapter_source_hash = payload.get("chapter_source_hash")
+    source_document_name = payload.get("source_document_name")
     return ChapterRef(
         chapter_number=chapter_number,
         chapter_path=chapter_path,
         placeholder_path=paths.extracted_placeholders_dir / f"chapter-{chapter_number}.json",
         source_document_path=source_document_path if isinstance(source_document_path, str) else None,
         chapter_source_hash=chapter_source_hash if isinstance(chapter_source_hash, str) else None,
+        source_document_name=source_document_name if isinstance(source_document_name, str) else None,
     )
 
 
@@ -97,6 +114,11 @@ def _load_manifest(paths: DerivedPaths) -> list[ChapterRef]:
                 chapter_source_hash=(
                     str(row["chapter_source_hash"])
                     if row.get("chapter_source_hash") is not None
+                    else None
+                ),
+                source_document_name=(
+                    str(row["source_document_name"])
+                    if row.get("source_document_name") is not None
                     else None
                 ),
             )

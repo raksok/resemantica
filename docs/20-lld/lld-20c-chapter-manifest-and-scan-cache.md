@@ -20,6 +20,7 @@ class ChapterRef:
     placeholder_path: Path
     source_document_path: str | None
     chapter_source_hash: str | None
+    source_document_name: str | None
 
 def write_chapter_manifest(paths: DerivedPaths) -> Path: ...
 
@@ -37,7 +38,7 @@ Manifest path:
 artifacts/releases/{release_id}/extracted/chapter-manifest.json
 ```
 
-Manifest rows are sorted by `chapter_number` and include only data that can be derived from extracted chapter JSON files.
+Manifest rows are sorted by `chapter_number` and include only data that can be derived from extracted chapter JSON files. `source_document_name` is the basename of `source_document_path`, for example `chapter012.xhtml`, so operators can map canonical chapter numbers back to EPUB XHTML files without reading each chapter payload.
 
 ## Data Flow
 
@@ -45,6 +46,7 @@ Manifest rows are sorted by `chapter_number` and include only data that can be d
 2. `extract_epub()` calls `write_chapter_manifest(paths)`.
 3. Pipelines call `list_extracted_chapters(paths, ...)`.
 4. If manifest is missing or malformed, the helper scans chapter files, rewrites the manifest, and returns refs.
+5. If an older manifest lacks `source_document_name`, loading derives it from `source_document_path`.
 
 ## Call Sites To Convert
 

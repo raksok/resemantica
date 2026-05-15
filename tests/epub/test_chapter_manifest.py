@@ -35,7 +35,10 @@ def test_manifest_write_and_range_listing_preserves_numeric_order(tmp_path: Path
     assert manifest_path.exists()
     assert [ref.chapter_number for ref in refs] == [2, 10]
     assert refs[0].chapter_source_hash == "hash-2"
+    assert refs[0].source_document_name == "chapter2.xhtml"
     assert refs[0].placeholder_path == paths.extracted_placeholders_dir / "chapter-2.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_payload["chapters"][0]["source_document_name"] == "chapter1.xhtml"
 
 
 def test_manifest_missing_falls_back_to_scan_and_rewrites(tmp_path: Path, monkeypatch) -> None:
@@ -46,4 +49,45 @@ def test_manifest_missing_falls_back_to_scan_and_rewrites(tmp_path: Path, monkey
     refs = list_extracted_chapters(paths)
 
     assert [ref.chapter_number for ref in refs] == [3]
+    assert refs[0].source_document_name == "chapter3.xhtml"
     assert paths.extracted_chapter_manifest_path.exists()
+    manifest_payload = json.loads(
+        paths.extracted_chapter_manifest_path.read_text(encoding="utf-8")
+    )
+    assert manifest_payload["chapters"][0]["source_document_name"] == "chapter3.xhtml"
+
+
+def test_legacy_manifest_without_source_document_name_derives_basename(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    paths = derive_paths(load_config(), release_id="manifest-legacy")
+    paths.extracted_chapter_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.extracted_chapter_manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "chapters": [
+                    {
+                        "chapter_number": 12,
+                        "chapter_path": str(
+                            paths.extracted_chapters_dir / "chapter-12.json"
+                        ),
+                        "placeholder_path": str(
+                            paths.extracted_placeholders_dir / "chapter-12.json"
+                        ),
+                        "source_document_path": "OEBPS/Text/chapter012.xhtml",
+                        "chapter_source_hash": "hash-12",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    refs = list_extracted_chapters(paths)
+
+    assert [ref.chapter_number for ref in refs] == [12]
+    assert refs[0].source_document_path == "OEBPS/Text/chapter012.xhtml"
+    assert refs[0].source_document_name == "chapter012.xhtml"

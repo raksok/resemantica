@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from resemantica.tui.app import ResemanticaApp
 
 _UNSET = object()
+ChapterSpineData = tuple[int, str, str | None]
 
 
 @dataclass
@@ -138,6 +139,7 @@ class BaseScreen(Screen):
         self._cached_extraction_manifest_exists = False
         self._spine_chapter_numbers: list[int] = []
         self._spine_chapter_statuses: dict[int, str] = {}
+        self._spine_chapter_source_names: dict[int, str | None] = {}
         self._chapter_to_spine_index: dict[int, int] = {}
         self._render_tab_bar()
         self._refresh_all()
@@ -377,11 +379,15 @@ class BaseScreen(Screen):
             spine_items.add_option(Option("[dim]No chapter data.[/]"))
             self._spine_chapter_numbers = []
             self._spine_chapter_statuses = {}
+            self._spine_chapter_source_names = {}
             self._chapter_to_spine_index = {}
             return
 
-        self._spine_chapter_numbers = [n for n, _ in chapter_data]
-        self._spine_chapter_statuses = dict(chapter_data)
+        self._spine_chapter_numbers = [n for n, _, _ in chapter_data]
+        self._spine_chapter_statuses = {n: status for n, status, _ in chapter_data}
+        self._spine_chapter_source_names = {
+            n: source_name for n, _, source_name in chapter_data
+        }
 
         options = self._render_spine_items(chapter_data)
         self._chapter_to_spine_index = {
@@ -405,7 +411,14 @@ class BaseScreen(Screen):
         if idx is None:
             return
         char, _ = self._SPINE_STATUS_MAP.get(status, self._SPINE_STATUS_MAP["not-started"])
-        spine_items.replace_option_prompt_at_index(idx, f"{char} Ch {chapter_number}")
+        spine_items.replace_option_prompt_at_index(
+            idx,
+            self._format_spine_label(
+                char,
+                chapter_number,
+                self._spine_chapter_source_names.get(chapter_number),
+            ),
+        )
 
     def on_chapter_started(self, message: ChapterStarted) -> None:
         self._update_spine_item(message.chapter_number, "in-progress")
@@ -421,7 +434,7 @@ class BaseScreen(Screen):
             from resemantica.tui.screens.translation import TranslationScreen
             self.app.push_screen(TranslationScreen())
 
-    def _get_chapter_spine_data(self) -> list[tuple[int, str]]:
+    def _get_chapter_spine_data(self) -> list[ChapterSpineData]:
         release_id = self._get_release_id()
         if not release_id:
             return []
@@ -432,13 +445,22 @@ class BaseScreen(Screen):
             config = load_config(getattr(self.app, "config_path", None))
             paths = derive_paths(config, release_id=release_id)
             refs = list_extracted_chapters(paths)
-            chapter_numbers = [ref.chapter_number for ref in refs]
 
             run_id = self._get_run_id()
             if run_id:
                 statuses = self._load_chapter_statuses(release_id, run_id)
-                return [(n, statuses.get(n, "not-started")) for n in chapter_numbers]
-            return [(n, "not-started") for n in chapter_numbers]
+                return [
+                    (
+                        ref.chapter_number,
+                        statuses.get(ref.chapter_number, "not-started"),
+                        ref.source_document_name,
+                    )
+                    for ref in refs
+                ]
+            return [
+                (ref.chapter_number, "not-started", ref.source_document_name)
+                for ref in refs
+            ]
         except Exception:
             return []
 
@@ -485,13 +507,19 @@ class BaseScreen(Screen):
             conn.close()
 
     @classmethod
-    def _render_spine_items(cls, chapter_data: list[tuple[int, str]]) -> list[Option]:
+    def _render_spine_items(cls, chapter_data: list[ChapterSpineData]) -> list[Option]:
         options: list[Option] = []
-        for ch_num, status in chapter_data:
+        for ch_num, status, source_name in chapter_data:
             char, _ = cls._SPINE_STATUS_MAP.get(status, cls._SPINE_STATUS_MAP["not-started"])
-            label = f"{char} Ch {ch_num}"
+            label = cls._format_spine_label(char, ch_num, source_name)
             options.append(Option(label, id=f"ch-{ch_num}"))
         return options
+
+    @staticmethod
+    def _format_spine_label(char: str, chapter_number: int, source_name: str | None) -> str:
+        if source_name:
+            return f"{char} Ch {chapter_number} {source_name}"
+        return f"{char} Ch {chapter_number}"
 
     def _update_footer(
         self,

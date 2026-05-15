@@ -36,6 +36,8 @@ TUI screens:
 
 TUI layout and screen specifications: `lld-12-tui-layout.md`
 
+The persistent chapter spine uses canonical chapter numbers as the action identity and displays the EPUB source filename when manifest metadata is available, for example `Ch 1 chapter012.xhtml`. When older manifests do not include a source filename, the compact `Ch 1` label remains valid.
+
 ## Data Flow
 
 1. Operator invokes a CLI command or TUI action.
