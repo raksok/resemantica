@@ -4,7 +4,7 @@
 
 Replace Screen 6's mixed artifact-tree + cleanup bottom-pane with a dedicated **Cleanup Wizard** at Screen 7. The wizard provides a 4-step guided flow (Scope → Preview → Confirm → Result) making cleanup safe, discoverable, and unambiguous via keyboard-driven interaction.
 
-Add a `factory` scope that wipes all releases and databases across the artifact root.
+Add a `factory` scope that wipes all release directories and legacy global store files across the artifact root.
 
 ## Screen Map Change
 
@@ -37,7 +37,7 @@ On scope change, `plan_cleanup(dry_run=True)` is called immediately and the disp
 - Number of SQLite rows that would be deleted
 - Key hints for next actions
 
-For factory scope, a bold warning banner is shown: "This will delete ALL releases and ALL databases."
+For factory scope, a bold warning banner is shown: "This will delete ALL releases and release-local stores."
 
 ### Step 2: Preview
 
@@ -50,7 +50,7 @@ Groups deletable artifacts by category rather than raw path dump:
 | Preprocess artifacts | `extracted/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/` |
 | Cache | `.cache/` |
 | Factory — all releases | `releases/` (all releases) |
-| Factory — global DB | `resemantica.db` |
+| Factory — legacy global stores | `resemantica.db`, `graph.ladybug` |
 | Other | any paths not matching above |
 
 For factory scope, preserved list is empty (nothing preserved).
@@ -66,8 +66,8 @@ Summary of what will be deleted:
 **Factory scope** shows extra prominent warning:
 ```
 ⚠ FACTORY RESET ⚠
-This will delete ALL releases, ALL runs, and ALL databases.
-The entire artifact directory will be wiped clean.
+This will delete ALL releases, ALL runs, and release-local stores.
+Legacy global store files are removed if present.
 ```
 
 **Apply key `a` is only enabled on this step.**
@@ -88,8 +88,8 @@ Post-apply report:
 | `translation` | Translation subdir of a run | Checkpoints for that run | Yes |
 | `preprocess` | extracted/, glossary/, summaries/, idioms/, graph/, packets/ | Extracted chapters + blocks for that run | Yes |
 | `cache` | `.cache/` directory | None | Yes |
-| `all` | Everything in release root except tracking.db and cleanup files | All rows for that run | Yes |
-| `factory` | All release directories + global `resemantica.db` | None (files deleted) | No |
+| `all` | Everything in release root except tracking.db, resemantica.db, graph.ladybug, and cleanup files | All rows for that run | Yes |
+| `factory` | All release directories + legacy global `resemantica.db`/`graph.ladybug` if present | None (files deleted) | No |
 
 ## Key Bindings
 
@@ -153,7 +153,7 @@ For factory scope, `_refresh_plan()` and `action_confirm_and_apply()` do NOT req
 When `scope == "factory"`:
 - Ignore `release_id` and `run_id`
 - Collect `{artifact_root}/releases/` (entire releases directory, all releases)
-- Collect `{artifact_root}/{db_filename}` (global resemantica.db)
+- Collect legacy `{artifact_root}/{db_filename}` and `{artifact_root}/graph.ladybug` if present
 - Preserve nothing
 
 ### `plan_cleanup`
@@ -167,7 +167,7 @@ When `scope == "factory"`:
 
 When `scope == "factory"`:
 - Read plan from `{artifact_root}/factory_cleanup_plan.json`
-- Delete all collected artifacts (all releases dirs + global DB)
+- Delete all collected artifacts (all releases dirs + legacy global stores)
 - No row-level SQL cleanup needed (files are gone)
 - Write report to `{artifact_root}/factory_cleanup_report.json`
 
@@ -256,7 +256,7 @@ Screen Keys:
 | `test_artifact_tree_only` | Artifact screen has no cleanup section |
 | `test_navigation_8_screens` | Keys 1–8 switch screens correctly |
 | `test_help_shows_8_screens` | Help modal lists 8 screens + wizard keys |
-| `test_factory_scope_plan_collects_all` | Plan for factory collects releases + global DB |
-| `test_factory_scope_apply_deletes_all` | Apply for factory deletes releases + global DB |
+| `test_factory_scope_plan_collects_all` | Plan for factory collects releases + legacy global stores |
+| `test_factory_scope_apply_deletes_all` | Apply for factory deletes releases + legacy global stores |
 | `test_wizard_factory_scope_in_cycle` | `s` cycles to factory and back |
 | `test_wizard_factory_confirm_shows_warning` | Factory confirm step shows extra warning |

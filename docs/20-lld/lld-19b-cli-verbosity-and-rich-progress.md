@@ -55,11 +55,14 @@ The subscriber maintains a dict of `stage_name → rich.Task` for tracking. Unkn
 ### 4. Rich Progress Layout
 
 ```
+Time started: 2026-05-15T10:30:00+07:00
+Elapsed Time: 0:04:12
+────────────────────────────────────────────────────────────────────
 Stage          ━━━━━━━━━━━━━━━━━━━━  12/50 chapters
 Blocks         ━━━━━━━━━━━━━━━━━━━━  45/48 blocks     ⚠ 3  ⊘ 1
 ```
 
-Columns: `SpinnerColumn`, `TextColumn`, `BarColumn`, `TaskProgressColumn`, plus custom counter columns for warnings/skips.
+The live layout renders timing above the progress bars. Columns: `SpinnerColumn`, `TextColumn`, `BarColumn`, `TaskProgressColumn`, plus custom counter columns for warnings/skips.
 
 ### 5. Lifecycle
 1. CLI command creates `with CliProgressSubscriber() as sub:` before calling pipeline.
@@ -79,6 +82,7 @@ Columns: `SpinnerColumn`, `TextColumn`, `BarColumn`, `TaskProgressColumn`, plus 
 4. Subscriber's `*` handler matches events to naming patterns.
 5. Rich progress bars update in real-time.
 6. On completion, subscriber unsubscribes and stops progress display.
+7. CLI prints a final Rich stage summary plus existing key/value lines (`status=...`, `message=...`) for automation compatibility.
 
 ## Out of Scope
 - Adding EventBus emissions to pipelines (Task 19c).

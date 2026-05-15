@@ -10,7 +10,7 @@ Depends on: M25 (TUI Launch Control), M11 (Cleanup Workflow)
 
 Replace the current combined artifact-tree + cleanup-preview bottom-pane on Screen 6 with a dedicated, step-by-step **Cleanup Wizard** as Screen 7. The wizard guides the user through scope selection, preview, confirmation, and result review — making cleanup safe, discoverable, and unambiguous.
 
-Add a `factory` scope to purge all releases and databases across the entire artifact root.
+Add a `factory` scope to purge all releases and legacy global store files across the entire artifact root.
 
 ## Scope
 
@@ -26,7 +26,7 @@ In:
 - Artifact screen simplified to tree-only (cleanup section removed).
 - Help modal updated with 8-screen list and wizard keys.
 - Navigation and screen switching keys `1`–`8` updated.
-- **New factory scope** in `cleanup.py`: purges all releases, all run directories, and the global database. No run_id needed.
+- **New factory scope** in `cleanup.py`: purges all releases, all run directories, and legacy global store files. No run_id needed.
 - **Factory scope** in wizard: extra-strong warning on confirm step, works without release/run context.
 - Tests for wizard state machine, scope cycling, preview rendering, apply guard, navigation, and factory scope.
 
@@ -59,11 +59,11 @@ Out:
 - Scope cycling immediately calls `plan_cleanup(dry_run=True)` and updates preview.
 - Preview groups artifacts by category, shows preserved items, estimated size, and SQLite row count.
 - Confirm step shows summary and enables `a` key.
-- Factory scope confirm shows extra-strong warning: "This will delete ALL releases and ALL databases."
+- Factory scope confirm shows an extra-strong warning for all releases and release-local stores.
 - Factory scope does not require `release_id` or `run_id` to plan or apply.
 - Result step shows post-apply report (files, dirs, SQLite rows, errors).
-- `plan_cleanup(scope="factory")` ignores release_id and run_id, collects all releases + global DB.
-- `apply_cleanup(scope="factory")` deletes all release directories and global DB file.
+- `plan_cleanup(scope="factory")` ignores release_id and run_id, collects all releases + legacy global stores.
+- `apply_cleanup(scope="factory")` deletes all release directories and legacy global store files.
 
 ## Tests Or Smoke Checks
 
@@ -73,8 +73,8 @@ Out:
 - Unit test apply without preview shows error.
 - Unit test apply on non-confirm step is no-op.
 - Unit test artifact screen has no cleanup sections.
-- Unit test factory scope plan collects releases dir + global DB.
-- Unit test factory scope apply deletes releases dir + global DB.
+- Unit test factory scope plan collects releases dir + legacy global stores.
+- Unit test factory scope apply deletes releases dir + legacy global stores.
 - Mounted TUI test: pressing `7` opens wizard, shows step 1.
 - Mounted TUI test: scope cycling updates display through factory.
 - Run `uv run --with pytest pytest tests/tui tests/orchestration -q`.

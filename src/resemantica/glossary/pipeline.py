@@ -960,12 +960,15 @@ def review_glossary_candidates(
         review_path=str(paths.glossary_review_path),
     )
     logger.info("Review file written: {} entries -> {}", len(entries), paths.glossary_review_path)
+    review_csv_path = paths.glossary_review_path.with_suffix(".csv")
     return {
         "status": "success",
         "release_id": release_id,
         "run_id": run_id,
         "entries_written": len(entries),
         "review_path": str(paths.glossary_review_path),
+        "review_json_path": str(paths.glossary_review_path),
+        "review_csv_path": str(review_csv_path),
     }
 
 

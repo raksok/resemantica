@@ -40,7 +40,7 @@ SQLite datasets:
 4. **BGE-M3 embedding critic** — score each remaining candidate by cosine similarity to a reference vocabulary of common Chinese words. Entries below `pruning_threshold` get `candidate_status = "pruned"` and skip translation. Score stored in `critic_score`.
 5. Persist remaining candidates to working state.
 6. Translate candidates to provisional English renderings.
-7. **Optional human review** — `glossary-review` writes translated candidates to a JSON review file. User edits translations, marks entries for deletion, or adds new entries. `glossary-promote --review-file` reads the edited file.
+7. **Optional human review** — `glossary-review` writes translated candidates to JSON and CSV review files. User edits translations, marks entries for deletion, or adds new entries. `glossary-promote --review-file` reads the edited file.
 8. Run deterministic normalization and conflict checks.
 9. Promote approved entries into locked glossary.
 
@@ -141,7 +141,7 @@ Response post-processing strips label prefixes (`Category:`, `Translation:`, etc
 
 ### `glossary-review` command
 
-Queries all candidates with `candidate_status = 'translated'` and writes a JSON review file to `artifacts/releases/<release>/glossary/review.json`:
+Queries all candidates with `candidate_status = 'translated'` or translation votes and writes review files to `artifacts/releases/<release>/glossary/review.json` and `artifacts/releases/<release>/glossary/review.csv`:
 
 ```json
 {
@@ -165,6 +165,8 @@ Supported user actions:
 - `"keep"` — promote as-is (or with edited `translation`)
 - `"delete"` — skip this candidate
 - `"add"` — new entry (no `candidate_id`, requires `source_term` + `category` + `translation`)
+
+Production gates also generate these two files automatically when unresolved glossary votes block a downstream stage. The files remain human-editable inputs; promotion still requires an explicit `glossary-promote --review-file` run.
 
 ### `glossary-promote --review-file`
 

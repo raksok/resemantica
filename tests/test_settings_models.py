@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from resemantica.settings import AppConfig, load_config
+from resemantica.settings import AppConfig, derive_paths, load_config
 
 
 def _config_with_custom_models(**kwargs) -> AppConfig:
@@ -113,6 +113,21 @@ class TestPreprocessTranslatorNames:
         )
 
         assert config.models.effective_preprocess_translator_names() == ["model-a"]
+
+
+class TestDerivedPaths:
+    def test_release_stores_are_release_scoped(self, tmp_path: Path) -> None:
+        config = AppConfig()
+
+        p1 = derive_paths(config, release_id="p1", project_root=tmp_path)
+        pf = derive_paths(config, release_id="pf", project_root=tmp_path)
+
+        assert p1.db_path == tmp_path / "artifacts" / "releases" / "p1" / "resemantica.db"
+        assert pf.db_path == tmp_path / "artifacts" / "releases" / "pf" / "resemantica.db"
+        assert p1.graph_db_path == tmp_path / "artifacts" / "releases" / "p1" / "graph.ladybug"
+        assert pf.graph_db_path == tmp_path / "artifacts" / "releases" / "pf" / "graph.ladybug"
+        assert p1.db_path != pf.db_path
+        assert p1.graph_db_path != pf.graph_db_path
 
 
 class TestValidateConfig:

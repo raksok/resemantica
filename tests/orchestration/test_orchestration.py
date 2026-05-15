@@ -495,6 +495,8 @@ class TestM11CleanupScopes:
 
         # Create protected assets
         (release_root / "tracking.db").touch()
+        (release_root / "resemantica.db").touch()
+        (release_root / "graph.ladybug").touch()
 
         return release_root, run_dir
 
@@ -540,7 +542,7 @@ class TestM11CleanupScopes:
         # Run dir should NOT be in deletable
         assert not any("runs" in a for a in plan["deletable_artifacts"])
 
-    def test_scope_all_preserves_tracking_db(self):
+    def test_scope_all_preserves_release_stores(self):
         import uuid
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"
         run_id = f"test-run-{uuid.uuid4().hex[:8]}"
@@ -549,6 +551,8 @@ class TestM11CleanupScopes:
 
         plan = plan_cleanup(release_id, run_id, scope="all", dry_run=True)
         assert str(release_root / "tracking.db") in plan["preserved_artifacts"]
+        assert str(release_root / "resemantica.db") in plan["preserved_artifacts"]
+        assert str(release_root / "graph.ladybug") in plan["preserved_artifacts"]
 
     def test_cleanup_apply_refuses_without_plan(self):
         import uuid
@@ -645,9 +649,12 @@ class TestM11CleanupScopes:
         (releases_dir / release_id / "runs" / run_id / "test.txt").write_text("test")
         global_db = tmp_path / "resemantica.db"
         global_db.write_text("test")
+        global_graph_db = tmp_path / "graph.ladybug"
+        global_graph_db.write_text("test")
 
         plan_cleanup(release_id, run_id, scope="factory", dry_run=True)
         apply_cleanup(release_id, run_id, scope="factory")
 
         assert not releases_dir.exists()
         assert not global_db.exists()
+        assert not global_graph_db.exists()

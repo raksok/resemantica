@@ -399,7 +399,7 @@ def test_mounted_wizard_factory_confirm_shows_warning():
             assert "FACTORY RESET" in main_text
             assert "ALL releases" in main_text
             assert "ALL runs" in main_text
-            assert "global database" in main_text.lower()
+            assert "release stores" in main_text.lower()
 
     asyncio.run(run())
 
@@ -408,4 +408,5 @@ def test_categorize_factory_paths():
     from resemantica.tui.screens.cleanup_wizard import _categorize
 
     assert _categorize("/tmp/artifacts/releases") == "All releases"
+    assert _categorize("/tmp/artifacts/releases/p1/resemantica.db") == "Release database"
     assert _categorize("/tmp/artifacts/resemantica.db") == "Global database"

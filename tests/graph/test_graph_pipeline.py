@@ -282,6 +282,49 @@ def test_ladybug_graph_state_survives_restart_without_state_json(tmp_path: Path)
     assert [entity.entity_id for entity in restarted.list_entities()] == ["ent_a"]
 
 
+def test_release_derived_ladybug_stores_are_isolated(tmp_path: Path) -> None:
+    config = load_config()
+    p1_paths = derive_paths(config, release_id="p1", project_root=tmp_path)
+    pf_paths = derive_paths(config, release_id="pf", project_root=tmp_path)
+    p1_client = GraphClient.from_ladybug(db_path=p1_paths.graph_db_path)
+    pf_client = GraphClient.from_ladybug(db_path=pf_paths.graph_db_path)
+
+    p1_client.upsert_entities(
+        entities=[
+            GraphEntity(
+                entity_id="ent_release_local",
+                release_id="p1",
+                entity_type="character",
+                canonical_name="Pilot Only",
+                glossary_entry_id=None,
+                first_seen_chapter=1,
+                last_seen_chapter=1,
+                revealed_chapter=1,
+                status="confirmed",
+            )
+        ]
+    )
+    pf_client.upsert_entities(
+        entities=[
+            GraphEntity(
+                entity_id="ent_release_local",
+                release_id="pf",
+                entity_type="character",
+                canonical_name="Full Only",
+                glossary_entry_id=None,
+                first_seen_chapter=1,
+                last_seen_chapter=1,
+                revealed_chapter=1,
+                status="confirmed",
+            )
+        ]
+    )
+
+    assert p1_paths.graph_db_path != pf_paths.graph_db_path
+    assert [entity.release_id for entity in p1_client.list_entities(status="confirmed")] == ["p1"]
+    assert [entity.release_id for entity in pf_client.list_entities(status="confirmed")] == ["pf"]
+
+
 def test_ladybug_chapter_safe_subgraph_excludes_future_state(tmp_path: Path) -> None:
     db_path = tmp_path / "graph.ladybug"
     client = GraphClient.from_ladybug(db_path=db_path)

@@ -28,6 +28,15 @@ Gate failures are normal orchestration failures:
 - run state marked failed for that stage
 - a persisted `{stage}.gate_failed` event with the full gate report in payload
 
+When an enforced gate fails because unresolved glossary or idiom translation votes require human resolution, orchestration automatically writes the matching review artifacts using the existing review workflow:
+
+- `artifacts/releases/<release>/glossary/review.json`
+- `artifacts/releases/<release>/glossary/review.csv`
+- `artifacts/releases/<release>/idioms/review.json`
+- `artifacts/releases/<release>/idioms/review.csv`
+
+The generated paths are attached to the failed stage metadata and shown by the CLI. Operators still resolve the files manually and run `glossary-promote --review-file` or `idiom-promote --review-file`; gates never auto-approve or auto-promote review edits.
+
 This gives operators a short feedback loop: fix upstream artifacts, complete review/promotion, or narrow chapter scope, then re-run. Re-running `run production` for the same release/run retries the failed gate stage using the saved chapter scope instead of starting over at `preprocess-summaries`.
 
 ## Dry Run

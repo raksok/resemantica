@@ -45,6 +45,16 @@ TUI layout and screen specifications: `lld-12-tui-layout.md`
 5. CLI and TUI render progress, warnings, failures, and artifact references from shared state.
 6. Both surfaces expose enough status that the operator can inspect progress without an external tracking UI.
 
+## CLI Terminal Output
+
+Long-running CLI commands render a Rich live progress view that includes:
+
+- `Time started:` with the local command start timestamp
+- `Elapsed Time:` updated while the command runs
+- progress bars, warning/skip/retry/artifact counters, and a bounded log panel
+
+After a stage exits, CLI commands print a Rich stage summary for human operators and still print the existing key/value lines such as `status=success` and `message=...` for script compatibility. Failed gate summaries include gate failures and any generated review artifact paths.
+
 ## Validation Ownership
 
 - CLI validates arguments and forwards normalized requests to orchestration

@@ -160,12 +160,19 @@ class OrchestrationRunner:
                     stopped=True,
                 )
             if not stage_result.success:
+                metadata: dict[str, object] = {
+                    "failed_stage": item["stage_name"],
+                    "stage_result": stage_result.metadata,
+                }
+                for key in ("gate", "review_artifacts", "review_errors"):
+                    if key in stage_result.metadata:
+                        metadata[key] = stage_result.metadata[key]
                 return StageResult(
                     success=False,
                     stage_name="production",
                     message=f"Stage {item['stage_name']} failed: {stage_result.message}",
                     checkpoint={"completed_stages": completed},
-                    metadata={"failed_stage": item["stage_name"]},
+                    metadata=metadata,
                 )
             completed.append(item["stage_name"])
 
@@ -241,6 +248,12 @@ class OrchestrationRunner:
                     saved_checkpoint["chapter_start"] = chapter_start
                 if chapter_end is not None:
                     saved_checkpoint["chapter_end"] = chapter_end
+                result_metadata: dict[str, object] = {"gate": gate.to_dict()}
+                review_artifacts, review_errors = self._generate_gate_review_artifacts(gate)
+                if review_artifacts:
+                    result_metadata["review_artifacts"] = review_artifacts
+                if review_errors:
+                    result_metadata["review_errors"] = review_errors
                 self._update_run_state(stage_name, "failed", saved_checkpoint)
                 emit_event(
                     self.run_id,
@@ -249,14 +262,14 @@ class OrchestrationRunner:
                     stage_name,
                     severity="error",
                     message=gate.message(),
-                    payload={"gate": gate.to_dict(), "checkpoint": saved_checkpoint},
+                    payload={**result_metadata, "checkpoint": saved_checkpoint},
                 )
                 return StageResult(
                     success=False,
                     stage_name=stage_name,
                     message=gate.message(),
                     checkpoint=saved_checkpoint,
-                    metadata={"gate": gate.to_dict()},
+                    metadata=result_metadata,
                 )
         self._update_run_state(stage_name, "running", active_checkpoint)
         emit_event(
@@ -418,6 +431,63 @@ class OrchestrationRunner:
             chapter_start=chapter_start,
             chapter_end=chapter_end,
         )
+
+    def _generate_gate_review_artifacts(self, gate: GateReport) -> tuple[dict[str, object], list[str]]:
+        unresolved = gate.metadata.get("unresolved_votes")
+        if not isinstance(unresolved, dict):
+            return {}, []
+
+        artifacts: dict[str, object] = {}
+        errors: list[str] = []
+        if int(unresolved.get("glossary", 0) or 0) > 0:
+            try:
+                from resemantica.glossary.pipeline import review_glossary_candidates
+
+                result = review_glossary_candidates(
+                    release_id=self.release_id,
+                    run_id=self.run_id,
+                    config=self.config,
+                )
+                artifacts["glossary"] = {
+                    "entries_written": result.get("entries_written", 0),
+                    "review_path": result.get("review_path"),
+                    "review_json_path": result.get("review_json_path") or result.get("review_path"),
+                    "review_csv_path": result.get("review_csv_path"),
+                }
+            except Exception as exc:
+                logger.opt(exception=True).error(
+                    "Failed to generate glossary review artifacts for gate failure "
+                    "(release={}, run={}, stage={})",
+                    self.release_id,
+                    self.run_id,
+                    gate.stage_name,
+                )
+                errors.append(f"glossary review generation failed: {exc}")
+        if int(unresolved.get("idioms", 0) or 0) > 0:
+            try:
+                from resemantica.idioms.pipeline import review_idiom_candidates
+
+                result = review_idiom_candidates(
+                    release_id=self.release_id,
+                    run_id=self.run_id,
+                    config=self.config,
+                )
+                artifacts["idioms"] = {
+                    "entries_written": result.get("entries_written", 0),
+                    "review_path": result.get("review_path"),
+                    "review_json_path": result.get("review_json_path") or result.get("review_path"),
+                    "review_csv_path": result.get("review_csv_path"),
+                }
+            except Exception as exc:
+                logger.opt(exception=True).error(
+                    "Failed to generate idiom review artifacts for gate failure "
+                    "(release={}, run={}, stage={})",
+                    self.release_id,
+                    self.run_id,
+                    gate.stage_name,
+                )
+                errors.append(f"idiom review generation failed: {exc}")
+        return artifacts, errors
 
     def _execute_stage(
         self,

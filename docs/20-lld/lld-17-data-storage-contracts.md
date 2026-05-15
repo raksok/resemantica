@@ -89,7 +89,7 @@ artifacts/releases/{release_id}
 The plan must enumerate:
 
 - filesystem targets
-- SQLite targets in global `resemantica.db`
+- SQLite targets in release-local `resemantica.db`
 - release `tracking.db` targets
 - preserved targets
 
@@ -97,7 +97,7 @@ The apply step must:
 
 - refuse to run without a matching persisted plan
 - delete only targets listed in the plan unless `force` explicitly expands policy
-- remove release/run-specific rows from global `resemantica.db`
+- remove release/run-specific rows from release-local `resemantica.db`
 - remove matching rows from release `tracking.db`, including `events` and `run_state`
 - write a cleanup report with deleted/preserved targets and warnings
 
@@ -131,7 +131,7 @@ If an existing authority table uses stage-specific names such as `approval_run_i
 - SQLite extraction rows contain required metadata
 - Ladybug-backed graph state survives process restart without `.state.json`
 - chapter-safe graph query excludes future relationships
-- cleanup plan includes filesystem, tracking DB, and global DB targets
+- cleanup plan includes filesystem, tracking DB, and release DB targets
 - cleanup apply removes scoped rows from both databases
 - cleanup preserves locked authority state unless scope explicitly includes it
 
@@ -142,4 +142,4 @@ Current drift to fix:
 - graph client touches LadybugDB but persists real state in `.state.json`
 - extraction metadata is filesystem-only
 - cleanup currently targets `artifacts/{release_id}` instead of `artifacts/releases/{release_id}`
-- cleanup deletes only tracking events, not global DB rows or run state
+- cleanup deletes only tracking events, not release DB rows or run state

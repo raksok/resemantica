@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import shutil
 from collections import deque
+from datetime import datetime
 from threading import Lock
+from time import monotonic
 from types import TracebackType
 from typing import Any
 
@@ -46,6 +48,8 @@ class CliProgressSubscriber:
         self._live: Live | None = None
         self.progress: Progress | None = progress
         self._placeholder_task_id: TaskID | None = None
+        self._started_at: datetime | None = None
+        self._started_monotonic: float | None = None
 
     def _progress(self) -> Progress:
         if self.progress is None:
@@ -54,6 +58,8 @@ class CliProgressSubscriber:
 
     def __enter__(self) -> CliProgressSubscriber:
         self.event_bus.subscribe("*", self._on_event)
+        self._started_at = datetime.now().astimezone()
+        self._started_monotonic = monotonic()
 
         if self._injected_progress:
             self.progress = self._injected_progress
@@ -129,8 +135,25 @@ class CliProgressSubscriber:
         text = highlighter(Text("\n".join(lines)))
         return Panel(text, title="Log", border_style="dim")
 
+    def _format_elapsed(self) -> str:
+        if self._started_monotonic is None:
+            return "0:00:00"
+        elapsed_seconds = max(int(monotonic() - self._started_monotonic), 0)
+        hours, remainder = divmod(elapsed_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+    def _render_time_header(self) -> Text:
+        started = self._started_at.isoformat(timespec="seconds") if self._started_at else "unknown"
+        return Text.from_markup(
+            f"[bold]Time started:[/bold] {started}\n"
+            f"[bold]Elapsed Time:[/bold] {self._format_elapsed()}"
+        )
+
     def _render_layout(self) -> Group:
         components: list[ConsoleRenderable | RichCast | str] = [
+            self._render_time_header(),
+            Rule(style="dim"),
             self._progress(),
             Rule(style="dim"),
             self._render_status(),

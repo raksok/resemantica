@@ -12,6 +12,8 @@ artifacts/
 
 ```text
 artifacts/releases/{release_id}/
+  resemantica.db
+  graph.ladybug
   tracking.db
   cleanup_plan.json
   extracted/
@@ -53,6 +55,7 @@ artifacts/releases/{release_id}/runs/{run_id}/
 ## Rules
 
 - chapter-specific artifacts include `chapter_number` in the path
+- authority stores are release-scoped; new runs do not read legacy `artifacts/resemantica.db` or `artifacts/graph.ladybug`
 - immutable artifacts get a new file or versioned parent path instead of in-place edits where reproducibility matters
 - SQLite stores metadata and indexes for these artifacts, but the artifact payload lives on disk
 - if a path rule changes, update this file and the relevant LLD in the same change

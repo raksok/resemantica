@@ -8,7 +8,7 @@ Define the SQLite foundation shared by authority stores, working-state repositor
 
 Database file:
 
-- `artifacts/resemantica.db`
+- `artifacts/releases/{release_id}/resemantica.db`
 
 Migration files:
 
@@ -24,7 +24,7 @@ Python modules:
 
 ## Data Flow
 
-1. Resolve the database path from config, defaulting to `artifacts/resemantica.db`.
+1. Resolve the database path from config, defaulting to `artifacts/releases/{release_id}/resemantica.db`.
 2. Open one SQLite connection per command or workflow boundary.
 3. **Execute `PRAGMA journal_mode=WAL;` on every connection immediately after opening.** This is mandatory to prevent `Database is locked` errors when the TUI (M12) reads concurrently with the orchestrator (M10).
 4. Apply manual version-numbered migrations from `db/migrations/`.
@@ -50,7 +50,7 @@ Python modules:
 - migration ordering and schema-version recording
 - repository tests using in-memory SQLite
 - transaction rollback on failed promotion or cleanup mutation
-- configured database path resolves to `artifacts/resemantica.db` by default
+- configured database path resolves under `artifacts/releases/{release_id}/resemantica.db` by default
 - `open_connection()` sets `journal_mode=WAL` on file-backed databases
 - concurrent read and write do not produce `Database is locked`
 

@@ -906,12 +906,15 @@ def review_idiom_candidates(
         entries_written=len(entries),
         review_path=str(paths.idiom_review_path),
     )
+    review_csv_path = paths.idiom_review_path.with_suffix(".csv")
     return {
         "status": "success",
         "release_id": release_id,
         "run_id": run_id,
         "entries_written": len(entries),
         "review_path": str(paths.idiom_review_path),
+        "review_json_path": str(paths.idiom_review_path),
+        "review_csv_path": str(review_csv_path),
     }
 
 

@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from resemantica.cli_progress import CliProgressSubscriber
 from resemantica.epub.extractor import extract_epub
@@ -26,7 +29,7 @@ def _add_verbose_arg(parser: argparse.ArgumentParser) -> None:
         "-v", "--verbose",
         action="count",
         default=0,
-        help="Increase verbosity (use -vvvv for maximum).",
+        help="Increase verbosity (-vvv/-vvvv for DEBUG).",
     )
 
 
@@ -180,6 +183,53 @@ def _exit_code(result: Any) -> int:
     if result is _INTERRUPTED_STOP or getattr(result, "stopped", False):
         return 130
     return 0 if getattr(result, "success", False) else 1
+
+
+def _rich_status_style(status: str) -> str:
+    return {
+        "success": "green",
+        "stopped": "yellow",
+        "failed": "red",
+    }.get(status, "cyan")
+
+
+def _print_stage_result(result: Any) -> None:
+    status = _status_text(result)
+    metadata = getattr(result, "metadata", {}) or {}
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold")
+    table.add_column()
+    table.add_row("Stage", str(getattr(result, "stage_name", "unknown")))
+    table.add_row("Status", status)
+    if getattr(result, "message", ""):
+        table.add_row("Message", str(result.message))
+    warnings = metadata.get("warnings")
+    if isinstance(warnings, list) and warnings:
+        table.add_row("Warnings", " | ".join(str(item) for item in warnings))
+    gate = metadata.get("gate")
+    if isinstance(gate, dict):
+        failures = gate.get("failures")
+        gate_warnings = gate.get("warnings")
+        if isinstance(failures, list) and failures:
+            table.add_row("Gate failures", " | ".join(str(item) for item in failures))
+        if isinstance(gate_warnings, list) and gate_warnings:
+            table.add_row("Gate warnings", " | ".join(str(item) for item in gate_warnings))
+    review_errors = metadata.get("review_errors")
+    if isinstance(review_errors, list) and review_errors:
+        table.add_row("Review errors", " | ".join(str(item) for item in review_errors))
+    review_artifacts = metadata.get("review_artifacts")
+    if isinstance(review_artifacts, dict):
+        for label, artifact in review_artifacts.items():
+            if isinstance(artifact, dict):
+                json_path = artifact.get("review_json_path") or artifact.get("review_path")
+                csv_path = artifact.get("review_csv_path")
+                if json_path:
+                    table.add_row(f"{label} review.json", str(json_path))
+                if csv_path:
+                    table.add_row(f"{label} review.csv", str(csv_path))
+    Console().print(Panel(table, title="Stage Result", border_style=_rich_status_style(status)))
+    print(f"status={status}")
+    print(f"message={getattr(result, 'message', '')}")
 
 
 def _add_chapter_scope_args(parser: argparse.ArgumentParser, required: bool = False) -> None:
@@ -749,8 +799,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if result is _INTERRUPTED_STOP:
             return 130
-        print(f"status={_status_text(result)}")
-        print(f"message={result.message}")
+        _print_stage_result(result)
         return _exit_code(result)
 
     if args.command == "preprocess":
@@ -817,6 +866,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"status={result['status']}")
             print(f"entries_written={result['entries_written']}")
             print(f"review_path={result['review_path']}")
+            print(f"review_json_path={result['review_json_path']}")
+            print(f"review_csv_path={result['review_csv_path']}")
             return 0
 
         if args.preprocess_command == "glossary-promote":
@@ -864,8 +915,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
-            print(f"status={_status_text(stage_result)}")
-            print(f"message={stage_result.message}")
+            _print_stage_result(stage_result)
             return _exit_code(stage_result)
 
         if args.preprocess_command == "idioms":
@@ -882,8 +932,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
-            print(f"status={_status_text(stage_result)}")
-            print(f"message={stage_result.message}")
+            _print_stage_result(stage_result)
             return _exit_code(stage_result)
 
         if args.preprocess_command == "idiom-review":
@@ -901,6 +950,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"status={result['status']}")
             print(f"entries_written={result['entries_written']}")
             print(f"review_path={result['review_path']}")
+            print(f"review_json_path={result['review_json_path']}")
+            print(f"review_csv_path={result['review_csv_path']}")
             return 0
 
         if args.preprocess_command == "idiom-promote":
@@ -949,8 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
-            print(f"status={_status_text(stage_result)}")
-            print(f"message={stage_result.message}")
+            _print_stage_result(stage_result)
             return _exit_code(stage_result)
 
         _build_parser().print_help()
@@ -975,8 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if stage_result is _INTERRUPTED_STOP:
                 return 130
-            print(f"status={_status_text(stage_result)}")
-            print(f"message={stage_result.message}")
+            _print_stage_result(stage_result)
             return _exit_code(stage_result)
         _build_parser().print_help()
         return 2
@@ -1019,7 +1068,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if result is _INTERRUPTED_STOP:
                 return 130
-            print(result.message)
+            _print_stage_result(result)
             return _exit_code(result)
 
         if args.run_command == "resume":
@@ -1035,11 +1084,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if resume_result is _INTERRUPTED_STOP:
                 return 130
-            if not resume_result.success:
-                print(f"Resume failed: {resume_result.message}")
-                return 1
-            print("Resume completed successfully")
-            return 0
+            _print_stage_result(resume_result)
+            return _exit_code(resume_result)
 
         if args.run_command == "cleanup-plan":
             plan = plan_cleanup(
@@ -1091,8 +1137,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if result is _INTERRUPTED_STOP:
             return 130
-        print(f"status={_status_text(result)}")
-        print(f"message={result.message}")
+        _print_stage_result(result)
         return _exit_code(result)
 
     if args.command == "tui":

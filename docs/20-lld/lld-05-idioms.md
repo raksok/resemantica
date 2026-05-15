@@ -88,6 +88,8 @@ Supported user actions:
 action	source_text	meaning_zh	meaning_en	rendering	candidate_id	evidence_snippet	alternatives
 ```
 
+Production gates also generate `review.json` and `review.csv` automatically when unresolved idiom rendering votes block a downstream stage. The files remain human-editable inputs; promotion still requires an explicit `idiom-promote --review-file` run.
+
 ### `idiom-promote --review-file`
 
 If `--review-file` is provided, the command applies user edits from either `review.json` or `review.csv`, then runs standard validation + promotion.

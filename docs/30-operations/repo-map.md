@@ -12,8 +12,9 @@ Current top-level files:
 
 Implemented package layout (M1 slice):
 
-- `src/resemantica/cli.py`: CLI entrypoint and command router
-- `src/resemantica/settings.py`: config loading and path derivation
+- `src/resemantica/cli.py`: CLI entrypoint, command router, and Rich result summaries that preserve key/value output
+- `src/resemantica/cli_progress.py`: CLI Rich live progress subscriber with start/elapsed time, counters, and log panel
+- `src/resemantica/settings.py`: config loading and release-scoped path derivation for artifacts, SQLite, and LadybugDB
 - `src/resemantica/epub/`: EPUB extractor, parser, placeholders, validators, and rebuild; rebuild consumes existing translated artifacts even for non-story chapters
 - `src/resemantica/db/sqlite.py`: SQLite connection and migration helpers
 - `src/resemantica/db/migrations/001_initial.sql`: initial manual migration script
@@ -87,7 +88,7 @@ Implemented package layout (M10 slice):
 
 - `src/resemantica/orchestration/`: centralized run control, stage ordering, retries, resume behavior, cleanup planning, and structured events
 - `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER`
-- `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production and stage execution with transition validation
+- `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production, stage execution, transition validation, gate handling, and auto review artifact generation for unresolved votes
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
 - `src/resemantica/orchestration/cleanup.py`: `plan_cleanup()` and `apply_cleanup()` for two-step cleanup workflow
 - `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission

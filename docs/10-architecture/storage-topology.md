@@ -23,7 +23,7 @@ Primary datasets:
 
 File location:
 
-- `artifacts/resemantica.db`
+- `artifacts/releases/{release_id}/resemantica.db`
 
 ### LadybugDB
 
@@ -41,7 +41,7 @@ Constraints:
 
 File location:
 
-- `artifacts/graph.ladybug`
+- `artifacts/releases/{release_id}/graph.ladybug`
 
 Client:
 
@@ -75,6 +75,9 @@ Target artifact root:
 ```text
 artifacts/
   releases/{release_id}/
+    resemantica.db
+    graph.ladybug
+    tracking.db
     extracted/
     glossary/
     summaries/

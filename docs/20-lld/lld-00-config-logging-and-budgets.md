@@ -30,7 +30,7 @@ Config sections:
 2. Parse TOML with the Python standard library.
 3. Hydrate plain dataclasses for config sections.
 4. Run manual validation for required fields, value ranges, and path shape.
-5. Derive default artifact paths, including `artifacts/` and `artifacts/resemantica.db`.
+5. Derive default artifact paths, including `artifacts/` and release-local `resemantica.db`.
 6. Configure loguru console logs and JSON file logs under `artifacts/logs/` (implemented in Task 19a, see LLD 19a).
 7. Expose budget defaults to LLM, packet, and translation callers.
 

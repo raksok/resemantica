@@ -501,8 +501,8 @@ def derive_paths(
         graph_dir=release_root / "graph",
         graph_snapshot_path=release_root / "graph" / "snapshot.json",
         graph_warnings_path=release_root / "graph" / "warnings.json",
-        graph_db_path=artifact_root / "graph.ladybug",
+        graph_db_path=release_root / "graph.ladybug",
         packets_dir=release_root / "packets",
         rebuilt_epub_path=release_root / "rebuild" / "reconstructed.epub",
-        db_path=artifact_root / config.paths.db_filename,
+        db_path=release_root / config.paths.db_filename,
     )

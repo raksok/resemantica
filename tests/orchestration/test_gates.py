@@ -252,6 +252,51 @@ def _seed_unresolved_idiom_vote(release_id: str) -> None:
         conn.close()
 
 
+def _seed_unresolved_glossary_vote(release_id: str) -> None:
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        upsert_discovered_candidates(
+            conn,
+            candidates=[
+                GlossaryCandidate(
+                    candidate_id="gcan-unresolved",
+                    release_id=release_id,
+                    source_term="张三",
+                    normalized_source_term="张三",
+                    category="character",
+                    source_language="zh",
+                    first_seen_chapter=1,
+                    last_seen_chapter=1,
+                    appearance_count=1,
+                    evidence_snippet="张三出现。",
+                    candidate_translation_en=None,
+                    normalized_target_term=None,
+                    discovery_run_id="discover",
+                    translation_run_id=None,
+                    candidate_status="discovered",
+                    validation_status="pending",
+                    conflict_reason=None,
+                )
+            ],
+        )
+        upsert_translation_vote(
+            conn,
+            candidate_id="gcan-unresolved",
+            release_id=release_id,
+            translation_run_id="translate",
+            model_name="m1",
+            prompt_version="v1",
+            raw_output="A",
+            cleaned_output="A",
+            normalized_output="a",
+            resolution_status="unresolved",
+        )
+    finally:
+        conn.close()
+
+
 def test_missing_extracted_manifest_blocks_preprocess(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -464,6 +509,52 @@ def test_unresolved_glossary_and_idiom_votes_block_downstream(tmp_path: Path, mo
     assert report.success is False
     assert "Unresolved glossary" in report.message()
     assert "Unresolved idiom" in report.message()
+
+
+def test_enforced_gate_failure_writes_glossary_review_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "auto-glossary-review"
+    _write_extracted_chapter(release_id)
+    _seed_unresolved_glossary_vote(release_id)
+
+    result = OrchestrationRunner(release_id, "production").run_stage(
+        "preprocess-idioms",
+        enforce_gates=True,
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    assert result.success is False
+    assert paths.glossary_review_path.exists()
+    assert paths.glossary_review_path.with_suffix(".csv").exists()
+    assert result.metadata["review_artifacts"]["glossary"]["review_json_path"] == str(paths.glossary_review_path)
+    assert result.metadata["review_artifacts"]["glossary"]["review_csv_path"] == str(
+        paths.glossary_review_path.with_suffix(".csv")
+    )
+
+
+def test_enforced_gate_failure_writes_idiom_review_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "auto-idiom-review"
+    _write_extracted_chapter(release_id)
+    _seed_unresolved_idiom_vote(release_id)
+
+    result = OrchestrationRunner(release_id, "production").run_stage(
+        "preprocess-graph",
+        enforce_gates=True,
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    assert result.success is False
+    assert paths.idiom_review_path.exists()
+    assert paths.idiom_review_path.with_suffix(".csv").exists()
+    assert result.metadata["review_artifacts"]["idioms"]["review_json_path"] == str(paths.idiom_review_path)
+    assert result.metadata["review_artifacts"]["idioms"]["review_csv_path"] == str(
+        paths.idiom_review_path.with_suffix(".csv")
+    )
 
 
 def test_translate_gate_requires_packets_for_story_chapters(tmp_path: Path, monkeypatch) -> None:

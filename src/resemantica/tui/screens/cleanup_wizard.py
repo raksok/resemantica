@@ -17,6 +17,8 @@ def _categorize(path_str: str) -> str:
             return "Translation output"
         return "Run directory"
     if "resemantica.db" in lower:
+        if "/releases/" in lower:
+            return "Release database"
         return "Global database"
     if lower.endswith("/releases") or lower.rstrip("/").endswith("/releases"):
         return "All releases"
@@ -215,7 +217,8 @@ class CleanupWizardScreen(BaseScreen):
             lines.append("[dim]No release or run context. Set release/run via Dashboard or New File dialog.[/]")
         elif self._scope == "factory":
             lines.append("[bold red]FACTORY RESET[/]")
-            lines.append("This will delete [bold]ALL releases[/] and the [bold]global database[/].")
+            lines.append("This will delete [bold]ALL releases[/] and release-local stores.")
+            lines.append("Legacy global store files are removed if present.")
             lines.append("")
             lines.append("[dim]Press [bold]p[/] to preview what will be deleted.[/]")
         else:
@@ -300,9 +303,9 @@ class CleanupWizardScreen(BaseScreen):
             lines.append("[bold red]╔══════════════════════════════════════╗[/]")
             lines.append("[bold red]║        ⚠ FACTORY RESET ⚠           ║[/]")
             lines.append("[bold red]║  This will delete ALL releases,    ║[/]")
-            lines.append("[bold red]║  ALL runs, and the global database. ║[/]")
-            lines.append("[bold red]║  The entire artifact directory      ║[/]")
-            lines.append("[bold red]║  will be wiped clean.               ║[/]")
+            lines.append("[bold red]║  ALL runs, and release stores.      ║[/]")
+            lines.append("[bold red]║  Legacy global stores are removed   ║[/]")
+            lines.append("[bold red]║  if present.                        ║[/]")
             lines.append("[bold red]╚══════════════════════════════════════╝[/]")
             lines.append("")
 

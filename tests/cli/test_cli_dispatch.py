@@ -344,6 +344,77 @@ class TestCliDispatch:
         assert result == 0
         assert captured["verbosity"] == 3
 
+    def test_stage_result_output_keeps_key_value_lines(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+
+        class FakeResult:
+            success = True
+            stopped = False
+            stage_name = "preprocess-summaries"
+            message = "ok"
+            metadata = {}
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", lambda fn, **kwargs: fn())
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr(
+            "resemantica.orchestration.runner.OrchestrationRunner.run_stage",
+            lambda self, *args, **kwargs: FakeResult(),
+        )
+
+        result = cli_mod.main(["preprocess", "summaries", "--release", "r1"])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "Stage Result" in out
+        assert "status=success" in out
+        assert "message=ok" in out
+
+    def test_glossary_review_prints_json_and_csv_paths(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+
+        def fake_review(**kwargs):
+            return {
+                "status": "success",
+                "entries_written": 2,
+                "review_path": "artifacts/releases/r1/glossary/review.json",
+                "review_json_path": "artifacts/releases/r1/glossary/review.json",
+                "review_csv_path": "artifacts/releases/r1/glossary/review.csv",
+            }
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", lambda fn, **kwargs: fn())
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr("resemantica.glossary.pipeline.review_glossary_candidates", fake_review)
+
+        result = cli_mod.main(["preprocess", "glossary-review", "--release", "r1"])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "review_json_path=artifacts/releases/r1/glossary/review.json" in out
+        assert "review_csv_path=artifacts/releases/r1/glossary/review.csv" in out
+
+    def test_idiom_review_prints_json_and_csv_paths(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+
+        def fake_review(**kwargs):
+            return {
+                "status": "success",
+                "entries_written": 2,
+                "review_path": "artifacts/releases/r1/idioms/review.json",
+                "review_json_path": "artifacts/releases/r1/idioms/review.json",
+                "review_csv_path": "artifacts/releases/r1/idioms/review.csv",
+            }
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", lambda fn, **kwargs: fn())
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr("resemantica.idioms.pipeline.review_idiom_candidates", fake_review)
+
+        result = cli_mod.main(["preprocess", "idiom-review", "--release", "r1"])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "review_json_path=artifacts/releases/r1/idioms/review.json" in out
+        assert "review_csv_path=artifacts/releases/r1/idioms/review.csv" in out
+
     def test_main_forwards_chapter_scope_to_stage_commands(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         calls = []

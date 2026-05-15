@@ -39,6 +39,9 @@ def _collect_scope_artifacts(
         global_db = artifact_root / cfg.paths.db_filename
         if global_db.exists():
             deletable.append(global_db)
+        global_graph_db = artifact_root / "graph.ladybug"
+        if global_graph_db.exists():
+            deletable.append(global_graph_db)
         return deletable, preserved
 
     release_root = derive_paths(cfg, release_id=release_id).release_root
@@ -70,7 +73,13 @@ def _collect_scope_artifacts(
 
     elif scope == "all":
         for p in release_root.iterdir():
-            if p.name in ("tracking.db", "cleanup_plan.json", "cleanup_report.json"):
+            if p.name in (
+                "tracking.db",
+                cfg.paths.db_filename,
+                "graph.ladybug",
+                "cleanup_plan.json",
+                "cleanup_report.json",
+            ):
                 preserved.append(p)
             else:
                 deletable.append(p)
@@ -236,7 +245,7 @@ def apply_cleanup(
             finally:
                 conn.close()
         except Exception as exc:
-            report["errors"].append(f"Global SQLite cleanup error: {exc}")
+            report["errors"].append(f"Release SQLite cleanup error: {exc}")
 
     report_path = _get_cleanup_report_path(release_id, scope=scope)
     report_path.parent.mkdir(parents=True, exist_ok=True)

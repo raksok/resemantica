@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from io import StringIO
+from time import monotonic
 
 from rich.console import Console
 from rich.progress import Progress
@@ -118,6 +120,21 @@ def test_cli_progress_counter_text_is_global() -> None:
     subscriber.artifact_count = 4
 
     assert subscriber._counter_text() == "warn 1 skip 2 retry 3 artifacts 4"
+
+
+def test_cli_progress_layout_includes_timing_header() -> None:
+    output = StringIO()
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress())
+    subscriber.progress = _progress()
+    subscriber._started_at = datetime(2026, 5, 15, 10, 30, 0).astimezone()
+    subscriber._started_monotonic = monotonic() - 65
+
+    Console(file=output, force_terminal=False, width=100).print(subscriber._render_layout())
+
+    text = output.getvalue()
+    assert "Time started:" in text
+    assert "Elapsed Time:" in text
+    assert "0:01:" in text
 
 
 def test_cli_progress_filters_events_by_cli_verbosity() -> None:
