@@ -28,7 +28,7 @@ Implemented package layout (M2 slice):
 
 Implemented package layout (M3 slice):
 
-- `src/resemantica/glossary/`: candidate discovery, promotion validators, and glossary pipeline orchestration
+- `src/resemantica/glossary/`: candidate discovery, review CSV/JSON export/import, promotion validators, and glossary pipeline orchestration
 - `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, translation votes, locked glossary, and conflicts
 - `src/resemantica/db/migrations/003_glossary.sql`: glossary tables and constraints
 - `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`: M3 glossary prompt files
@@ -44,7 +44,7 @@ Implemented package layout (M4 slice):
 
 Implemented package layout (M5 slice):
 
-- `src/resemantica/idioms/`: idiom extraction, deterministic validation, exact-match hooks, and idiom preprocessing pipeline
+- `src/resemantica/idioms/`: idiom extraction, deterministic validation, review CSV/JSON export/import, exact-match hooks, and idiom preprocessing pipeline
 - `src/resemantica/db/idiom_repo.py`: SQLite repository for idiom candidates, translation votes, policies, and conflicts
 - `src/resemantica/db/migrations/005_idioms.sql`: idiom tables and constraints
 - `src/resemantica/llm/prompts/idiom_detect.txt`: M5 idiom detection prompt file
@@ -87,7 +87,7 @@ Implemented package layout (M10 slice):
 
 - `src/resemantica/orchestration/`: centralized run control, stage ordering, retries, resume behavior, cleanup planning, and structured events
 - `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER`
-- `src/resemantica/orchestration/runner.py`: `run_stage()` for stage execution with transition validation
+- `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production and stage execution with transition validation
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
 - `src/resemantica/orchestration/cleanup.py`: `plan_cleanup()` and `apply_cleanup()` for two-step cleanup workflow
 - `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission

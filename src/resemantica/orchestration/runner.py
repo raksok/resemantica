@@ -84,7 +84,22 @@ class OrchestrationRunner:
         chapter_end: int | None = None,
         batched_model_order: bool | None = None,
     ) -> StageResult:
-        plan = self.plan_production(chapter_start=chapter_start, chapter_end=chapter_end)
+        state = self._get_run_state()
+        effective_chapter_start = chapter_start
+        effective_chapter_end = chapter_end
+        start_index = 0
+        if state is not None and state.stage_name in STAGE_ORDER:
+            if effective_chapter_start is None:
+                effective_chapter_start = self._checkpoint_int(state.checkpoint, "chapter_start")
+            if effective_chapter_end is None:
+                effective_chapter_end = self._checkpoint_int(state.checkpoint, "chapter_end")
+            stage_index = STAGE_ORDER.index(state.stage_name)
+            start_index = stage_index + 1 if state.status == "completed" else stage_index
+
+        plan = self.plan_production(
+            chapter_start=effective_chapter_start,
+            chapter_end=effective_chapter_end,
+        )
         if dry_run:
             return StageResult(
                 success=True,
@@ -93,16 +108,30 @@ class OrchestrationRunner:
                 metadata=plan.to_dict(),
             )
 
-        completed: list[str] = []
-        for item in plan.stages:
+        if start_index >= len(plan.stages):
+            already_complete_checkpoint: dict[str, object] = {"completed_stages": list(STAGE_ORDER)}
+            return StageResult(
+                success=True,
+                stage_name="production",
+                message="Production run already completed",
+                checkpoint=already_complete_checkpoint,
+                metadata={"checkpoint": already_complete_checkpoint},
+            )
+
+        completed: list[str] = list(STAGE_ORDER[:start_index])
+        for item in plan.stages[start_index:]:
             if self.stop_token is not None and self.stop_token.requested:
                 checkpoint: dict[str, object] = {"completed_stages": completed}
-                self._update_run_state("production", "stopped", checkpoint)
+                if effective_chapter_start is not None:
+                    checkpoint["chapter_start"] = effective_chapter_start
+                if effective_chapter_end is not None:
+                    checkpoint["chapter_end"] = effective_chapter_end
+                self._update_run_state(item["stage_name"], "stopped", checkpoint)
                 emit_event(
                     self.run_id,
                     self.release_id,
                     "stage_stopped",
-                    "production",
+                    item["stage_name"],
                     message="Production stopped before launching next stage",
                     payload={"checkpoint": checkpoint},
                 )
@@ -120,10 +149,8 @@ class OrchestrationRunner:
                 batched_model_order=batched_model_order,
                 enforce_gates=True,
             )
-            completed.append(item["stage_name"])
             if stage_result.stopped:
                 checkpoint = {"completed_stages": completed, "stopped_stage": item["stage_name"]}
-                self._update_run_state("production", "stopped", checkpoint)
                 return StageResult(
                     success=True,
                     stage_name="production",
@@ -140,6 +167,7 @@ class OrchestrationRunner:
                     checkpoint={"completed_stages": completed},
                     metadata={"failed_stage": item["stage_name"]},
                 )
+            completed.append(item["stage_name"])
 
         emit_event(
             self.run_id,
@@ -154,6 +182,12 @@ class OrchestrationRunner:
             message="Production run completed successfully",
             checkpoint={"completed_stages": completed},
         )
+
+    def _checkpoint_int(self, checkpoint: dict[str, Any], key: str) -> int | None:
+        value = checkpoint.get(key)
+        if isinstance(value, int):
+            return value
+        return None
 
     def run_stage(
         self,

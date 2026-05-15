@@ -23,14 +23,27 @@ from resemantica.tracking.repo import (
     get_tracking_db_path,
     load_events,
     load_run_state,
+    save_run_state,
 )
 
 
-def _make_run_state(release_id: str, run_id: str, stage: str) -> Any:
+def _make_run_state(
+    release_id: str,
+    run_id: str,
+    stage: str,
+    *,
+    status: str = "running",
+    checkpoint: dict[str, Any] | None = None,
+) -> Any:
     conn = ensure_tracking_db(release_id)
     try:
-        from resemantica.tracking.repo import save_run_state
-        state = RunState(run_id=run_id, release_id=release_id, stage_name=stage, status="running")
+        state = RunState(
+            run_id=run_id,
+            release_id=release_id,
+            stage_name=stage,
+            status=status,
+            checkpoint=checkpoint or {},
+        )
         save_run_state(conn, state)
         return state
     finally:
@@ -235,6 +248,76 @@ class TestRunStage:
 
         assert result.success is True
         assert [stage["stage_name"] for stage in result.metadata["stages"]] == STAGE_ORDER
+
+    def test_runner_production_without_state_starts_at_summaries(self, monkeypatch):
+        import uuid
+
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def fake_run_stage(self, stage_name: str, **kwargs):
+            calls.append((stage_name, kwargs))
+            return StageResult(True, stage_name, "ok")
+
+        monkeypatch.setattr(OrchestrationRunner, "run_stage", fake_run_stage)
+
+        result = OrchestrationRunner(release_id, run_id).run_production()
+
+        assert result.success is True
+        assert calls[0][0] == "preprocess-summaries"
+
+    def test_runner_production_retries_failed_stage_with_checkpoint_scope(self, monkeypatch):
+        import uuid
+
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+        _make_run_state(
+            release_id,
+            run_id,
+            "preprocess-graph",
+            status="failed",
+            checkpoint={"chapter_start": 11, "chapter_end": 14},
+        )
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def fake_run_stage(self, stage_name: str, **kwargs):
+            calls.append((stage_name, kwargs))
+            return StageResult(True, stage_name, "ok")
+
+        monkeypatch.setattr(OrchestrationRunner, "run_stage", fake_run_stage)
+
+        result = OrchestrationRunner(release_id, run_id).run_production()
+
+        assert result.success is True
+        assert calls[0][0] == "preprocess-graph"
+        assert calls[0][1]["chapter_start"] == 11
+        assert calls[0][1]["chapter_end"] == 14
+
+    def test_runner_production_after_completed_stage_starts_at_next_stage(self, monkeypatch):
+        import uuid
+
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+        _make_run_state(release_id, run_id, "preprocess-idioms", status="completed")
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def fake_run_stage(self, stage_name: str, **kwargs):
+            calls.append((stage_name, kwargs))
+            return StageResult(True, stage_name, "ok")
+
+        monkeypatch.setattr(OrchestrationRunner, "run_stage", fake_run_stage)
+
+        result = OrchestrationRunner(release_id, run_id).run_production()
+
+        assert result.success is True
+        assert calls[0][0] == "preprocess-graph"
 
     def test_translate_range_requires_bounds(self):
         import uuid

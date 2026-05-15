@@ -28,7 +28,7 @@ Gate failures are normal orchestration failures:
 - run state marked failed for that stage
 - a persisted `{stage}.gate_failed` event with the full gate report in payload
 
-This gives operators a short feedback loop: fix upstream artifacts, complete review/promotion, or narrow chapter scope, then re-run.
+This gives operators a short feedback loop: fix upstream artifacts, complete review/promotion, or narrow chapter scope, then re-run. Re-running `run production` for the same release/run retries the failed gate stage using the saved chapter scope instead of starting over at `preprocess-summaries`.
 
 ## Dry Run
 `run production --dry-run` returns the usual ordered production plan. Each stage also includes a `gate` object with `success`, `failures`, `warnings`, and metadata such as selected chapter numbers.

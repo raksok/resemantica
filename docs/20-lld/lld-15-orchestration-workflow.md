@@ -46,6 +46,17 @@ The production plan is explicit and inspectable. It should include:
 6. The runner writes checkpoints and emits artifact/validation/chapter events.
 7. The runner writes final run state and emits `stage_completed`, `stage_failed`, or `run_finalized`.
 
+## Production Resume Behavior
+
+`run production` is resumable for the same release/run. Before execution, the runner reads `run_state`:
+
+- no prior stage state: start at `preprocess-summaries`
+- failed, stopped, or running stage: retry that same stage
+- completed stage: start at the next stage
+- completed `epub-rebuild`: return success without rerunning stages
+
+If the saved checkpoint contains `chapter_start` or `chapter_end`, those bounds are reused when the operator does not pass explicit bounds on the new command. Explicit CLI bounds take precedence.
+
 ## Translation Stage Behavior
 
 `translate-chapter` must:

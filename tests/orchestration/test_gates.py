@@ -25,7 +25,7 @@ from resemantica.orchestration.gates import check_stage_gate
 from resemantica.orchestration.runner import OrchestrationRunner
 from resemantica.packets.models import PacketMetadataRecord
 from resemantica.settings import derive_paths, load_config
-from resemantica.tracking.repo import ensure_tracking_db, load_events
+from resemantica.tracking.repo import ensure_tracking_db, load_events, load_run_state
 
 
 def _write_extracted_chapter(release_id: str, chapter_number: int = 1) -> None:
@@ -197,6 +197,52 @@ def _seed_story_inputs(release_id: str, run_id: str) -> None:
     _seed_translation(release_id, run_id)
 
 
+def _seed_unresolved_idiom_vote(release_id: str) -> None:
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        upsert_idiom_candidates(
+            conn,
+            candidates=[
+                IdiomCandidate(
+                    candidate_id="ican-unresolved",
+                    release_id=release_id,
+                    source_text="一箭双雕",
+                    normalized_source_text="一箭双雕",
+                    meaning_zh="一举两得",
+                    preferred_rendering_en="",
+                    usage_notes=None,
+                    first_seen_chapter=1,
+                    last_seen_chapter=1,
+                    appearance_count=1,
+                    evidence_snippet="一箭双雕",
+                    detection_run_id="idioms",
+                    candidate_status="discovered",
+                    validation_status="pending",
+                    conflict_reason=None,
+                    analyst_model_name="analyst",
+                    analyst_prompt_version="v1",
+                )
+            ],
+        )
+        upsert_idiom_vote(
+            conn,
+            candidate_id="ican-unresolved",
+            release_id=release_id,
+            translation_run_id="idioms",
+            model_name="m1",
+            prompt_version="v1",
+            vote_kind="rendering",
+            raw_output="A",
+            cleaned_output="A",
+            normalized_output="a",
+            resolution_status="unresolved",
+        )
+    finally:
+        conn.close()
+
+
 def test_missing_extracted_manifest_blocks_preprocess(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -239,9 +285,77 @@ def test_production_gate_failure_persists_event_before_execution(tmp_path: Path,
     conn = ensure_tracking_db("prod-gates")
     try:
         events = load_events(conn, run_id="production", release_id="prod-gates")
+        state = load_run_state(conn, "production")
     finally:
         conn.close()
     assert any(event.event_type == "preprocess-summaries.gate_failed" for event in events)
+    assert state is not None
+    assert state.stage_name == "preprocess-summaries"
+    assert state.status == "failed"
+
+
+def test_production_retries_failed_gate_stage_after_gate_cleared(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "prod-gate-resume"
+    run_id = "production"
+    _write_extracted_chapter(release_id)
+    _seed_summary(release_id)
+    executed: list[str] = []
+
+    def fake_execute_stage(self, stage_name, **kwargs):
+        executed.append(stage_name)
+        if stage_name == "preprocess-idioms":
+            _seed_unresolved_idiom_vote(release_id)
+        from resemantica.orchestration.models import StageResult
+
+        return StageResult(True, stage_name, "ok")
+
+    monkeypatch.setattr(OrchestrationRunner, "_execute_stage", fake_execute_stage)
+
+    first = OrchestrationRunner(release_id, run_id).run_production(chapter_start=1, chapter_end=1)
+
+    assert first.success is False
+    assert executed == ["preprocess-summaries", "preprocess-glossary", "preprocess-idioms"]
+    conn = ensure_tracking_db(release_id)
+    try:
+        state = load_run_state(conn, run_id)
+    finally:
+        conn.close()
+    assert state is not None
+    assert state.stage_name == "preprocess-graph"
+    assert state.status == "failed"
+    assert state.checkpoint["chapter_start"] == 1
+    assert state.checkpoint["chapter_end"] == 1
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    try:
+        conn.execute(
+            """
+            UPDATE idiom_candidates
+            SET preferred_rendering_en = 'two birds with one stone'
+            WHERE candidate_id = ?
+            """,
+            ("ican-unresolved",),
+        )
+        conn.execute(
+            """
+            UPDATE idiom_translation_votes
+            SET resolution_status = 'resolved'
+            WHERE candidate_id = ?
+            """,
+            ("ican-unresolved",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    executed.clear()
+    second = OrchestrationRunner(release_id, run_id).run_production()
+
+    assert executed[0] == "preprocess-graph"
+    assert second.success is False
+    assert "preprocess-summaries" not in executed
 
 
 def test_unresolved_glossary_and_idiom_votes_block_downstream(tmp_path: Path, monkeypatch) -> None:
