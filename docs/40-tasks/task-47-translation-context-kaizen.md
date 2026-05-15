@@ -4,7 +4,7 @@
 M47
 
 ## Depends On
-M8 (Chapter Packets), M9 (Pass 3 + Risk Handling), M46 (TSV Review + Glossary-Aware Translation Cache)
+M8 (Chapter Packets), M9 (Pass 3 + Risk Handling), M46 (CSV Review + Glossary-Aware Translation Cache)
 
 ## Goal
 

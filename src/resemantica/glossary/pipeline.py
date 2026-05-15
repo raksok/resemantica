@@ -824,12 +824,12 @@ def _apply_review_overrides(
     return result
 
 
-_TSV_HEADER = ["action", "source_term", "category", "translation",
+_CSV_HEADER = ["action", "source_term", "category", "translation",
                 "candidate_id", "evidence_snippet", "alternatives"]
 
 
-def _write_review_tsv(path: Path, entries: list[dict[str, Any]]) -> None:
-    rows: list[list[str]] = [_TSV_HEADER]
+def _write_review_csv(path: Path, entries: list[dict[str, Any]]) -> None:
+    rows: list[list[str]] = [_CSV_HEADER]
     for entry in entries:
         snippet = (entry.get("evidence_snippet") or "")
         snippet = snippet.replace("\n", " ").replace("\r", " ")
@@ -850,21 +850,21 @@ def _write_review_tsv(path: Path, entries: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _read_review_tsv(path: Path) -> dict[str, Any]:
+def _read_review_csv(path: Path) -> dict[str, Any]:
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.reader(f, delimiter="\t")
         raw_rows = list(reader)
     if not raw_rows:
-        raise ValueError("Review TSV is empty")
+        raise ValueError("Review CSV is empty")
     header = raw_rows[0]
-    if header != _TSV_HEADER:
+    if header != _CSV_HEADER:
         raise ValueError(
-            f"Review TSV has invalid header. Expected: {_TSV_HEADER!r}, got: {header!r}"
+            f"Review CSV has invalid header. Expected: {_CSV_HEADER!r}, got: {header!r}"
         )
     entries: list[dict[str, Any]] = []
     for row in raw_rows[1:]:
-        if len(row) < len(_TSV_HEADER):
-            row += [""] * (len(_TSV_HEADER) - len(row))
+        if len(row) < len(_CSV_HEADER):
+            row += [""] * (len(_CSV_HEADER) - len(row))
         action = row[0].strip().lower() if row[0].strip() else "keep"
         entries.append({
             "candidate_id": row[4].strip() or None,
@@ -881,8 +881,8 @@ def _read_review_tsv(path: Path) -> dict[str, Any]:
 
 
 def _read_review_data(review_file_path: Path) -> dict[str, Any]:
-    if review_file_path.suffix.lower() == ".tsv":
-        return _read_review_tsv(review_file_path)
+    if review_file_path.suffix.lower() == ".csv":
+        return _read_review_csv(review_file_path)
     review_data: dict[str, Any] = json.loads(review_file_path.read_text(encoding="utf-8"))
     if review_data.get("review_schema_version") != 1:
         raise ValueError(
@@ -951,7 +951,7 @@ def review_glossary_candidates(
         "entries": entries,
     }
     _write_json(paths.glossary_review_path, review_data)
-    _write_review_tsv(paths.glossary_review_path.with_suffix(".tsv"), entries)
+    _write_review_csv(paths.glossary_review_path.with_suffix(".csv"), entries)
     _emit(
         run_id,
         release_id,

@@ -325,9 +325,9 @@ def test_multi_model_glossary_translation_majority_and_review_alternatives(
     ]
 
 
-def test_review_tsv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:
+def test_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    release_id = "m46-tsv"
+    release_id = "m46-csv"
     _insert_glossary_candidate(release_id=release_id, source_term="青云门")
     _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
     translator = ModelMappedGlossaryTranslator({
@@ -348,11 +348,11 @@ def test_review_tsv_written_and_matches_json(tmp_path: Path, monkeypatch) -> Non
     assert review["entries_written"] == 2
 
     paths = derive_paths(load_config(), release_id=release_id)
-    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
-    assert tsv_path.exists(), f"TSV review file not found: {tsv_path}"
+    csv_path = paths.glossary_review_path.with_suffix(".csv")
+    assert csv_path.exists(), f"CSV review file not found: {csv_path}"
 
     import csv
-    with open(tsv_path, newline="", encoding="utf-8") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter="\t")
         rows = list(reader)
     assert len(rows) == 3  # header + 2 entries
@@ -364,14 +364,14 @@ def test_review_tsv_written_and_matches_json(tmp_path: Path, monkeypatch) -> Non
     assert "Azure Sect" in row_keep[6] and "Blue Cloud Gate" in row_keep[6]
 
     json_data = json.loads(paths.glossary_review_path.read_text(encoding="utf-8"))
-    tsv_sources = {r[1] for r in rows[1:]}
+    csv_sources = {r[1] for r in rows[1:]}
     json_sources = {e["source_term"] for e in json_data["entries"]}
-    assert tsv_sources == json_sources
+    assert csv_sources == json_sources
 
 
-def test_promote_with_tsv_file(tmp_path: Path, monkeypatch) -> None:
+def test_promote_with_csv_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    release_id = "m46-tsv-promote"
+    release_id = "m46-csv-promote"
     _insert_glossary_candidate(release_id=release_id, source_term="青云门")
     _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
 
@@ -401,16 +401,16 @@ def test_promote_with_tsv_file(tmp_path: Path, monkeypatch) -> None:
     finally:
         conn.close()
 
-    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
-    tsv_content = (
+    csv_path = paths.glossary_review_path.with_suffix(".csv")
+    csv_content = (
         "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives\n"
         f"keep\t青云门\tfaction\tOverridden Azure\t{ids['青云门']}\t\t\n"
         f"delete\t苍云门\tfaction\t\t{ids['苍云门']}\t\t\n"
     )
-    tsv_path.write_text(tsv_content, encoding="utf-8")
+    csv_path.write_text(csv_content, encoding="utf-8")
 
     result = promote_glossary_candidates(
-        release_id=release_id, run_id="promote-001", review_file_path=tsv_path,
+        release_id=release_id, run_id="promote-001", review_file_path=csv_path,
     )
     assert result["status"] == "success"
 
@@ -426,9 +426,9 @@ def test_promote_with_tsv_file(tmp_path: Path, monkeypatch) -> None:
         conn.close()
 
 
-def test_promote_with_tsv_add_entry(tmp_path: Path, monkeypatch) -> None:
+def test_promote_with_csv_add_entry(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    release_id = "m46-tsv-add"
+    release_id = "m46-csv-add"
     _insert_glossary_candidate(release_id=release_id, source_term="青云门")
 
     translator = ModelMappedGlossaryTranslator({
@@ -454,16 +454,16 @@ def test_promote_with_tsv_add_entry(tmp_path: Path, monkeypatch) -> None:
     finally:
         conn.close()
 
-    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
-    tsv_content = (
+    csv_path = paths.glossary_review_path.with_suffix(".csv")
+    csv_content = (
         "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives\n"
         f"keep\t青云门\tfaction\tAzure Sect\t{qingyun_id}\t\t\n"
         "add\t新门派\tfaction\tNew Sect\t\t源自新章节的文本\t\n"
     )
-    tsv_path.write_text(tsv_content, encoding="utf-8")
+    csv_path.write_text(csv_content, encoding="utf-8")
 
     result = promote_glossary_candidates(
-        release_id=release_id, run_id="promote-001", review_file_path=tsv_path,
+        release_id=release_id, run_id="promote-001", review_file_path=csv_path,
     )
     assert result["status"] == "success"
 
@@ -479,17 +479,17 @@ def test_promote_with_tsv_add_entry(tmp_path: Path, monkeypatch) -> None:
         conn.close()
 
 
-def test_promote_tsv_bad_header_raises(tmp_path: Path) -> None:
-    tsv_path = tmp_path / "bad.tsv"
-    tsv_path.write_text("col1\tcol2\tcol3\n", encoding="utf-8")
+def test_promote_csv_bad_header_raises(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text("col1\tcol2\tcol3\n", encoding="utf-8")
     with pytest.raises(ValueError, match="invalid header"):
         from resemantica.glossary.pipeline import _read_review_data
-        _read_review_data(tsv_path)
+        _read_review_data(csv_path)
 
 
-def test_promote_tsv_empty_is_noop(tmp_path: Path, monkeypatch) -> None:
+def test_promote_csv_empty_is_noop(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    release_id = "m46-tsv-empty"
+    release_id = "m46-csv-empty"
     _insert_glossary_candidate(release_id=release_id, source_term="青云门")
 
     translator = ModelMappedGlossaryTranslator({
@@ -504,12 +504,12 @@ def test_promote_tsv_empty_is_noop(tmp_path: Path, monkeypatch) -> None:
     )
 
     paths = derive_paths(load_config(), release_id=release_id)
-    tsv_path = paths.glossary_review_path.with_suffix(".tsv")
-    tsv_content = "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives\n"
-    tsv_path.write_text(tsv_content, encoding="utf-8")
+    csv_path = paths.glossary_review_path.with_suffix(".csv")
+    csv_content = "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives\n"
+    csv_path.write_text(csv_content, encoding="utf-8")
 
     result = promote_glossary_candidates(
-        release_id=release_id, run_id="promote-001", review_file_path=tsv_path,
+        release_id=release_id, run_id="promote-001", review_file_path=csv_path,
     )
     assert result["status"] == "success"
 

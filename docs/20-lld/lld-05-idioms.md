@@ -37,7 +37,7 @@ SQLite datasets:
 3. Capture Chinese meaning and propose English rendering policy.
 4. **Upsert** with merge — same normalized idiom across chapters is deduplicated (appearance_count summed, chapter ranges merged).
 5. Perform deterministic normalization and duplicate detection.
-6. **Optional human review** — `idiom-review` writes translated candidates to a JSON review file. User edits renderings, marks entries for deletion, or adds new entries. `idiom-promote --review-file` reads the edited file.
+6. **Optional human review** — `idiom-review` writes translated candidates to JSON and CSV review files. User edits renderings, meanings, marks entries for deletion, or adds new entries. `idiom-promote --review-file` reads the edited file.
 7. Promote validated idioms into the authoritative idiom store.
 8. Provide exact-match lookup for packet assembly.
 
@@ -58,7 +58,7 @@ Both LLM calls in translation phase (rendering + meaning) apply cleanup:
 
 ### `idiom-review` command
 
-Queries all candidates with `candidate_status = 'translated'` and writes a JSON review file to `artifacts/releases/<release>/idioms/review.json`:
+Queries all candidates with `candidate_status = 'translated'` and writes a JSON review file to `artifacts/releases/<release>/idioms/review.json` plus a spreadsheet file to `artifacts/releases/<release>/idioms/review.csv`:
 
 ```json
 {
@@ -69,6 +69,7 @@ Queries all candidates with `candidate_status = 'translated'` and writes a JSON 
       "candidate_id": "ican_...",
       "source_text": "孤苦伶仃",
       "meaning_zh": "孤单困苦，无依无靠",
+      "meaning_en": "lonely, destitute, and without support",
       "rendering": "lonely and destitute",
       "action": "keep"
     }
@@ -81,9 +82,15 @@ Supported user actions:
 - `"delete"` — skip this candidate
 - `"add"` — new entry (no `candidate_id`, requires `source_text` + `rendering`)
 
+`review.csv` uses fixed columns:
+
+```
+action	source_text	meaning_zh	meaning_en	rendering	candidate_id	evidence_snippet	alternatives
+```
+
 ### `idiom-promote --review-file`
 
-If `--review-file` is provided, the command applies user edits then runs standard validation + promotion.
+If `--review-file` is provided, the command applies user edits from either `review.json` or `review.csv`, then runs standard validation + promotion.
 
 ## Cross-Chapter Deduplication
 

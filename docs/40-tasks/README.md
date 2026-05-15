@@ -63,5 +63,5 @@ Always follow the milestone sequence below.
 | M43 | task-43 | M42, M20C, M16 | Pipeline Reliability Gates Kaizen |
 | M44 | task-44 | M4, M20C, M43 | Summary Chapter Identity Normalization |
 | M45 | task-45 | M20D, M42, M44 | Local Model-Batched Inference Kaizen |
-| M46 | task-46 | M3, M42, M8 | TSV Review + Glossary-Aware Translation Cache |
+| M46 | task-46 | M3, M42, M8 | CSV Review + Glossary-Aware Translation Cache |
 | M47 | task-47 | M8, M9, M46 | Translation Context Kaizen |

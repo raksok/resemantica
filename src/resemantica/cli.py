@@ -374,8 +374,8 @@ produce provisional English renderings. Updates candidates.json.""",
         "glossary-review", aliases=["gls-review"],
         help="Generate a human-editable review file(s) for translated candidates.",
         description="""\
-Generates a human-editable review file (review.json and review.tsv) of translated
-glossary candidates. Edit review.tsv in Excel to override translations, mark
+Generates a human-editable review file (review.json and review.csv) of translated
+glossary candidates. Edit review.csv in Excel to override translations, mark
 deletions, or add entries, then run glossary-promote to apply changes.""",
     )
     _add_common_release_args(glossary_review, default_run="glossary-review")
@@ -398,7 +398,7 @@ glossary-review run before promotion.""",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to review.json or review.tsv from glossary-review. Applies user edits before promotion.",
+        help="Path to review.json or review.csv from glossary-review. Applies user edits before promotion.",
     )
 
     summaries = preprocess_subparsers.add_parser(
@@ -429,9 +429,9 @@ policies with preferred English renderings to resemantica.db.""",
         "idiom-review", aliases=["idi-review"],
         help="Generate a human-editable review file for translated idiom candidates.",
         description="""\
-Generates a human-editable JSON review file of translated idiom candidates.
-Edit the file to override renderings, mark deletions, or add entries,
-then run idiom-promote to apply changes.""",
+Generates human-editable review files (review.json and review.csv) of translated
+idiom candidates. Edit review.csv in Excel to override renderings, mark
+deletions, or add entries, then run idiom-promote to apply changes.""",
     )
     _add_common_release_args(idiom_review, default_run="idiom-review")
     _add_chapter_scope_args(idiom_review)
@@ -453,7 +453,7 @@ from a previous idiom-review run before promotion.""",
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to a review.json file from idiom-review. Applies user edits before promotion.",
+        help="Path to review.json or review.csv from idiom-review. Applies user edits before promotion.",
     )
 
     graph = preprocess_subparsers.add_parser(

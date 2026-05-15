@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 import sqlite3
@@ -641,6 +642,7 @@ def _apply_idiom_review_overrides(
     release_id: str,
     review_data: dict[str, Any],
 ) -> list[IdiomCandidate]:
+    from dataclasses import replace as _dataclass_replace
     from hashlib import sha256 as _sha256
 
     if not isinstance(review_data.get("entries"), list):
@@ -666,11 +668,18 @@ def _apply_idiom_review_overrides(
             continue
         new_rendering = str(review_entry.get("rendering", "")).strip()
         old_rendering = candidate.preferred_rendering_en.strip()
-        if new_rendering and new_rendering != old_rendering:
+        new_meaning_en = str(review_entry.get("meaning_en", "")).strip()
+        old_meaning_en = candidate.meaning_en.strip()
+        if (new_rendering and new_rendering != old_rendering) or (
+            new_meaning_en and new_meaning_en != old_meaning_en
+        ):
+            rendering = new_rendering or candidate.preferred_rendering_en
+            meaning_en = new_meaning_en or candidate.meaning_en
             conn.execute(
                 """
                 UPDATE idiom_candidates
                 SET preferred_rendering_en = ?,
+                    meaning_en = ?,
                     translation_run_id = 'review',
                     candidate_status = 'translated',
                     validation_status = 'pending',
@@ -678,7 +687,16 @@ def _apply_idiom_review_overrides(
                     updated_at = CURRENT_TIMESTAMP
                 WHERE candidate_id = ?
                 """,
-                (new_rendering, cid),
+                (rendering, meaning_en, cid),
+            )
+            all_candidates[cid] = _dataclass_replace(
+                candidate,
+                preferred_rendering_en=rendering,
+                meaning_en=meaning_en,
+                translation_run_id="review",
+                candidate_status="translated",
+                validation_status="pending",
+                conflict_reason=None,
             )
         applied_ids.add(cid)
 
@@ -697,13 +715,13 @@ def _apply_idiom_review_overrides(
                 source_text=source_text,
                 normalized_source_text=normalized_source,
                 meaning_zh=str(entry.get("meaning_zh", "")),
-                meaning_en="",
+                meaning_en=str(entry.get("meaning_en", "")),
                 preferred_rendering_en=rendering,
                 usage_notes=str(entry.get("usage_notes") or ""),
                 first_seen_chapter=1,
                 last_seen_chapter=1,
                 appearance_count=1,
-                evidence_snippet="",
+                evidence_snippet=str(entry.get("evidence_snippet", "")),
                 detection_run_id="review",
                 candidate_status="translated",
                 validation_status="pending",
@@ -731,6 +749,86 @@ def _apply_idiom_review_overrides(
         if candidate is not None and candidate.preferred_rendering_en.strip():
             result.append(candidate)
     return result
+
+
+_IDIOM_CSV_HEADER = [
+    "action",
+    "source_text",
+    "meaning_zh",
+    "meaning_en",
+    "rendering",
+    "candidate_id",
+    "evidence_snippet",
+    "alternatives",
+]
+
+
+def _write_idiom_review_csv(path: Path, entries: list[dict[str, Any]]) -> None:
+    rows: list[list[str]] = [_IDIOM_CSV_HEADER]
+    for entry in entries:
+        snippet = entry.get("evidence_snippet") or ""
+        snippet = snippet.replace("\n", " ").replace("\r", " ")
+        if len(snippet) > 120:
+            snippet = snippet[:117] + "..."
+        alts = [
+            f"{alt.get('kind', '')}:{alt.get('translation', '')}"
+            for alt in (entry.get("alternatives") or [])
+        ]
+        rows.append([
+            entry.get("action") or "keep",
+            entry.get("source_text") or "",
+            entry.get("meaning_zh") or "",
+            entry.get("meaning_en") or "",
+            entry.get("rendering") or "",
+            entry.get("candidate_id") or "",
+            snippet,
+            "|".join(alts),
+        ])
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerows(rows)
+
+
+def _read_idiom_review_csv(path: Path) -> dict[str, Any]:
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f, delimiter="\t")
+        raw_rows = list(reader)
+    if not raw_rows:
+        raise ValueError("Review CSV is empty")
+    header = raw_rows[0]
+    if header != _IDIOM_CSV_HEADER:
+        raise ValueError(
+            f"Review CSV has invalid header. Expected: {_IDIOM_CSV_HEADER!r}, got: {header!r}"
+        )
+    entries: list[dict[str, Any]] = []
+    for row in raw_rows[1:]:
+        if len(row) < len(_IDIOM_CSV_HEADER):
+            row += [""] * (len(_IDIOM_CSV_HEADER) - len(row))
+        action = row[0].strip().lower() if row[0].strip() else "keep"
+        entries.append({
+            "candidate_id": row[5].strip() or None,
+            "source_text": row[1].strip(),
+            "meaning_zh": row[2].strip(),
+            "meaning_en": row[3].strip(),
+            "rendering": row[4].strip(),
+            "action": action,
+            "evidence_snippet": row[6].strip(),
+        })
+    return {
+        "review_schema_version": 1,
+        "entries": entries,
+    }
+
+
+def _read_idiom_review_data(review_file_path: Path) -> dict[str, Any]:
+    if review_file_path.suffix.lower() == ".csv":
+        return _read_idiom_review_csv(review_file_path)
+    review_data: dict[str, Any] = json.loads(review_file_path.read_text(encoding="utf-8"))
+    if review_data.get("review_schema_version") != 1:
+        raise ValueError(
+            f"Unsupported review schema version: {review_data.get('review_schema_version')}"
+        )
+    return review_data
 
 
 def review_idiom_candidates(
@@ -771,7 +869,9 @@ def review_idiom_candidates(
             "candidate_id": c.candidate_id,
             "source_text": c.source_text,
             "meaning_zh": c.meaning_zh,
+            "meaning_en": c.meaning_en,
             "rendering": c.preferred_rendering_en,
+            "evidence_snippet": c.evidence_snippet,
             "alternatives": [
                 {
                     "model_name": vote.model_name,
@@ -798,6 +898,7 @@ def review_idiom_candidates(
         "entries": entries,
     }
     _write_json(paths.idiom_review_path, review_data)
+    _write_idiom_review_csv(paths.idiom_review_path.with_suffix(".csv"), entries)
     _emit(
         run_id,
         release_id,
@@ -839,11 +940,7 @@ def promote_idiom_candidates(
         if review_file_path is not None:
             if not review_file_path.exists():
                 raise FileNotFoundError(f"Review file not found: {review_file_path}")
-            review_data = json.loads(review_file_path.read_text(encoding="utf-8"))
-            if review_data.get("review_schema_version") != 1:
-                raise ValueError(
-                    f"Unsupported review schema version: {review_data.get('review_schema_version')}"
-                )
+            review_data = _read_idiom_review_data(review_file_path)
             pending_candidates = _apply_idiom_review_overrides(
                 conn, release_id=release_id, review_data=review_data
             )

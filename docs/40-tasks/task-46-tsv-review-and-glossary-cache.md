@@ -1,4 +1,4 @@
-# Task 46: TSV Review + Glossary-Aware Translation Cache
+# Task 46: CSV Review + Glossary-Aware Translation Cache
 
 ## Milestone
 M46
@@ -8,34 +8,37 @@ M3 (Canonical Glossary), M42 (Multi-Model Preprocess Translation), M8 (Chapter P
 
 ## Goal
 
-Replace JSON-only glossary review with a TSV format that opens in Excel, and make translation checkpoints aware of upstream changes so glossary edits automatically trigger re-translation.
+Replace JSON-only glossary review with a CSV-named spreadsheet format that opens in Excel, add the same spreadsheet review workflow for idioms, and make translation checkpoints aware of upstream changes so glossary edits automatically trigger re-translation.
 
 ## Scope
 
 In:
 
-- TSV output from `glossary-review` alongside existing JSON
-- TSV input for `glossary-promote --review-file`
+- CSV output from `glossary-review` alongside existing JSON
+- CSV input for `glossary-promote --review-file`
+- CSV output from `idiom-review` alongside existing JSON
+- CSV input for `idiom-promote --review-file`
 - `packet_version_hash` column in `translation_checkpoints` table
 - Translation checkpoint lookup/storage includes packet hash
 - Pass 1, 2, and 3 all check packet hash before cache hit
 - Updated docs (LLD + task brief)
-- Tests for TSV round-trip and cache invalidation
+- Tests for CSV round-trip and cache invalidation
 
 Out:
 
-- Idiom review file (separate task if needed)
 - TUI integration for review (separate task)
 - Fuzzy glossary matching
 
 ## Owned Files Or Modules
 
 - `src/resemantica/glossary/pipeline.py`
+- `src/resemantica/idioms/pipeline.py`
 - `src/resemantica/cli.py`
 - `src/resemantica/db/sqlite.py`
 - `src/resemantica/translation/checkpoints.py`
 - `src/resemantica/translation/pipeline.py`
 - `tests/glossary/test_glossary_pipeline.py`
+- `tests/idioms/test_idiom_pipeline.py`
 - `tests/translation/test_translate_chapter.py`
 - `tests/translation/test_checkpoints.py` (new)
 - `docs/20-lld/lld-46-tsv-review-and-glossary-cache.md`
@@ -43,23 +46,29 @@ Out:
 
 ## Interfaces To Satisfy
 
-- `rsem preprocess glossary-review` writes `review.tsv` in addition to `review.json`
-- `rsem preprocess glossary-promote -F review.tsv` applies user edits
+- `rsem preprocess glossary-review` writes `review.csv` in addition to `review.json`
+- `rsem preprocess glossary-promote -F review.csv` applies user edits
 - `rsem preprocess glossary-promote -F review.json` still works (backward compat)
+- `rsem preprocess idiom-review` writes `review.csv` in addition to `review.json`
+- `rsem preprocess idiom-promote -F review.csv` applies user edits
+- `rsem preprocess idiom-promote -F review.json` still works (backward compat)
 - Changing locked glossary → re-run production → chapters auto-re-translate
 
 ## Tests Or Smoke Checks
 
-### Phase 1 (TSV)
-- `test_review_tsv_written` — TSV file exists with correct header and row count
-- `test_review_tsv_matches_json` — TSV content matches JSON entries
-- `test_promote_with_tsv_override` — override translation via TSV, verify promotion
-- `test_promote_tsv_delete` — delete action via TSV, entry not promoted
-- `test_promote_tsv_add` — add action via TSV, new entry created and promoted
-- `test_promote_tsv_mixed_actions` — mix of keep/delete/add in one file
-- `test_promote_tsv_bad_header` — invalid header raises clear error
-- `test_promote_tsv_empty` — header-only TSV is no-op
+### Phase 1 (CSV)
+- `test_review_csv_written` — CSV file exists with correct header and row count
+- `test_review_csv_matches_json` — CSV content matches JSON entries
+- `test_promote_with_csv_override` — override translation via CSV, verify promotion
+- `test_promote_csv_delete` — delete action via CSV, entry not promoted
+- `test_promote_csv_add` — add action via CSV, new entry created and promoted
+- `test_promote_csv_mixed_actions` — mix of keep/delete/add in one file
+- `test_promote_csv_bad_header` — invalid header raises clear error
+- `test_promote_csv_empty` — header-only CSV is no-op
 - `test_promote_json_still_works` — existing JSON review file still works
+- `test_idiom_review_csv_written` — idiom CSV file exists with correct header and row count
+- `test_promote_idiom_with_csv_file` — idiom CSV override/delete applies
+- `test_promote_idiom_with_csv_add_entry` — idiom CSV add creates and promotes a policy
 
 ### Phase 2 (Cache)
 - `test_checkpoint_hash_mismatch_triggers_retranslate` — change glossary → new packet_hash → cache miss
@@ -72,9 +81,12 @@ Out:
 
 ## Done Criteria
 
-- [ ] `glossary-review` produces valid `review.tsv` that opens in Excel
-- [ ] `glossary-promote -F review.tsv` applies keep/delete/add correctly
+- [ ] `glossary-review` produces valid `review.csv` that opens in Excel
+- [ ] `glossary-promote -F review.csv` applies keep/delete/add correctly
 - [ ] `glossary-promote -F review.json` still works unchanged
+- [ ] `idiom-review` produces valid `review.csv` that opens in Excel
+- [ ] `idiom-promote -F review.csv` applies keep/delete/add correctly
+- [ ] `idiom-promote -F review.json` still works unchanged
 - [ ] Glossary edit → re-run production → chapters auto-re-translate
 - [ ] No glossary change → re-run production → chapters skip from cache
 - [ ] `ruff check` passes

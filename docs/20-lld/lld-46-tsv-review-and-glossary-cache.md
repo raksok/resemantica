@@ -1,17 +1,17 @@
-# LLD 46: TSV Review + Glossary-Aware Translation Cache
+# LLD 46: CSV Review + Glossary-Aware Translation Cache
 
 ## Summary
 
 Two quality-of-life improvements to the glossary review and translation pipeline:
 
-1. **TSV review file** — alongside the existing JSON review file, generate a tab-separated file that opens directly in Excel/Sheets for human editing.
+1. **CSV review file** — alongside the existing JSON review file, generate a spreadsheet file that opens directly in Excel/Sheets for human editing. The file uses a `.csv` extension and tab-delimited rows for compatibility with the existing review parser.
 2. **Glossary-aware translation cache** — include `packet_version_hash` in translation checkpoints so that upstream changes (glossary, summaries, graph, idioms) automatically invalidate the cache and trigger re-translation without needing `--force`.
 
-## TSV Review Format
+## CSV Review Format
 
 ### Output
 
-`glossary-review` writes `review.tsv` alongside `review.json` to the same directory (`{release_root}/glossary/`).
+`glossary-review` writes `review.csv` alongside `review.json` to the same directory (`{release_root}/glossary/`).
 
 ### Columns
 
@@ -35,13 +35,13 @@ Two quality-of-life improvements to the glossary review and translation pipeline
 
 ### Input
 
-`glossary-promote --review-file review.tsv` detects `.tsv` extension and parses accordingly. TSV rows desugar into the same internal `entries` list-of-dicts format consumed by `_apply_review_overrides()`.
+`glossary-promote --review-file review.csv` detects `.csv` extension and parses accordingly. CSV rows desugar into the same internal `entries` list-of-dicts format consumed by `_apply_review_overrides()`.
 
 ## Pipeline Changes
 
 ### `review_glossary_candidates()`
 
-After writing `review.json`, write `review.tsv`:
+After writing `review.json`, write `review.csv`:
 
 ```
 action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives
@@ -53,10 +53,31 @@ keep\t苍云门\tfaction\t\tgcan_def456\t苍云门长老\tCangyun Gate|Azure Clo
 
 Detect input format by file extension:
 - `.json` → existing JSON parsing with schema version check
-- `.tsv` → parse via `csv.reader(delimiter='\t')`, convert rows to `entries` dicts
+- `.csv` → parse via `csv.reader(delimiter='\t')`, convert rows to `entries` dicts
 - Other → raise `ValueError`
 
-Helper `_read_review_file(path) -> list[dict]` handles TSV→entries conversion, including validation and error messages.
+Helper `_read_review_file(path) -> list[dict]` handles CSV→entries conversion, including validation and error messages.
+
+### `review_idiom_candidates()`
+
+`idiom-review` also writes `review.csv` alongside `review.json` in `{release_root}/idioms/`.
+
+Idiom CSV columns:
+
+| Column | Description | Editable |
+|--------|-------------|----------|
+| `action` | `keep`, `delete`, or blank (defaults to `keep`) | Yes |
+| `source_text` | Chinese idiom/set phrase | No (informational, except for `add`) |
+| `meaning_zh` | Chinese meaning | Yes for `add`; informational otherwise |
+| `meaning_en` | English meaning | Yes |
+| `rendering` | Preferred English rendering | Yes |
+| `candidate_id` | Internal ID. Blank for `add` entries. | No |
+| `evidence_snippet` | Context excerpt, trunc to 120 chars, newlines→spaces | No |
+| `alternatives` | Pipe-separated model vote summaries | No |
+
+### `promote_idiom_candidates()`
+
+`idiom-promote --review-file review.csv` parses CSV rows into the same internal review data shape as JSON, then applies the existing keep/delete/add review override workflow before validation and promotion.
 
 ## Cache Invalidation Design
 
@@ -108,12 +129,14 @@ translate_chapter_pass1(release_id, chapter_number, ...)
 
 ## Files Touched
 
-- `src/resemantica/glossary/pipeline.py` — TSV export + TSV import
+- `src/resemantica/glossary/pipeline.py` — CSV export + CSV import
+- `src/resemantica/idioms/pipeline.py` — CSV export + CSV import
 - `src/resemantica/cli.py` — help text
 - `src/resemantica/db/sqlite.py` — schema migration
 - `src/resemantica/translation/checkpoints.py` — dataclass + query + write
 - `src/resemantica/translation/pipeline.py` — pass1/pass2/pass3 integration
-- `tests/glossary/test_glossary_pipeline.py` — TSV tests
+- `tests/glossary/test_glossary_pipeline.py` — CSV tests
+- `tests/idioms/test_idiom_pipeline.py` — idiom CSV tests
 - `tests/translation/test_translate_chapter.py` — cache invalidation tests
 - `tests/translation/test_checkpoints.py` — checkpoint hash unit tests
 

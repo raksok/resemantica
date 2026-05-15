@@ -5,6 +5,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from loguru import logger
 
 from resemantica.db.idiom_repo import (
@@ -25,7 +26,13 @@ from resemantica.db.sqlite import open_connection
 from resemantica.idioms.extractor import extract_idioms
 from resemantica.idioms.matching import match_idioms
 from resemantica.idioms.models import IdiomCandidate, IdiomPolicy
-from resemantica.idioms.pipeline import preprocess_idioms, resolve_idiom_policy, translate_idiom_candidates
+from resemantica.idioms.pipeline import (
+    preprocess_idioms,
+    promote_idiom_candidates,
+    resolve_idiom_policy,
+    review_idiom_candidates,
+    translate_idiom_candidates,
+)
 from resemantica.idioms.validators import normalize_idiom_source
 from resemantica.llm.prompts import load_prompt
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -157,12 +164,17 @@ def _insert_policy(
         conn.close()
 
 
-def _insert_idiom_candidate(*, release_id: str) -> str:
+def _insert_idiom_candidate(
+    *,
+    release_id: str,
+    source_text: str = "一箭双雕",
+    meaning_zh: str = "一举两得",
+    candidate_id: str = "ican_m42",
+) -> str:
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
     conn = open_connection(paths.db_path)
     ensure_idiom_schema(conn)
-    candidate_id = "ican_m42"
     try:
         upsert_discovered_candidates(
             conn,
@@ -170,16 +182,16 @@ def _insert_idiom_candidate(*, release_id: str) -> str:
                 IdiomCandidate(
                     candidate_id=candidate_id,
                     release_id=release_id,
-                    source_text="一箭双雕",
-                    normalized_source_text=normalize_idiom_source("一箭双雕"),
-                    meaning_zh="一举两得",
+                    source_text=source_text,
+                    normalized_source_text=normalize_idiom_source(source_text),
+                    meaning_zh=meaning_zh,
                     meaning_en="",
                     preferred_rendering_en="",
                     usage_notes=None,
                     first_seen_chapter=1,
                     last_seen_chapter=1,
                     appearance_count=1,
-                    evidence_snippet="一箭双雕",
+                    evidence_snippet=source_text,
                     detection_run_id="seed",
                     candidate_status="discovered",
                     validation_status="pending",
@@ -351,6 +363,193 @@ def test_unresolved_idiom_translation_warns_and_preserves_unresolved_behavior(
     finally:
         logger.remove(sink_id)
         conn.close()
+
+
+def test_idiom_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-idiom-csv"
+    _insert_idiom_candidate(release_id=release_id)
+    translator = ModelMappedIdiomTranslator(
+        {
+            ("model-a", "rendering"): "kill two birds with one stone",
+            ("model-b", "rendering"): "kill two birds with one stone",
+            ("model-c", "rendering"): "one arrow, two eagles",
+            ("model-a", "meaning"): "achieve two things at once",
+            ("model-b", "meaning"): "achieve two things at once",
+            ("model-c", "meaning"): "gain two benefits with one action",
+        }
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id="idioms-001",
+            translator_client=translator,
+            translator_model_names=config.models.effective_preprocess_translator_names(),
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+        )
+    finally:
+        conn.close()
+
+    review = review_idiom_candidates(release_id=release_id, run_id="review-001")
+    assert review["entries_written"] == 1
+
+    csv_path = paths.idiom_review_path.with_suffix(".csv")
+    assert csv_path.exists(), f"CSV review file not found: {csv_path}"
+
+    import csv
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f, delimiter="\t"))
+    assert rows[0] == [
+        "action",
+        "source_text",
+        "meaning_zh",
+        "meaning_en",
+        "rendering",
+        "candidate_id",
+        "evidence_snippet",
+        "alternatives",
+    ]
+    assert rows[1][0] == "keep"
+    assert rows[1][1] == "一箭双雕"
+    assert rows[1][3] == "achieve two things at once"
+    assert rows[1][4] == "kill two birds with one stone"
+    assert "rendering:kill two birds with one stone" in rows[1][7]
+
+    json_data = json.loads(paths.idiom_review_path.read_text(encoding="utf-8"))
+    assert {row[1] for row in rows[1:]} == {entry["source_text"] for entry in json_data["entries"]}
+
+
+def test_promote_idiom_with_csv_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-idiom-csv-promote"
+    first_id = _insert_idiom_candidate(release_id=release_id)
+    second_id = _insert_idiom_candidate(
+        release_id=release_id,
+        source_text="杯弓蛇影",
+        meaning_zh="疑神疑鬼",
+        candidate_id="ican_second",
+    )
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        save_idiom_translation(
+            conn,
+            candidate_id=first_id,
+            translation_run_id="translate-001",
+            target_term="kill two birds with one stone",
+            meaning_en="achieve two things at once",
+            translator_model_name="model-a",
+            translator_prompt_version="1.0",
+        )
+        save_idiom_translation(
+            conn,
+            candidate_id=second_id,
+            translation_run_id="translate-001",
+            target_term="seeing snakes in shadows",
+            meaning_en="being paranoid",
+            translator_model_name="model-a",
+            translator_prompt_version="1.0",
+        )
+    finally:
+        conn.close()
+
+    paths.idioms_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = paths.idiom_review_path.with_suffix(".csv")
+    csv_content = (
+        "action\tsource_text\tmeaning_zh\tmeaning_en\trendering\tcandidate_id\tevidence_snippet\talternatives\n"
+        f"keep\t一箭双雕\t一举两得\twin twice with one move\tone arrow, two wins\t{first_id}\t\t\n"
+        f"delete\t杯弓蛇影\t疑神疑鬼\t\t\t{second_id}\t\t\n"
+    )
+    csv_path.write_text(csv_content, encoding="utf-8")
+
+    result = promote_idiom_candidates(
+        release_id=release_id,
+        run_id="promote-001",
+        review_file_path=csv_path,
+    )
+    assert result["status"] == "success"
+
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        policies = list_policies(conn, release_id=release_id)
+        by_source = {policy.source_text: policy for policy in policies}
+        assert by_source["一箭双雕"].preferred_rendering_en == "one arrow, two wins"
+        assert by_source["一箭双雕"].meaning_en == "win twice with one move"
+        assert "杯弓蛇影" not in by_source
+    finally:
+        conn.close()
+
+
+def test_promote_idiom_with_csv_add_entry(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-idiom-csv-add"
+    paths = derive_paths(load_config(), release_id=release_id)
+    paths.idioms_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = paths.idiom_review_path.with_suffix(".csv")
+    csv_content = (
+        "action\tsource_text\tmeaning_zh\tmeaning_en\trendering\tcandidate_id\tevidence_snippet\talternatives\n"
+        "add\t新成语\t新的含义\tnew meaning\tnew rendering\t\t源自新章节的文本\t\n"
+    )
+    csv_path.write_text(csv_content, encoding="utf-8")
+
+    result = promote_idiom_candidates(
+        release_id=release_id,
+        run_id="promote-001",
+        review_file_path=csv_path,
+    )
+    assert result["status"] == "success"
+
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        policies = list_policies(conn, release_id=release_id)
+        assert {policy.source_text: policy.preferred_rendering_en for policy in policies} == {
+            "新成语": "new rendering",
+        }
+    finally:
+        conn.close()
+
+
+def test_promote_idiom_csv_bad_header_raises(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text("col1\tcol2\tcol3\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid header"):
+        from resemantica.idioms.pipeline import _read_idiom_review_data
+        _read_idiom_review_data(csv_path)
+
+
+def test_promote_idiom_csv_empty_is_noop(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m46-idiom-csv-empty"
+    paths = derive_paths(load_config(), release_id=release_id)
+    paths.idioms_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = paths.idiom_review_path.with_suffix(".csv")
+    csv_content = (
+        "action\tsource_text\tmeaning_zh\tmeaning_en\trendering"
+        "\tcandidate_id\tevidence_snippet\talternatives\n"
+    )
+    csv_path.write_text(csv_content, encoding="utf-8")
+
+    result = promote_idiom_candidates(
+        release_id=release_id,
+        run_id="promote-001",
+        review_file_path=csv_path,
+    )
+    assert result["status"] == "success"
+    assert result["promoted_count"] == 0
 
 
 def test_save_idiom_translation_fills_candidate_rendering(
