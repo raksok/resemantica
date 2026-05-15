@@ -32,6 +32,8 @@ Translation selection order:
 2. Otherwise use pass2 `restored_text_en`.
 3. Pass1 output is not valid final reconstruction input.
 
+Non-story chapters marked with `summary_drafts.is_story_chapter = 0` may omit translated artifacts. If a selected non-story chapter already has pass2/pass3 translated blocks, reconstruction consumes those blocks and writes rebuilt XHTML just like a story chapter. Only non-story chapters without translated blocks are skipped and left as original XHTML in the EPUB work tree.
+
 ## Artifact Outputs
 
 Write reconstruction outputs under:
@@ -100,6 +102,7 @@ Chapter-level flags should include:
 ## Failure Policy
 
 - Missing translated blocks fail reconstruction unless explicitly marked skipped with reason.
+- Existing translated blocks override the non-story skip policy during reconstruction.
 - Placeholder restoration failures are hard failures.
 - XHTML parse failures are hard failures.
 - Packaging failures are hard failures.

@@ -184,7 +184,16 @@ def _seed_translation(release_id: str, run_id: str, chapter_number: int = 1) -> 
     translation_dir = paths.release_root / "runs" / run_id / "translation" / f"chapter-{chapter_number}"
     translation_dir.mkdir(parents=True, exist_ok=True)
     (translation_dir / "pass2.json").write_text(
-        json.dumps({"blocks": [{"block_id": "ch001_blk001", "output_text_en": "Translated."}]}),
+        json.dumps(
+            {
+                "blocks": [
+                    {
+                        "block_id": f"ch{chapter_number:03d}_blk001",
+                        "output_text_en": "Translated.",
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -495,6 +504,65 @@ def test_non_story_chapter_can_skip_packet_translation_and_rebuild_inputs(tmp_pa
 
     assert report.success is True
     assert report.metadata["story_chapter_numbers"] == []
+    assert report.metadata["rebuild_chapter_numbers"] == []
+
+
+def test_rebuild_gate_validates_non_story_chapter_with_empty_translation_artifact(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "non-story-empty-translation"
+    run_id = "production"
+    _write_extracted_chapter(release_id)
+    _seed_summary(release_id, is_story=False)
+    _seed_graph(release_id)
+    paths = derive_paths(load_config(), release_id=release_id)
+    translation_dir = paths.release_root / "runs" / run_id / "translation" / "chapter-1"
+    translation_dir.mkdir(parents=True, exist_ok=True)
+    (translation_dir / "pass2.json").write_text(json.dumps({"blocks": []}), encoding="utf-8")
+
+    report = check_stage_gate(
+        stage_name="epub-rebuild",
+        release_id=release_id,
+        run_id=run_id,
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    assert report.success is False
+    assert report.metadata["story_chapter_numbers"] == []
+    assert report.metadata["rebuild_chapter_numbers"] == [1]
+    assert report.metadata["rebuild_non_story_chapter_numbers"] == [1]
+    assert "pass2/pass3 translated artifact" in report.message()
+
+
+def test_rebuild_gate_allows_non_story_chapter_with_valid_translation_artifact(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "non-story-valid-translation"
+    run_id = "production"
+    _write_extracted_chapter(release_id)
+    _seed_summary(release_id, is_story=False)
+    _seed_graph(release_id)
+    _seed_translation(release_id, run_id)
+
+    report = check_stage_gate(
+        stage_name="epub-rebuild",
+        release_id=release_id,
+        run_id=run_id,
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    assert report.success is True
+    assert report.metadata["story_chapter_numbers"] == []
+    assert report.metadata["rebuild_chapter_numbers"] == [1]
+    assert report.metadata["rebuild_non_story_chapter_numbers"] == [1]
 
 
 def test_rebuild_gate_requires_translation_and_placeholders(tmp_path: Path, monkeypatch) -> None:

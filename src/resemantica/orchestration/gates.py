@@ -106,12 +106,23 @@ def check_stage_gate(
         )
 
     if stage_name == "epub-rebuild":
+        non_story_rebuild_chapters = _non_story_chapters_with_rebuild_artifacts(
+            db_path=paths.db_path,
+            release_root=paths.release_root,
+            release_id=release_id,
+            run_id=run_id,
+            chapter_numbers=selected,
+            story_chapter_numbers=story_chapters,
+        )
+        rebuild_chapters = sorted({*story_chapters, *non_story_rebuild_chapters})
+        report.metadata["rebuild_chapter_numbers"] = rebuild_chapters
+        report.metadata["rebuild_non_story_chapter_numbers"] = non_story_rebuild_chapters
         _check_rebuild_inputs(
             report,
             release_root=paths.release_root,
             run_id=run_id,
             placeholders_dir=paths.extracted_placeholders_dir,
-            chapter_numbers=story_chapters,
+            chapter_numbers=rebuild_chapters,
         )
 
     return report
@@ -453,6 +464,49 @@ def _has_known_packet_skip(
         return False
     finally:
         conn.close()
+
+
+def _non_story_chapters_with_rebuild_artifacts(
+    *,
+    db_path: Path,
+    release_root: Path,
+    release_id: str,
+    run_id: str,
+    chapter_numbers: list[int],
+    story_chapter_numbers: list[int],
+) -> list[int]:
+    candidates = sorted(set(chapter_numbers) - set(story_chapter_numbers))
+    if not candidates:
+        return []
+    conn = _connect_existing(db_path)
+    if conn is None or not _table_exists(conn, "summary_drafts"):
+        if conn is not None:
+            conn.close()
+        return []
+
+    translation_root = release_root / "runs" / run_id / "translation"
+    non_story_chapters: list[int] = []
+    try:
+        for number in candidates:
+            row = conn.execute(
+                """
+                SELECT is_story_chapter
+                FROM summary_drafts
+                WHERE release_id = ?
+                  AND chapter_number = ?
+                  AND summary_type = 'chapter_summary_zh_structured'
+                LIMIT 1
+                """,
+                (release_id, number),
+            ).fetchone()
+            if row is None or int(row["is_story_chapter"]) != 0:
+                continue
+            translation_dir = translation_root / f"chapter-{number}"
+            if (translation_dir / "pass3.json").exists() or (translation_dir / "pass2.json").exists():
+                non_story_chapters.append(number)
+    finally:
+        conn.close()
+    return non_story_chapters
 
 
 def _check_rebuild_inputs(

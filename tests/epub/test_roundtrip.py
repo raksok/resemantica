@@ -4,8 +4,11 @@ import json
 import zipfile
 from pathlib import Path
 
+from resemantica.db.sqlite import ensure_schema, open_connection
+from resemantica.db.summary_repo import save_summary_draft
 from resemantica.epub.extractor import extract_epub
-from resemantica.epub.rebuild import rebuild_chapter_xhtml
+from resemantica.epub.rebuild import rebuild_chapter_xhtml, rebuild_translated_epub
+from resemantica.settings import derive_paths, load_config
 
 
 def _write_fixture_epub(epub_path: Path, chapters: list[str]) -> None:
@@ -73,6 +76,61 @@ def _read_zip_file(zip_path: Path, member: str) -> bytes:
         return archive.read(member)
 
 
+def _mark_non_story(release_id: str, chapter_number: int = 1) -> None:
+    paths = derive_paths(load_config(), release_id=release_id)
+    chapter_payload = json.loads(
+        (paths.extracted_chapters_dir / f"chapter-{chapter_number}.json").read_text(encoding="utf-8")
+    )
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "summaries")
+    try:
+        save_summary_draft(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="chapter_summary_zh_structured",
+            content={"is_story_chapter": False, "events": []},
+            chapter_source_hash=str(chapter_payload["chapter_source_hash"]),
+            model_name="test",
+            prompt_version="v1",
+            run_id="summaries",
+            validation_status="non_story_chapter",
+            is_story_chapter=0,
+        )
+    finally:
+        conn.close()
+
+
+def _write_pass2_translation(
+    release_id: str,
+    run_id: str,
+    *,
+    chapter_number: int = 1,
+    text: str = "Translated non-story.",
+) -> None:
+    paths = derive_paths(load_config(), release_id=release_id)
+    chapter_payload = json.loads(
+        (paths.extracted_chapters_dir / f"chapter-{chapter_number}.json").read_text(encoding="utf-8")
+    )
+    record = chapter_payload["records"][0]
+    translation_dir = paths.release_root / "runs" / run_id / "translation" / f"chapter-{chapter_number}"
+    translation_dir.mkdir(parents=True, exist_ok=True)
+    (translation_dir / "pass2.json").write_text(
+        json.dumps(
+            {
+                "blocks": [
+                    {
+                        "block_id": record["block_id"],
+                        "parent_block_id": record["parent_block_id"],
+                        "restored_text_en": text,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_epub_roundtrip_writes_artifacts_and_rebuilds(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     input_epub = tmp_path / "input.epub"
@@ -98,9 +156,6 @@ def test_epub_roundtrip_writes_artifacts_and_rebuilds(tmp_path: Path, monkeypatc
     rebuilt_ch1 = _read_zip_file(result.rebuilt_epub_path, "OEBPS/chapter1.xhtml")
     assert original_ch1 == rebuilt_ch1
 
-    from resemantica.db.sqlite import open_connection
-    from resemantica.settings import derive_paths, load_config
-
     paths = derive_paths(load_config(), release_id="m1-fixture")
     conn = open_connection(paths.db_path)
     try:
@@ -116,6 +171,86 @@ def test_epub_roundtrip_writes_artifacts_and_rebuilds(tmp_path: Path, monkeypatc
         conn.close()
     assert chapter_count == 2
     assert block_count >= 3
+
+
+def test_rebuild_translated_epub_rebuilds_non_story_chapter_with_pass2(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    input_epub = tmp_path / "non-story-translated.epub"
+    _write_fixture_epub(
+        input_epub,
+        chapters=[
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>目录。</p></body></html>""",
+        ],
+    )
+    extract_epub(input_path=input_epub, release_id="non-story-translated")
+    _mark_non_story("non-story-translated")
+    _write_pass2_translation(
+        "non-story-translated",
+        "production",
+        text="Translated table of contents.",
+    )
+
+    result = rebuild_translated_epub(
+        release_id="non-story-translated",
+        run_id="production",
+        config=load_config(),
+    )
+
+    assert result.status == "success"
+    assert result.chapter_results[0].status == "success"
+    chapter_artifact = (
+        derive_paths(load_config(), release_id="non-story-translated").release_root
+        / "runs"
+        / "production"
+        / "reconstruction"
+        / "chapters"
+        / "chapter-1.xhtml"
+    )
+    assert "Translated table of contents." in chapter_artifact.read_text(encoding="utf-8")
+    rebuilt_chapter = _read_zip_file(result.output_path, "OEBPS/chapter1.xhtml").decode("utf-8")
+    assert "Translated table of contents." in rebuilt_chapter
+    assert "目录。" not in rebuilt_chapter
+
+
+def test_rebuild_translated_epub_skips_non_story_chapter_without_translation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    input_epub = tmp_path / "non-story-untranslated.epub"
+    _write_fixture_epub(
+        input_epub,
+        chapters=[
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>版权页。</p></body></html>""",
+        ],
+    )
+    extract_epub(input_path=input_epub, release_id="non-story-untranslated")
+    _mark_non_story("non-story-untranslated")
+
+    result = rebuild_translated_epub(
+        release_id="non-story-untranslated",
+        run_id="production",
+        config=load_config(),
+    )
+
+    assert result.status == "success"
+    assert result.chapter_results[0].status == "skipped"
+    chapter_artifact = (
+        derive_paths(load_config(), release_id="non-story-untranslated").release_root
+        / "runs"
+        / "production"
+        / "reconstruction"
+        / "chapters"
+        / "chapter-1.xhtml"
+    )
+    assert not chapter_artifact.exists()
+    rebuilt_chapter = _read_zip_file(result.output_path, "OEBPS/chapter1.xhtml").decode("utf-8")
+    assert "版权页。" in rebuilt_chapter
 
 
 def test_malformed_xhtml_generates_readable_report(tmp_path: Path, monkeypatch) -> None:

@@ -289,6 +289,24 @@ def _load_final_blocks(translation_dir: Path) -> list[dict[str, Any]]:
     return []
 
 
+def _resolve_source_relative_path(unpacked_dir: Path, source_document_path: str) -> Path:
+    direct = Path(source_document_path)
+    if (unpacked_dir / direct).exists():
+        return direct
+
+    source_posix = direct.as_posix().lstrip("/")
+    matches = [
+        path.relative_to(unpacked_dir)
+        for path in unpacked_dir.rglob(direct.name)
+        if path.is_file() and path.relative_to(unpacked_dir).as_posix().endswith(source_posix)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous source document path: {source_document_path}")
+    return direct
+
+
 def validate_reconstruction(
     *,
     release_id: str,
@@ -365,36 +383,43 @@ def rebuild_translated_epub(
                 chapter_number=chapter_ref.chapter_number,
                 message=f"EPUB rebuild started for chapter {chapter_ref.chapter_number}",
             )
-            if chapter_ref.chapter_number in non_story_chapters:
-                result = ChapterRebuildResult(
-                    chapter_number=chapter_ref.chapter_number,
-                    source_document_path=chapter_ref.source_document_path or "",
-                    xhtml="",
-                    status="skipped",
-                    flags=[],
-                )
-                chapter_results.append(result)
-                _emit(
-                    run_id,
-                    release_id,
-                    f"{_STAGE_NAME}.chapter_skipped",
-                    chapter_number=chapter_ref.chapter_number,
-                    severity="warning",
-                    message=f"EPUB rebuild skipped chapter {chapter_ref.chapter_number}: non-story chapter",
-                    reason="non_story_chapter",
-                )
-                continue
             try:
+                translation_dir = (
+                    paths.release_root
+                    / "runs"
+                    / run_id
+                    / "translation"
+                    / f"chapter-{chapter_ref.chapter_number}"
+                )
+                translated_blocks = _load_final_blocks(translation_dir)
+                if chapter_ref.chapter_number in non_story_chapters and not translated_blocks:
+                    result = ChapterRebuildResult(
+                        chapter_number=chapter_ref.chapter_number,
+                        source_document_path=chapter_ref.source_document_path or "",
+                        xhtml="",
+                        status="skipped",
+                        flags=[],
+                    )
+                    chapter_results.append(result)
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_skipped",
+                        chapter_number=chapter_ref.chapter_number,
+                        severity="warning",
+                        message=f"EPUB rebuild skipped chapter {chapter_ref.chapter_number}: non-story chapter",
+                        reason="non_story_chapter",
+                    )
+                    continue
                 chapter_path = chapter_ref.chapter_path
                 chapter_payload = _read_json(chapter_path)
                 chapter_number = int(chapter_payload["chapter_number"])
                 source_document_path = str(chapter_payload["source_document_path"])
-                source_path = paths.unpacked_dir / source_document_path
-                work_source_path = work_dir / source_document_path
-                translation_dir = paths.release_root / "runs" / run_id / "translation" / f"chapter-{chapter_number}"
+                source_relative_path = _resolve_source_relative_path(paths.unpacked_dir, source_document_path)
+                source_path = paths.unpacked_dir / source_relative_path
+                work_source_path = work_dir / source_relative_path
                 placeholder_path = paths.extracted_placeholders_dir / f"chapter-{chapter_number}.json"
                 placeholder_map = _read_json(placeholder_path) if placeholder_path.exists() else {}
-                translated_blocks = _load_final_blocks(translation_dir)
                 if not translated_blocks:
                     _emit(
                         run_id,
