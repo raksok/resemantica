@@ -34,6 +34,8 @@ Translation selection order:
 
 Non-story chapters marked with `summary_drafts.is_story_chapter = 0` may omit translated artifacts. If a selected non-story chapter already has pass2/pass3 translated blocks, reconstruction consumes those blocks and writes rebuilt XHTML just like a story chapter. Only non-story chapters without translated blocks are skipped and left as original XHTML in the EPUB work tree.
 
+Translated chapter titles are derived from the first rebuilt heading block (`h1`-`h6`) in each chapter. The heading remains the visible source of truth; reconstruction does not add a separate TOC translation pass.
+
 ## Artifact Outputs
 
 Write reconstruction outputs under:
@@ -59,11 +61,22 @@ artifacts/releases/{release_id}/runs/{run_id}/reconstruction/reconstructed.epub
 3. Load the final translated block map for the chapter.
 4. Reassemble split segments by `parent_block_id` and `segment_order`.
 5. For each source block, inject translated text into the matching original text-bearing element.
-6. Preserve original XHTML tags, attributes, namespaces, document order, and non-text assets.
-7. Serialize the rebuilt XHTML.
-8. Validate the rebuilt XHTML before packaging.
+6. If the first translated heading block is available, write its plain text into the chapter XHTML `<head><title>`.
+7. Preserve original XHTML tags, attributes, namespaces, document order, and non-text assets.
+8. Serialize the rebuilt XHTML.
+9. Validate the rebuilt XHTML before packaging.
 
 The model output must never be parsed as trusted XHTML. The original source document and placeholder map remain the structure authority.
+
+## Navigation Synchronization
+
+Before packaging, reconstruction syncs optional navigation files in the copied work tree:
+
+- `toc.ncx`: matching `navPoint/navLabel/text` values are updated when `content/@src` points at a rebuilt chapter with a translated title.
+- `nav.xhtml`: matching anchors inside `nav epub:type="toc"` are updated when `href` points at a rebuilt chapter with a translated title.
+- Unmatched entries, untranslated front matter, cover pages, and volume labels are preserved.
+- OPF `dc:title` and other book-level metadata remain unchanged.
+- Missing navigation files are valid. Malformed navigation files emit warning events and do not fail reconstruction by themselves.
 
 ## Validation Report Schema
 
@@ -94,10 +107,11 @@ Chapter-level flags should include:
 
 1. Copy the unpacked EPUB tree into a reconstruction work directory.
 2. Replace only chapter XHTML files that have rebuilt chapter output.
-3. Preserve `mimetype` as the first stored ZIP entry.
-4. Deflate all other entries.
-5. Write final EPUB.
-6. Emit `artifact_written` and `validation_failed` events through orchestration.
+3. Sync `toc.ncx` and `nav.xhtml` labels from rebuilt chapter titles when those navigation files exist.
+4. Preserve `mimetype` as the first stored ZIP entry.
+5. Deflate all other entries.
+6. Write final EPUB.
+7. Emit `artifact_written` and `validation_failed` events through orchestration.
 
 ## Failure Policy
 
@@ -114,6 +128,10 @@ Chapter-level flags should include:
 - pass3 output is preferred over pass2 output.
 - pass2 is used when pass3 is disabled or missing.
 - segment output is concatenated in source order.
+- translated heading updates chapter XHTML `<title>` as plain text.
+- `toc.ncx` labels are synced from translated chapter titles.
+- `nav.xhtml` TOC anchors are synced from translated chapter titles.
+- unmatched navigation entries remain unchanged.
 - missing translation produces a failed validation report.
 - final EPUB contains rebuilt XHTML, not unchanged source XHTML.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import save_summary_draft
@@ -11,7 +12,12 @@ from resemantica.epub.rebuild import rebuild_chapter_xhtml, rebuild_translated_e
 from resemantica.settings import derive_paths, load_config
 
 
-def _write_fixture_epub(epub_path: Path, chapters: list[str]) -> None:
+def _write_fixture_epub(
+    epub_path: Path,
+    chapters: list[str],
+    *,
+    extra_files: dict[str, str] | None = None,
+) -> None:
     workspace = epub_path.parent / "fixture_book"
     meta_inf = workspace / "META-INF"
     oebps = workspace / "OEBPS"
@@ -58,6 +64,10 @@ def _write_fixture_epub(epub_path: Path, chapters: list[str]) -> None:
 """,
         encoding="utf-8",
     )
+    for relative_path, content in (extra_files or {}).items():
+        output_path = workspace / relative_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8")
 
     with zipfile.ZipFile(epub_path, "w") as archive:
         archive.write(workspace / "mimetype", arcname="mimetype", compress_type=zipfile.ZIP_STORED)
@@ -74,6 +84,14 @@ def _write_fixture_epub(epub_path: Path, chapters: list[str]) -> None:
 def _read_zip_file(zip_path: Path, member: str) -> bytes:
     with zipfile.ZipFile(zip_path, "r") as archive:
         return archive.read(member)
+
+
+def _first_text_by_local_name(xml_text: str, local_name: str) -> str | None:
+    root = ET.fromstring(xml_text.encode("utf-8"))
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] == local_name:
+            return "".join(element.itertext())
+    return None
 
 
 def _mark_non_story(release_id: str, chapter_number: int = 1) -> None:
@@ -124,6 +142,39 @@ def _write_pass2_translation(
                         "parent_block_id": record["parent_block_id"],
                         "restored_text_en": text,
                     }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_pass2_translation_blocks(
+    release_id: str,
+    run_id: str,
+    *,
+    chapter_number: int,
+    texts: list[str],
+) -> None:
+    paths = derive_paths(load_config(), release_id=release_id)
+    chapter_payload = json.loads(
+        (paths.extracted_chapters_dir / f"chapter-{chapter_number}.json").read_text(encoding="utf-8")
+    )
+    records = chapter_payload["records"]
+    assert len(records) == len(texts)
+
+    translation_dir = paths.release_root / "runs" / run_id / "translation" / f"chapter-{chapter_number}"
+    translation_dir.mkdir(parents=True, exist_ok=True)
+    (translation_dir / "pass2.json").write_text(
+        json.dumps(
+            {
+                "blocks": [
+                    {
+                        "block_id": record["block_id"],
+                        "parent_block_id": record["parent_block_id"],
+                        "restored_text_en": text,
+                    }
+                    for record, text in zip(records, texts)
                 ]
             }
         ),
@@ -253,6 +304,113 @@ def test_rebuild_translated_epub_skips_non_story_chapter_without_translation(
     assert "版权页。" in rebuilt_chapter
 
 
+def test_rebuild_translated_epub_updates_ncx_from_translated_heading(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    input_epub = tmp_path / "toc-ncx.epub"
+    _write_fixture_epub(
+        input_epub,
+        chapters=[
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>第1章 旧标题</title></head>
+<body><h1>第1章 旧标题</h1><p>正文。</p></body>
+</html>""",
+        ],
+        extra_files={
+            "OEBPS/toc.ncx": """<?xml version="1.0" encoding="UTF-8"?>
+<ncx version="2005-1" xmlns="http://www.daisy.org/z3986/2005/ncx/">
+  <navMap>
+    <navPoint id="front" playOrder="1">
+      <navLabel><text>封面</text></navLabel>
+      <content src="cover.xhtml"/>
+    </navPoint>
+    <navPoint id="ch1" playOrder="2">
+      <navLabel><text>第1章 旧标题</text></navLabel>
+      <content src="chapter1.xhtml#start"/>
+    </navPoint>
+  </navMap>
+</ncx>""",
+        },
+    )
+    extract_epub(input_path=input_epub, release_id="toc-ncx")
+    _write_pass2_translation_blocks(
+        "toc-ncx",
+        "production",
+        chapter_number=1,
+        texts=["Chapter 1: New Title", "Translated body."],
+    )
+
+    result = rebuild_translated_epub(
+        release_id="toc-ncx",
+        run_id="production",
+        config=load_config(),
+    )
+
+    assert result.status == "success"
+    assert result.chapter_results[0].translated_title == "Chapter 1: New Title"
+    rebuilt_chapter = _read_zip_file(result.output_path, "OEBPS/chapter1.xhtml").decode("utf-8")
+    rebuilt_ncx = _read_zip_file(result.output_path, "OEBPS/toc.ncx").decode("utf-8")
+    assert _first_text_by_local_name(rebuilt_chapter, "title") == "Chapter 1: New Title"
+    assert "Chapter 1: New Title" in rebuilt_ncx
+    assert "第1章 旧标题" not in rebuilt_ncx
+    assert "封面" in rebuilt_ncx
+
+
+def test_rebuild_translated_epub_updates_nav_xhtml_from_translated_heading(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    input_epub = tmp_path / "nav-xhtml.epub"
+    _write_fixture_epub(
+        input_epub,
+        chapters=[
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head></head>
+<body><h2>旧标题</h2><p>正文。</p></body>
+</html>""",
+        ],
+        extra_files={
+            "OEBPS/nav.xhtml": """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body>
+  <nav epub:type="toc">
+    <ol>
+      <li><a href="chapter1.xhtml">旧标题</a></li>
+      <li><a href="missing.xhtml">未翻译前言</a></li>
+    </ol>
+  </nav>
+</body>
+</html>""",
+        },
+    )
+    extract_epub(input_path=input_epub, release_id="nav-xhtml")
+    _write_pass2_translation_blocks(
+        "nav-xhtml",
+        "production",
+        chapter_number=1,
+        texts=["Translated Nav Title", "Translated body."],
+    )
+
+    result = rebuild_translated_epub(
+        release_id="nav-xhtml",
+        run_id="production",
+        config=load_config(),
+    )
+
+    assert result.status == "success"
+    rebuilt_chapter = _read_zip_file(result.output_path, "OEBPS/chapter1.xhtml").decode("utf-8")
+    rebuilt_nav = _read_zip_file(result.output_path, "OEBPS/nav.xhtml").decode("utf-8")
+    assert _first_text_by_local_name(rebuilt_chapter, "title") == "Translated Nav Title"
+    assert "Translated Nav Title" in rebuilt_nav
+    assert "旧标题" not in rebuilt_nav
+    assert "未翻译前言" in rebuilt_nav
+
+
 def test_malformed_xhtml_generates_readable_report(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     input_epub = tmp_path / "broken.epub"
@@ -350,6 +508,56 @@ def test_rebuild_chapter_xhtml_preserves_tags_and_attributes() -> None:
     assert result.status == "success"
     assert 'class="lead"' in result.xhtml
     assert "Translated." in result.xhtml
+
+
+def test_rebuild_chapter_xhtml_updates_title_from_heading_plain_text() -> None:
+    source_xhtml = (
+        '<html xmlns="http://www.w3.org/1999/xhtml">'
+        "<head><title>旧标题</title></head>"
+        "<body><h1>旧标题</h1><p>正文。</p></body>"
+        "</html>"
+    )
+    records = [
+        {
+            "chapter_number": 1,
+            "source_document_path": "OEBPS/chapter1.xhtml",
+            "block_id": "ch001_blk001",
+            "parent_block_id": "ch001_blk001",
+            "block_order": 1,
+            "segment_order": None,
+        },
+        {
+            "chapter_number": 1,
+            "source_document_path": "OEBPS/chapter1.xhtml",
+            "block_id": "ch001_blk002",
+            "parent_block_id": "ch001_blk002",
+            "block_order": 2,
+            "segment_order": None,
+        },
+    ]
+
+    result = rebuild_chapter_xhtml(
+        source_xhtml,
+        records,
+        [
+            {
+                "block_id": "ch001_blk001",
+                "parent_block_id": "ch001_blk001",
+                "restored_text_en": "Translated <i>Dream</i> Title",
+            },
+            {
+                "block_id": "ch001_blk002",
+                "parent_block_id": "ch001_blk002",
+                "restored_text_en": "Translated body.",
+            },
+        ],
+        {},
+    )
+
+    assert result.status == "success"
+    assert result.translated_title == "Translated Dream Title"
+    assert _first_text_by_local_name(result.xhtml, "title") == "Translated Dream Title"
+    assert "Translated <" not in _first_text_by_local_name(result.xhtml, "title")
 
 
 def test_rebuild_chapter_xhtml_prefers_pass3_final_output() -> None:

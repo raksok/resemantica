@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import posixpath
 import shutil
+import urllib.parse
 import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -20,6 +22,7 @@ from resemantica.utils import _emit as _emit_shared
 from resemantica.utils import _read_json, _write_json
 
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "div", "li", "td", "table"}
+_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _STAGE_NAME = "epub-rebuild"
 
 
@@ -54,6 +57,7 @@ class ChapterRebuildResult:
     status: str
     flags: list[str] = field(default_factory=list)
     missing_blocks: list[str] = field(default_factory=list)
+    translated_title: str | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,6 +87,17 @@ def _local_name(tag: str) -> str:
     if "}" in tag:
         return tag.rsplit("}", 1)[1]
     return tag
+
+
+def _namespace_uri(tag: str) -> str | None:
+    if tag.startswith("{") and "}" in tag:
+        return tag[1:].split("}", 1)[0]
+    return None
+
+
+def _qualified_tag(parent: ET.Element, local_name: str) -> str:
+    namespace = _namespace_uri(parent.tag)
+    return f"{{{namespace}}}{local_name}" if namespace else local_name
 
 
 def _has_text_content(element: ET.Element) -> bool:
@@ -209,6 +224,44 @@ def _replace_element_content(element: ET.Element, xhtml_fragment: str) -> None:
         element.append(child)
 
 
+def _plain_text_from_fragment(xhtml_fragment: str) -> str:
+    try:
+        wrapper = ET.fromstring(f"<wrapper>{xhtml_fragment}</wrapper>")
+    except ET.ParseError:
+        text = xhtml_fragment
+    else:
+        text = "".join(wrapper.itertext())
+    return " ".join(text.split())
+
+
+def _first_element_by_local_name(root: ET.Element, local_name: str) -> ET.Element | None:
+    target = local_name.lower()
+    return next(
+        (element for element in root.iter() if _local_name(element.tag).lower() == target),
+        None,
+    )
+
+
+def _direct_child_by_local_name(parent: ET.Element, local_name: str) -> ET.Element | None:
+    target = local_name.lower()
+    return next(
+        (child for child in list(parent) if _local_name(child.tag).lower() == target),
+        None,
+    )
+
+
+def _update_xhtml_title(root: ET.Element, translated_title: str) -> None:
+    head = _first_element_by_local_name(root, "head")
+    if head is None:
+        return
+    title = _direct_child_by_local_name(head, "title")
+    if title is None:
+        title = ET.SubElement(head, _qualified_tag(head, "title"))
+    for child in list(title):
+        title.remove(child)
+    title.text = translated_title
+
+
 def rebuild_chapter_xhtml(
     source_xhtml: str,
     chapter_records: list[dict[str, Any]],
@@ -238,6 +291,7 @@ def rebuild_chapter_xhtml(
     translated_by_parent = _translated_text_by_parent(translated_blocks)
     flags: list[str] = []
     missing_blocks: list[str] = []
+    translated_title: str | None = None
     blocks = _text_blocks(root)
     for index, parent_block_id in enumerate(records_by_parent, start=0):
         if index >= len(blocks):
@@ -257,6 +311,11 @@ def rebuild_chapter_xhtml(
         )
         if restore_warnings:
             flags.append("placeholder_restoration_warning")
+        if translated_title is None and _local_name(element.tag).lower() in _HEADING_TAGS:
+            candidate_title = _plain_text_from_fragment(restored_text)
+            if candidate_title:
+                translated_title = candidate_title
+                _update_xhtml_title(root, translated_title)
         _replace_element_content(element, restored_text)
 
     xhtml = ET.tostring(root, encoding="unicode")
@@ -272,7 +331,177 @@ def rebuild_chapter_xhtml(
         status="failed" if flags else "success",
         flags=sorted(set(flags)),
         missing_blocks=missing_blocks,
+        translated_title=translated_title,
     )
+
+
+def _normalize_epub_relative_path(path: str) -> str:
+    return posixpath.normpath(path.replace("\\", "/").lstrip("/"))
+
+
+def _navigation_target_path(
+    *,
+    work_dir: Path,
+    navigation_path: Path,
+    href: str,
+) -> str | None:
+    cleaned = urllib.parse.unquote(href).split("#", 1)[0].split("?", 1)[0].strip()
+    if not cleaned:
+        return None
+
+    direct = _normalize_epub_relative_path(cleaned)
+    if (work_dir / Path(direct)).exists():
+        return direct
+
+    try:
+        relative = (navigation_path.parent / Path(cleaned)).resolve().relative_to(
+            work_dir.resolve()
+        )
+    except ValueError:
+        return None
+    return _normalize_epub_relative_path(relative.as_posix())
+
+
+def _write_xml_tree(tree: Any, path: Path) -> None:
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _sync_ncx_titles(
+    ncx_path: Path,
+    *,
+    work_dir: Path,
+    translated_titles_by_source: dict[str, str],
+) -> int:
+    tree = ET.parse(ncx_path)
+    root = tree.getroot()
+    updated = 0
+    for nav_point in root.iter():
+        if _local_name(nav_point.tag) != "navPoint":
+            continue
+        content = _direct_child_by_local_name(nav_point, "content")
+        if content is None:
+            continue
+        target = _navigation_target_path(
+            work_dir=work_dir,
+            navigation_path=ncx_path,
+            href=content.attrib.get("src", ""),
+        )
+        if target is None:
+            continue
+        translated_title = translated_titles_by_source.get(target)
+        if not translated_title:
+            continue
+        nav_label = _direct_child_by_local_name(nav_point, "navLabel")
+        text_node = (
+            _direct_child_by_local_name(nav_label, "text")
+            if nav_label is not None
+            else None
+        )
+        if text_node is not None and text_node.text != translated_title:
+            text_node.text = translated_title
+            updated += 1
+
+    if updated:
+        _write_xml_tree(tree, ncx_path)
+    return updated
+
+
+def _attribute_local_name(attribute_name: str) -> str:
+    if "}" in attribute_name:
+        return attribute_name.rsplit("}", 1)[1]
+    return attribute_name
+
+
+def _has_epub_type(element: ET.Element, expected: str) -> bool:
+    for attribute_name, value in element.attrib.items():
+        if _attribute_local_name(attribute_name) == "type" and expected in value.split():
+            return True
+    return False
+
+
+def _replace_anchor_text(anchor: ET.Element, translated_title: str) -> None:
+    for child in list(anchor):
+        anchor.remove(child)
+    anchor.text = translated_title
+
+
+def _sync_nav_xhtml_titles(
+    nav_path: Path,
+    *,
+    work_dir: Path,
+    translated_titles_by_source: dict[str, str],
+) -> int:
+    tree = ET.parse(nav_path)
+    root = tree.getroot()
+    toc_navs = [
+        element
+        for element in root.iter()
+        if _local_name(element.tag).lower() == "nav" and _has_epub_type(element, "toc")
+    ]
+    updated = 0
+    for toc_nav in toc_navs:
+        for anchor in toc_nav.iter():
+            if _local_name(anchor.tag).lower() != "a":
+                continue
+            target = _navigation_target_path(
+                work_dir=work_dir,
+                navigation_path=nav_path,
+                href=anchor.attrib.get("href", ""),
+            )
+            if target is None:
+                continue
+            translated_title = translated_titles_by_source.get(target)
+            if not translated_title:
+                continue
+            current_text = " ".join("".join(anchor.itertext()).split())
+            if current_text != translated_title:
+                _replace_anchor_text(anchor, translated_title)
+                updated += 1
+
+    if updated:
+        _write_xml_tree(tree, nav_path)
+    return updated
+
+
+def _sync_navigation_titles(
+    *,
+    work_dir: Path,
+    translated_titles_by_source: dict[str, str],
+) -> tuple[int, list[str]]:
+    if not translated_titles_by_source:
+        return (0, [])
+
+    updated = 0
+    warnings: list[str] = []
+    for ncx_path in work_dir.rglob("toc.ncx"):
+        try:
+            updated += _sync_ncx_titles(
+                ncx_path,
+                work_dir=work_dir,
+                translated_titles_by_source=translated_titles_by_source,
+            )
+        except ET.ParseError:
+            warnings.append(f"navigation_parse_failed:{ncx_path.relative_to(work_dir).as_posix()}")
+        except OSError as exc:
+            warnings.append(
+                f"navigation_write_failed:{ncx_path.relative_to(work_dir).as_posix()}:{exc}"
+            )
+
+    for nav_path in work_dir.rglob("nav.xhtml"):
+        try:
+            updated += _sync_nav_xhtml_titles(
+                nav_path,
+                work_dir=work_dir,
+                translated_titles_by_source=translated_titles_by_source,
+            )
+        except ET.ParseError:
+            warnings.append(f"navigation_parse_failed:{nav_path.relative_to(work_dir).as_posix()}")
+        except OSError as exc:
+            warnings.append(
+                f"navigation_write_failed:{nav_path.relative_to(work_dir).as_posix()}:{exc}"
+            )
+
+    return (updated, warnings)
 
 
 def _load_final_blocks(translation_dir: Path) -> list[dict[str, Any]]:
@@ -358,6 +587,7 @@ def rebuild_translated_epub(
     )
 
     chapter_results: list[ChapterRebuildResult] = []
+    translated_titles_by_source: dict[str, str] = {}
     try:
         if work_dir.exists():
             shutil.rmtree(work_dir)
@@ -450,6 +680,10 @@ def rebuild_translated_epub(
                         missing_blocks=result.missing_blocks,
                     )
                 if result.status == "success":
+                    if result.translated_title:
+                        translated_titles_by_source[
+                            _normalize_epub_relative_path(source_relative_path.as_posix())
+                        ] = result.translated_title
                     chapter_artifact = chapters_out / f"chapter-{chapter_number}.xhtml"
                     chapter_artifact.write_text(
                         result.xhtml,
@@ -505,6 +739,28 @@ def rebuild_translated_epub(
                     message=f"EPUB rebuild failed for chapter {chapter_ref.chapter_number}: {exc}",
                     reason=str(exc),
                 )
+
+        updated_navigation_entries, navigation_warnings = _sync_navigation_titles(
+            work_dir=work_dir,
+            translated_titles_by_source=translated_titles_by_source,
+        )
+        if updated_navigation_entries:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.navigation_updated",
+                message=f"EPUB rebuild updated {updated_navigation_entries} navigation entries",
+                updated_count=updated_navigation_entries,
+            )
+        for warning in navigation_warnings:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.navigation_warning",
+                severity="warning",
+                message=f"EPUB rebuild navigation warning: {warning}",
+                reason=warning,
+            )
 
         try:
             rebuilt_path = rebuild_epub(work_dir, final_output)
