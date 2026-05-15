@@ -16,22 +16,19 @@ Implemented package layout (M1 slice):
 - `src/resemantica/cli_progress.py`: CLI Rich live progress subscriber with start/elapsed time, counters, and log panel
 - `src/resemantica/settings.py`: config loading and release-scoped path derivation for artifacts, SQLite, and LadybugDB
 - `src/resemantica/epub/`: EPUB extractor, parser, placeholders, validators, and rebuild; rebuild consumes existing translated artifacts even for non-story chapters
-- `src/resemantica/db/sqlite.py`: SQLite connection and migration helpers
-- `src/resemantica/db/migrations/001_initial.sql`: initial manual migration script
+- `src/resemantica/db/sqlite.py`: SQLite connection helpers and the inline application schema source of truth
 
 Implemented package layout (M2 slice):
 
 - `src/resemantica/llm/`: LLM client and prompt loading helpers
 - `src/resemantica/llm/prompts/translate_pass1.txt`, `translate_pass2.txt`: prompt templates with version headers
 - `src/resemantica/translation/`: pass1/pass2, validators, checkpoints, translate-chapter pipeline
-- `src/resemantica/db/migrations/002_translation_checkpoints.sql`: checkpoint table for chapter pass resume
 - `tests/translation/`: M2 translation tests
 
 Implemented package layout (M3 slice):
 
 - `src/resemantica/glossary/`: candidate discovery, review CSV/JSON export/import, promotion validators, and glossary pipeline orchestration
 - `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, translation votes, locked glossary, and conflicts
-- `src/resemantica/db/migrations/003_glossary.sql`: glossary tables and constraints
 - `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`: M3 glossary prompt files
 - `tests/glossary/`: glossary discovery, conflict, transaction, and precedence tests
 
@@ -39,7 +36,6 @@ Implemented package layout (M4 slice):
 
 - `src/resemantica/summaries/`: chapter summary generation, deterministic validation, and summary derivation pipeline
 - `src/resemantica/db/summary_repo.py`: SQLite repository for summary drafts, validated Chinese summaries, and derived English summaries
-- `src/resemantica/db/migrations/004_summaries.sql`: summary tables and constraints
 - `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_en_derive.txt`: M4 summary prompt files
 - `tests/summaries/`: continuity conflict, glossary conflict, future-leak, and deterministic story rebuild tests
 
@@ -47,7 +43,6 @@ Implemented package layout (M5 slice):
 
 - `src/resemantica/idioms/`: idiom extraction, deterministic validation, review CSV/JSON export/import, exact-match hooks, and idiom preprocessing pipeline
 - `src/resemantica/db/idiom_repo.py`: SQLite repository for idiom candidates, translation votes, policies, and conflicts
-- `src/resemantica/db/migrations/005_idioms.sql`: idiom tables and constraints
 - `src/resemantica/llm/prompts/idiom_detect.txt`: M5 idiom detection prompt file
 - `tests/idioms/`: idiom extraction, duplicate/conflict, storage, and retrieval precedence tests
 
@@ -55,7 +50,6 @@ Implemented package layout (M6 slice):
 
 - `src/resemantica/graph/`: graph models, Ladybug client wrapper, deterministic extraction, validation, filtering, and preprocessing pipeline
 - `src/resemantica/db/graph_repo.py`: SQLite repository for deferred entities and graph snapshot metadata
-- `src/resemantica/db/migrations/006_graph.sql`: deferred entity and graph snapshot tables
 - `tests/graph/`: alias reveal gating, relationship chapter eligibility, validation, deferred lifecycle, and snapshot metadata tests
 
 Implemented package layout (M7 slice):
@@ -70,7 +64,6 @@ Implemented package layout (M8 slice):
 
 - `src/resemantica/packets/`: chapter packet schemas, graph-enriched packet builder, paragraph bundle derivation, and stale detection
 - `src/resemantica/db/packet_repo.py`: SQLite packet metadata repository for reproducibility and stale checks
-- `src/resemantica/db/migrations/007_packets.sql`: packet metadata table and indexes
 - `src/resemantica/llm/tokens.py`: cl100k token counting utility for packet/bundle budgeting with 5% safety-buffer enforcement
 - `src/resemantica/cli.py`: `packets build` command wiring
 - `tests/packets/`: packet schema, provenance, stale rebuild, graph filtering, size budget, and retrieval precedence tests

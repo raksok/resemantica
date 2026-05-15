@@ -414,70 +414,8 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             ON extracted_blocks(release_id, chapter_number);
         CREATE INDEX IF NOT EXISTS idx_extracted_chapters_release_run
             ON extracted_chapters(release_id, run_id);
-
-        DROP TABLE IF EXISTS schema_migrations;
         """
     )
-
-    # Schema Evolution: Add columns to glossary_candidates if they don't exist
-    new_columns = [
-        ("pos_tags", "TEXT"),
-        ("ner_label", "TEXT"),
-        ("type_prior", "TEXT"),
-        ("source_strategies", "TEXT"),
-        ("chapter_coverage", "INTEGER"),
-        ("corpus_score", "REAL"),
-        ("context_snippets", "TEXT"),
-        ("llm_keep", "INTEGER"),
-        ("llm_type", "TEXT"),
-        ("llm_reason_code", "TEXT"),
-        ("llm_confidence", "REAL"),
-    ]
-    for col_name, col_type in new_columns:
-        try:
-            conn.execute(f"ALTER TABLE glossary_candidates ADD COLUMN {col_name} {col_type};")
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" in str(e).lower():
-                pass
-            else:
-                raise
-
-    idiom_new_columns = [
-        ("dictionary_match", "INTEGER"),
-        ("source_strategies", "TEXT"),
-        ("chapter_coverage", "INTEGER"),
-        ("corpus_score", "REAL"),
-        ("context_snippets", "TEXT"),
-        ("literal_meaning_zh", "TEXT"),
-        ("idiomatic_meaning_zh", "TEXT"),
-        ("llm_is_idiom", "INTEGER"),
-        ("llm_usage_type", "TEXT"),
-        ("llm_translation_strategy", "TEXT"),
-        ("llm_reason_code", "TEXT"),
-        ("llm_confidence", "REAL"),
-        ("cluster_id", "TEXT"),
-        ("canonical_source_text", "TEXT"),
-        ("existing_policy_id", "TEXT"),
-    ]
-    for col_name, col_type in idiom_new_columns:
-        try:
-            conn.execute(f"ALTER TABLE idiom_candidates ADD COLUMN {col_name} {col_type};")
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" in str(e).lower():
-                pass
-            else:
-                raise
-
-    try:
-        conn.execute(
-            "ALTER TABLE translation_checkpoints ADD COLUMN packet_version_hash "
-            "TEXT NOT NULL DEFAULT ''"
-        )
-    except sqlite3.OperationalError as e:
-        if "duplicate column name" in str(e).lower():
-            pass
-        else:
-            raise
 
     conn.commit()
 
