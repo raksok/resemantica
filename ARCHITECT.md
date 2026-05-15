@@ -37,7 +37,7 @@ The system is intentionally a structured pipeline with precomputed memory assets
 - Three model roles with these defaults:
   - `translator_name` = `HY-MT1.5-7B` — dedicated CN→EN translation model (Pass 1, glossary candidate translation)
   - `analyst_name` = `Qwen3.5-9B-GLM5.1` — general-purpose model for preprocessing, analysis, editing (Pass 2, Pass 3, summaries, idioms, entity extraction)
-  - `embedding_name` = `bge-M3` — embedding model for fuzzy alias and epithet retrieval
+  - `embedding_name` = `BAAI/bge-m3` — embedding model for fuzzy alias and epithet retrieval
 - Sequential execution is the required baseline
 
 ## Non-Goals

@@ -38,6 +38,7 @@ mlruns/
 tmp/
 temp/
 cache/
+embedding/
 resemantica-pilot.toml
 rp.toml
 tests/test_epub/

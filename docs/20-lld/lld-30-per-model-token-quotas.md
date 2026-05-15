@@ -22,7 +22,7 @@ translator_max_context_ratio = 0.75        # optional, default 0.75
 analyst_name = "Qwen3.5-9B-GLM5.1"
 analyst_context_window = 240000            # optional
 analyst_max_context_ratio = 0.75           # optional
-embedding_name = "bge-M3"
+embedding_name = "BAAI/bge-m3"
 ```
 
 Derivation when both per-model fields are set:
@@ -44,7 +44,7 @@ class ModelsConfig:
     analyst_name: str = "Qwen3.5-9B-GLM5.1"
     analyst_context_window: int | None = None
     analyst_max_context_ratio: float | None = None
-    embedding_name: str = "bge-M3"
+    embedding_name: str = "BAAI/bge-m3"
 ```
 
 New `.toml` parsing in `load_config()`:

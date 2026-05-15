@@ -216,7 +216,7 @@ Each `description=` is a single paragraph explaining what the command does. No m
 |---|---|
 | `extract` | "Entry point for a new release. Unpacks a source EPUB into structured chapters, placeholder maps, and a validation report. Produces a lossless reconstructed EPUB to confirm round-trip fidelity." |
 | `translate` | "Two-pass translation of one or more chapters. Pass 1 (translator model) produces a draft English translation preserving all placeholders. Pass 2 (analyst model) performs a structured fidelity check, correcting omissions and terminology violations." |
-| `glossary-discover` | "Scans extracted chapters for Chinese terms not in the locked glossary. Applies deterministic filters and BGE-M3 embedding critic. Writes candidates.json with frequency counts and context snippets." |
+| `glossary-discover` | "Scans extracted chapters for Chinese terms not in the locked glossary. Applies deterministic filters and BAAI/bge-m3 embedding critic. Writes candidates.json with frequency counts and context snippets." |
 | etc. | All 21 commands follow the same pattern — one paragraph, no verbosity. |
 
 ### Affected Files

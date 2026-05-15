@@ -522,7 +522,7 @@ Purpose: Display current configuration, model info, and budget values. Read-only
 │  ...     │  Models                                           │
 │          │    translator    HY-MT1.5-7B                      │
 │          │    analyst       Qwen3.5-9B-GLM5.1                │
-│          │    embedding     bge-M3                           │
+│          │    embedding     BAAI/bge-m3                      │
 │          │                                                   │
 │          │  LLM                                              │
 │          │    base_url      http://localhost:8080             │

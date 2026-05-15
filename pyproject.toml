@@ -11,6 +11,7 @@ requires-python = ">=3.13"
 dependencies = [
     "ebooklib>=0.18",
     "hanlp>=2.1",
+    "huggingface-hub>=0.36.2",
     "ladybug>=0.15.3",
     "loguru>=0.7.3",
     "lxml>=5.3",

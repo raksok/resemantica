@@ -6,19 +6,23 @@ from typing import Any
 import numpy as np
 from loguru import logger
 
+from resemantica.embedding_models import resolve_embedding_model_path
 from resemantica.glossary.models import AliasCluster, GlossaryCandidate, LockedGlossaryEntry
 
 _cached_model: Any = None
+_cached_model_key: str | None = None
 
 
 def _get_model(model_name: str) -> Any:
-    global _cached_model
-    if _cached_model is not None:
+    global _cached_model, _cached_model_key
+    if _cached_model is not None and _cached_model_key == model_name:
         return _cached_model
-    logger.info("Loading sentence-transformers model '{}' for alias clustering...", model_name)
-    from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
-    _cached_model = SentenceTransformer(model_name)
+    resolved_model = resolve_embedding_model_path(model_name)
+    logger.info("Loading sentence-transformers model '{}' for alias clustering...", resolved_model)
+    from sentence_transformers import SentenceTransformer
+    _cached_model = SentenceTransformer(str(resolved_model))
     _cached_model.encode("x")  # warm up
+    _cached_model_key = model_name
     logger.info("Embedding model loaded successfully.")
     return _cached_model
 
@@ -67,6 +71,9 @@ def deduplicate_and_cluster(
         model = _get_model(model_name)
     except ImportError:
         logger.warning("sentence-transformers not installed, skipping alias clustering")
+        return candidates, []
+    except Exception as exc:
+        logger.warning("Embedding model unavailable ({}), skipping alias clustering", exc)
         return candidates, []
 
     to_cluster = [c for c in candidates if c.candidate_status == "discovered" or c.candidate_status == "translated"]

@@ -1,4 +1,3 @@
-
 import numpy as np
 
 from resemantica.glossary.critic import deduplicate_and_cluster
@@ -129,3 +128,26 @@ def test_deduplicate_against_existing(monkeypatch):
     assert len(clusters) == 0
     assert c1.candidate_status == "pruned"
     assert "already_exists:lex_liming" in c1.conflict_reason
+
+
+def test_deduplicate_fail_open_when_embedding_model_load_fails(monkeypatch):
+    import resemantica.glossary.critic as critic
+
+    def failing_get_model(model_name: str):
+        raise RuntimeError(f"could not load {model_name}")
+
+    monkeypatch.setattr(critic, "_get_model", failing_get_model)
+    c1 = _make_candidate("c1", "李明", 0.9)
+    c2 = _make_candidate("c2", "老李明", 0.5)
+    candidates = [c1, c2]
+
+    processed, clusters = deduplicate_and_cluster(
+        candidates,
+        model_name="BAAI/bge-m3",
+        similarity_threshold=0.85,
+    )
+
+    assert processed == candidates
+    assert clusters == []
+    assert c1.candidate_status == "discovered"
+    assert c2.candidate_status == "discovered"

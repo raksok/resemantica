@@ -1253,6 +1253,7 @@ source = { editable = "." }
 dependencies = [
     { name = "ebooklib" },
     { name = "hanlp" },
+    { name = "huggingface-hub" },
     { name = "ladybug" },
     { name = "loguru" },
     { name = "lxml" },
@@ -1283,6 +1284,7 @@ dev = [
 requires-dist = [
     { name = "ebooklib", specifier = ">=0.18" },
     { name = "hanlp", specifier = ">=2.1" },
+    { name = "huggingface-hub", specifier = ">=0.36.2" },
     { name = "ladybug", specifier = ">=0.15.3" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "lxml", specifier = ">=5.3" },

@@ -91,7 +91,7 @@ translator_max_context_ratio = 0.75
 analyst_name = "Qwen3.5-9B-GLM5.1"
 analyst_context_window = 240000
 analyst_max_context_ratio = 0.75
-embedding_name = "bge-M3"
+embedding_name = "BAAI/bge-m3"
 ```
 
 Both `_context_window` and `_max_context_ratio` per model are optional. `_max_context_ratio` defaults to 0.75. `_context_window` defaults to `None` (use `[llm] context_window`).

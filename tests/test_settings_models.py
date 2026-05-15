@@ -115,6 +115,20 @@ class TestPreprocessTranslatorNames:
         assert config.models.effective_preprocess_translator_names() == ["model-a"]
 
 
+class TestEmbeddingModelConfig:
+    def test_default_embedding_model_uses_canonical_huggingface_id(self) -> None:
+        config = AppConfig()
+
+        assert config.models.embedding_name == "BAAI/bge-m3"
+
+    def test_checked_in_config_uses_canonical_huggingface_id(self) -> None:
+        config_path = Path(__file__).resolve().parents[1] / "resemantica.toml"
+
+        config = load_config(config_path)
+
+        assert config.models.embedding_name == "BAAI/bge-m3"
+
+
 class TestDerivedPaths:
     def test_release_stores_are_release_scoped(self, tmp_path: Path) -> None:
         config = AppConfig()

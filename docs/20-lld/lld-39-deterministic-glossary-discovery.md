@@ -2,14 +2,14 @@
 
 ## Summary
 
-Replace the LLM-first glossary candidate discovery in `glossary/discovery.py` with a deterministic NLP-first pipeline. HanLP provides Chinese word segmentation, POS tagging, and NER. Corpus-level statistics (TF-IDF, C-value) score candidates. Heuristic classifiers assign type priors. A deterministic prefilter rejects noise. The LLM role shifts from discoverer to batch evaluator — it judges a pre-screened candidate set instead of generating one from raw text. Embedding-based deduplication replaces the BGE-M3 common-word critic.
+Replace the LLM-first glossary candidate discovery in `glossary/discovery.py` with a deterministic NLP-first pipeline. HanLP provides Chinese word segmentation, POS tagging, and NER. Corpus-level statistics (TF-IDF, C-value) score candidates. Heuristic classifiers assign type priors. A deterministic prefilter rejects noise. The LLM role shifts from discoverer to batch evaluator — it judges a pre-screened candidate set instead of generating one from raw text. Embedding-based deduplication replaces the `BAAI/bge-m3` common-word critic.
 
 ## Current State
 
 ```
 [LLM discovery]         → analyst_name reads chapter text, emits JSON term list
 [Deterministic filter]  → date patterns, stoplist (validators.py)
-[BGE-M3 critic]         → cosine similarity pruning against common-word ref vocab
+[`BAAI/bge-m3` critic]  → cosine similarity pruning against common-word ref vocab
 [DB upsert]             → glossary_candidates table + candidates.json artifact
 ```
 
@@ -46,7 +46,7 @@ Key problems:
   Evidence snippets required per candidate
        ↓
 [Stage 5: Embedding dedup / alias clustering]
-  Embed candidates + context with embedding_name (configurable, default bge-M3)
+  Embed candidates + context with embedding_name (configurable, default `BAAI/bge-m3`)
   Cluster near-duplicates (segmentation variants, aliases)
   Compare against existing locked glossary
   Flag uncertain clusters for review
@@ -304,7 +304,7 @@ Loaded once at pipeline init via `importlib.resources` or `pathlib` relative to 
 
 ### Rewritten `glossary/critic.py`
 
-The BGE-M3 common-word critic is replaced with embedding-based deduplication and alias clustering.
+The `BAAI/bge-m3` common-word critic is replaced with embedding-based deduplication and alias clustering.
 
 ```python
 @dataclass(slots=True)
@@ -335,7 +335,7 @@ def deduplicate_and_cluster(
     """
 ```
 
-Model: uses `config.models.embedding_name` (default `bge-M3`, same as current). The embedding model is configurable — if upgraded to a larger model later, only config changes.
+Model: uses `config.models.embedding_name` (default `BAAI/bge-m3`). The embedding model is configurable — if upgraded to a larger model later, only config changes.
 
 ### Extended `GlossaryCandidate` model
 

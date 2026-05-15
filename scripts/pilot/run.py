@@ -20,7 +20,6 @@ from resemantica.translation.pipeline import (
     translate_chapter_pass3,
 )
 
-
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "div", "li", "td", "table"}
 
 
@@ -98,7 +97,7 @@ def _build_chapter_xhtml_map(
     unpacked_dir: Path,
     chapter_map: dict[int, str],
 ) -> dict[int, list[dict]]:
-    """For each chapter, build a list of {block_id, source_text_zh, xhtml_idx} mapping blocks to XHTML element positions."""
+    """Map chapter blocks to their XHTML element positions."""
     result: dict[int, list[dict]] = {}
     for ch_num, href in chapter_map.items():
         xhtml_path = unpacked_dir / href

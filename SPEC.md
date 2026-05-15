@@ -139,7 +139,7 @@ Default config assignments:
 
 - **`translator_name`** = `HY-MT1.5-7B`
 - **`analyst_name`** = `Qwen3.5-9B-GLM5.1`
-- **`embedding_name`** = `bge-M3`
+- **`embedding_name`** = `BAAI/bge-m3`
 
 ### 5.3 Core stack
 

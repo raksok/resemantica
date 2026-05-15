@@ -16,7 +16,7 @@ analyst_name = "Qwen3.5-9B-GLM5.1"
 # analyst_context_window = 240000
 # analyst_max_context_ratio = 0.75
 eval_name = "Qwen3.5-9B-NonThinking-unsloth"
-embedding_name = "bge-M3"
+embedding_name = "BAAI/bge-m3"
 pruning_threshold = 0.3
 
 [paths]

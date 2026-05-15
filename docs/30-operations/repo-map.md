@@ -6,17 +6,21 @@ Current top-level files:
 
 - `SPEC.md`, `ARCHITECT.md`, `DATA_CONTRACT.md`, `IMPLEMENTATION_PLAN.md`: project contracts and milestone plan
 - `docs/`: implementation-facing documentation suite
+- `embedding/`: ignored local embedding model cache populated at runtime or by `scripts/download_embedding_model.py`
 - `src/resemantica/`: active package root for milestone implementation
-- `tests/`: milestone test suites (`epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/`, `orchestration/`)
+- `scripts/`: operator utility scripts
+- `tests/`: milestone test suites (`db/`, `epub/`, `translation/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/`, `orchestration/`)
 - `pyproject.toml`: Python project metadata
 
 Implemented package layout (M1 slice):
 
 - `src/resemantica/cli.py`: CLI entrypoint, command router, and Rich result summaries that preserve key/value output
 - `src/resemantica/cli_progress.py`: CLI Rich live progress subscriber with start/elapsed time, counters, and log panel
+- `src/resemantica/embedding_models.py`: project-local Hugging Face embedding model cache resolution and download helper
 - `src/resemantica/settings.py`: config loading and release-scoped path derivation for artifacts, SQLite, and LadybugDB
 - `src/resemantica/epub/`: EPUB extractor, parser, placeholders, validators, and rebuild; rebuild consumes existing translated artifacts even for non-story chapters
 - `src/resemantica/db/sqlite.py`: SQLite connection helpers and the inline application schema source of truth
+- `tests/db/`: SQLite schema creation tests and source guard for inline-schema-only behavior
 
 Implemented package layout (M2 slice):
 

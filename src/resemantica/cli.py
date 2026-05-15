@@ -377,7 +377,7 @@ graph building. Run individual subcommands or as part of 'run production'.""",
         help="Discover glossary candidates from extracted chapters.",
         description="""\
 Scans extracted chapters for Chinese terms not in the locked glossary.
-Applies deterministic filters and BGE-M3 embedding critic. Writes
+Applies deterministic filters and BAAI/bge-m3 embedding critic. Writes
 candidates.json with frequency counts and context snippets.""",
     )
     _add_common_release_args(glossary_discover, default_run="glossary-discover")

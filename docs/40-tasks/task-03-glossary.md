@@ -16,7 +16,7 @@ In:
 - SQLite glossary repositories
 - discovery and promotion commands
 - deterministic conflict handling
-- content-based pruning (BGE-M3 embedding critic)
+- content-based pruning (`BAAI/bge-m3` embedding critic)
 - human-override review workflow
 
 Out:
@@ -42,7 +42,7 @@ Out:
 - promotion transaction test
 - duplicate/conflict test
 - deterministic filter catches date patterns and stop-list terms
-- BGE-M3 critic scores are stored and do not block translation at threshold=0
+- `BAAI/bge-m3` critic scores are stored and do not block translation at threshold=0
 
 Execution status:
 
@@ -73,9 +73,9 @@ Three-tier approach to reduce LLM false-positive glossary terms:
 - Added concrete negative examples showing what NOT to pick
 - Bumped prompt version to v2.0 (invalidates LLM response cache)
 
-**Tier 3 — BGE-M3 embedding critic** (`glossary/critic.py`):
+**Tier 3 — BAAI/bge-m3 embedding critic** (`glossary/critic.py`):
 - Loads a reference vocabulary of ~100 common Chinese words
-- Embeds each candidate term with BGE-M3 via `sentence-transformers`
+- Embeds each candidate term with `BAAI/bge-m3` via `sentence-transformers`
 - Scores by cosine similarity to nearest reference word (1.0 = maximally unlike common vocab)
 - Prunes candidates below `pruning_threshold` (default 0.3, set to 0 for eval-only)
 - Score stored in `glossary_candidates.critic_score` for audit and threshold tuning

@@ -8,7 +8,7 @@
 
 Build the glossary system as the first authority store after extraction. Discovery and candidate translation remain working state; explicit validation and promotion create locked glossary entries.
 
-Post-MVP additions: deterministic candidate filtering, BGE-M3 embedding-based critic for semantic pruning, and a human-override review workflow.
+Post-MVP additions: deterministic candidate filtering, `BAAI/bge-m3` embedding-based critic for semantic pruning, and a human-override review workflow.
 
 ## Public Interfaces
 
@@ -24,7 +24,7 @@ Python modules:
 - `db.glossary_repo`
 - `llm.client.translate_glossary_candidate()`
 - `glossary.validators` — normalization, conflict detection, deterministic filtering
-- `glossary.critic` — BGE-M3 embedding-based candidate pruning
+- `glossary.critic` — `BAAI/bge-m3` embedding-based candidate pruning
 
 SQLite datasets:
 
@@ -37,7 +37,7 @@ SQLite datasets:
 1. Read extracted chapter text.
 2. Discover candidate terms with evidence and chapter ranges.
 3. **Deterministic filter** — remove calendar dates, common non-setting terms via patterns and stop-list. Flagged entries get `candidate_status = "filtered"` and skip translation.
-4. **BGE-M3 embedding critic** — score each remaining candidate by cosine similarity to a reference vocabulary of common Chinese words. Entries below `pruning_threshold` get `candidate_status = "pruned"` and skip translation. Score stored in `critic_score`.
+4. **`BAAI/bge-m3` embedding critic** — score each remaining candidate by cosine similarity to a reference vocabulary of common Chinese words. Entries below `pruning_threshold` get `candidate_status = "pruned"` and skip translation. Score stored in `critic_score`.
 5. Persist remaining candidates to working state.
 6. Translate candidates to provisional English renderings.
 7. **Optional human review** — `glossary-review` writes translated candidates to JSON and CSV review files. User edits translations, marks entries for deletion, or adds new entries. `glossary-promote --review-file` reads the edited file.
@@ -48,7 +48,7 @@ SQLite datasets:
 
 ```
 discovered → filtered     (deterministic filter — date/stop-list match)
-          → pruned        (BGE-M3 critic — score below threshold)
+          → pruned        (`BAAI/bge-m3` critic — score below threshold)
           → translated    (survived all filters, LLM translation succeeded)
           → conflict      (failed deterministic validation during promotion)
           → promoted      (locked glossary)
@@ -67,7 +67,7 @@ Candidate:
 - `evidence_snippet`
 - `candidate_translation_en`
 - `validation_status`
-- `critic_score` (nullable REAL — BGE-M3 similarity score, lower means more like common vocab)
+- `critic_score` (nullable REAL — `BAAI/bge-m3` similarity score, lower means more like common vocab)
 
 Locked glossary entry:
 
@@ -90,7 +90,7 @@ Locked glossary entry:
 - Generic nouns: `乡塾`, `学校`, `时候`, `时间`, `地方`, `家里`, `面前`, `身后`
 - Temporal/discourse: `这时`, `那时`, `突然`, `虽然`, `但是`, `因为`, `所以`
 
-## BGE-M3 Embedding Critic (`glossary/critic.py`)
+## BAAI/bge-m3 Embedding Critic (`glossary/critic.py`)
 
 ### Scoring Method
 
@@ -119,7 +119,7 @@ A nearest-neighbor classifier in embedding space:
 ### Evaluation Workflow
 
 1. Run `glossary-discover --pruning-threshold 0` on a full release
-2. BGE-M3 scores every candidate but prunes nothing
+2. `BAAI/bge-m3` scores every candidate but prunes nothing
 3. Scores stored in `glossary_candidates.critic_score`
 4. After manual review, export labeled data and find optimal threshold via precision/recall
 
@@ -198,7 +198,7 @@ Without `--review-file`, behavior is identical to the original MVP flow.
 - duplicate detection and conflict recording
 - exact glossary match precedence over future fuzzy sources
 - deterministic filter catches date patterns and stop-list terms
-- BGE-M3 critic stores scores without blocking at threshold=0
+- `BAAI/bge-m3` critic stores scores without blocking at threshold=0
 
 ## Out Of Scope
 

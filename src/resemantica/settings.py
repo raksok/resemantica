@@ -15,7 +15,7 @@ class ModelsConfig:
     analyst_context_window: int | None = None
     analyst_max_context_ratio: float | None = None
     eval_name: str = "Qwen3.5-9B-GLM5.1"
-    embedding_name: str = "bge-M3"
+    embedding_name: str = "BAAI/bge-m3"
     pruning_threshold: float = 0.3
 
     def effective_preprocess_translator_names(self) -> list[str]:
