@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import asdict, dataclass
 from hashlib import sha256
-from typing import Any
+from typing import Any, Literal
 
 from resemantica.db.sqlite import ensure_schema
 from resemantica.utils import _canonical_json
@@ -75,6 +75,26 @@ class DerivedSummaryEnRecord:
 
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+ChapterStoryFlagAction = Literal[
+    "updated_existing",
+    "created_non_story",
+    "confirmed_default_story",
+    "missing_chapter_source_hash",
+]
+
+
+@dataclass(slots=True)
+class ChapterStoryFlagResult:
+    action: ChapterStoryFlagAction
+    release_id: str
+    chapter_number: int
+    is_story: bool
+
+    @property
+    def success(self) -> bool:
+        return self.action != "missing_chapter_source_hash"
 
 
 def save_summary_draft(
@@ -484,22 +504,92 @@ def set_chapter_story_flag(
     release_id: str,
     chapter_number: int,
     is_story: bool,
-) -> bool:
+    chapter_source_hash: str | None = None,
+    run_id: str = "manual-set-chapter-flag",
+) -> ChapterStoryFlagResult:
     validation_status = "non_story_chapter" if not is_story else "pending"
     is_story_int = 1 if is_story else 0
-    cursor = conn.execute(
-        """
-        UPDATE summary_drafts
-        SET is_story_chapter = ?,
-            validation_status = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE release_id = ?
-          AND chapter_number = ?
-          AND summary_type = 'chapter_summary_zh_structured'
-        """,
-        (is_story_int, validation_status, release_id, chapter_number),
+    with conn:
+        cursor = conn.execute(
+            """
+            UPDATE summary_drafts
+            SET is_story_chapter = ?,
+                validation_status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE release_id = ?
+              AND chapter_number = ?
+              AND summary_type = 'chapter_summary_zh_structured'
+            """,
+            (is_story_int, validation_status, release_id, chapter_number),
+        )
+    if cursor.rowcount > 0:
+        return ChapterStoryFlagResult(
+            action="updated_existing",
+            release_id=release_id,
+            chapter_number=chapter_number,
+            is_story=is_story,
+        )
+    if is_story:
+        return ChapterStoryFlagResult(
+            action="confirmed_default_story",
+            release_id=release_id,
+            chapter_number=chapter_number,
+            is_story=True,
+        )
+    if chapter_source_hash:
+        return seed_chapter_non_story_flag(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            chapter_source_hash=chapter_source_hash,
+            run_id=run_id,
+        )
+    return ChapterStoryFlagResult(
+        action="missing_chapter_source_hash",
+        release_id=release_id,
+        chapter_number=chapter_number,
+        is_story=False,
     )
-    return cursor.rowcount > 0
+
+
+def seed_chapter_non_story_flag(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+    run_id: str = "manual-set-chapter-flag",
+) -> ChapterStoryFlagResult:
+    content = {
+        "chapter_number": chapter_number,
+        "characters_mentioned": [],
+        "key_events": [],
+        "new_terms": [],
+        "relationships_changed": [],
+        "setting": "",
+        "tone": "",
+        "narrative_progression": "Non-story chapter manually flagged.",
+        "is_story_chapter": False,
+    }
+    save_summary_draft(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
+        summary_type="chapter_summary_zh_structured",
+        content=content,
+        chapter_source_hash=chapter_source_hash,
+        model_name="manual",
+        prompt_version="manual",
+        run_id=run_id,
+        validation_status="non_story_chapter",
+        is_story_chapter=0,
+    )
+    return ChapterStoryFlagResult(
+        action="created_non_story",
+        release_id=release_id,
+        chapter_number=chapter_number,
+        is_story=False,
+    )
 
 
 def set_summary_checkpoint(

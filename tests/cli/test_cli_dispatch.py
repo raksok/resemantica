@@ -1,7 +1,34 @@
 from __future__ import annotations
 
+import json
+
 from resemantica import cli as cli_mod
 from resemantica.cli import _build_parser, _parse_and_resolve
+from resemantica.db.sqlite import open_connection
+from resemantica.db.summary_repo import ensure_summary_schema
+from resemantica.settings import derive_paths, load_config
+
+
+def _write_extracted_chapter(
+    *,
+    release_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+) -> None:
+    paths = derive_paths(load_config(), release_id=release_id)
+    paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "chapter_id": f"chapter-{chapter_number}",
+        "chapter_number": chapter_number,
+        "source_document_path": f"OEBPS/chapter{chapter_number}.xhtml",
+        "chapter_source_hash": chapter_source_hash,
+        "schema_version": 1,
+        "records": [],
+    }
+    (paths.extracted_chapters_dir / f"chapter-{chapter_number}.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 class TestCliDispatch:
@@ -97,6 +124,67 @@ class TestCliDispatch:
         assert args.command == "set-chapter-flag"
         assert args.chapter == 5
         assert args.is_story is True
+
+    def test_set_chapter_flag_non_story_seeds_from_extraction(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        release_id = "r-scf-seed"
+        _write_extracted_chapter(
+            release_id=release_id,
+            chapter_number=5,
+            chapter_source_hash="hash-ch5",
+        )
+
+        result = cli_mod.main(["scf", "-r", release_id, "-C", "5", "--non-story"])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "created non-story flag from extracted chapter metadata" in out
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        ensure_summary_schema(conn)
+        try:
+            row = conn.execute(
+                "SELECT chapter_source_hash, validation_status, is_story_chapter "
+                "FROM summary_drafts WHERE release_id = ? AND chapter_number = 5",
+                (release_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        assert row["chapter_source_hash"] == "hash-ch5"
+        assert row["validation_status"] == "non_story_chapter"
+        assert int(row["is_story_chapter"]) == 0
+
+    def test_set_chapter_flag_non_story_requires_extraction_metadata(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+
+        result = cli_mod.main(["scf", "-r", "r-missing-extract", "-C", "7", "--non-story"])
+
+        out = capsys.readouterr().out
+        assert result == 1
+        assert "run extract first" in out
+
+    def test_set_chapter_flag_story_before_summaries_is_default_noop(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+
+        result = cli_mod.main(["scf", "-r", "r-scf-story", "-C", "9", "--story"])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "confirmed default story state" in out
+
+        paths = derive_paths(load_config(), release_id="r-scf-story")
+        conn = open_connection(paths.db_path)
+        ensure_summary_schema(conn)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM summary_drafts WHERE release_id = ? AND chapter_number = 9",
+                ("r-scf-story",),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is None
 
     def test_preprocess_subcommands(self):
         parser = _build_parser()

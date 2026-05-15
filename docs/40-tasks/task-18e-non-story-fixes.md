@@ -8,7 +8,7 @@ Fix two bugs in the non-story chapter detection system — dead control flow in 
 In:
 - Restructure `generate_chapter_summary` so the non-story check runs before validation (fixing dead code at lines 312-320 and giving drafts proper `validation_status="non_story_chapter"`).
 - Add a source-text length guardrail (>500 chars) that overrides the LLM's `is_story_chapter: false` classification when the chapter clearly contains narrative content.
-- Add `set_chapter_story_flag()` repo function in `summary_repo.py`.
+- Add `set_chapter_story_flag()` repo function in `summary_repo.py`, including pre-summary non-story flag seeding from extracted chapter metadata.
 - Add `rsem set-chapter-flag` (alias `scf`) top-level CLI command with `--story` / `--non-story` flags.
 - Add author's commentary/afterword to the prompt's non-story category list.
 - Update the integration test for non-story pipeline to verify DB status; add guardrail override test; add repo function test.
@@ -34,12 +34,15 @@ Out:
 ## Tests Or Smoke Checks
 - **Update:** `test_non_story_chapter_pipeline_skipped` — add DB assertion verifying `validation_status="non_story_chapter"`.
 - **New:** `test_guardrail_overrides_non_story` — chapter with >500 chars source text flagged as non-story by LLM; verify pipeline reports `generation_failed` (not `non_story_chapter`).
-- **New:** `test_set_chapter_story_flag` — toggle flag both directions; verify DB state and missing-chapter return value.
+- **New:** `test_set_chapter_story_flag` — toggle flag both directions; verify DB state, default story no-op, missing metadata result, and creation of a pre-summary non-story draft.
+- **New:** CLI coverage — `rsem scf --non-story` succeeds after extraction and fails clearly before extraction; `--story` before summaries succeeds as a default no-op.
+- **New:** Pipeline regression — seed `--non-story` before summaries and verify summary generation skips the chapter without an LLM structured-summary call.
 
 ## Done Criteria
 - `generate_chapter_summary` saves non-story drafts with `validation_status="non_story_chapter"` (not "failed").
 - Chapters with `len(source_text_zh) > 500` incorrectly flagged as non-story are overridden to story, reported as `generation_failed`.
-- `rsem set-chapter-flag -r <id> -C <n> --story/--non-story` updates the database and prints confirmation.
+- `rsem set-chapter-flag -r <id> -C <n> --story/--non-story` updates the database, seeds a non-story flag from extracted metadata when needed, and prints whether it updated, created, or confirmed default state.
+- `rsem set-chapter-flag --non-story` exits nonzero with a "run extract first" message when no extracted chapter metadata exists for a new flag.
 - Prompt lists "Author's commentary, afterword, or end-of-book notes" as a non-story category.
 - All existing and new tests pass.
 - LLD 18e documents the fixes; LLD 18b updated to note the control flow bug fix.

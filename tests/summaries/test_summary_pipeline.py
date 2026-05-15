@@ -1064,9 +1064,10 @@ def test_set_chapter_story_flag(tmp_path: Path, monkeypatch) -> None:
         is_story_chapter=1,
     )
 
-    assert set_chapter_story_flag(
+    result = set_chapter_story_flag(
         conn, release_id=release_id, chapter_number=1, is_story=False,
     )
+    assert result.action == "updated_existing"
     row = conn.execute(
         "SELECT is_story_chapter, validation_status FROM summary_drafts "
         "WHERE release_id = ? AND chapter_number = 1",
@@ -1075,9 +1076,10 @@ def test_set_chapter_story_flag(tmp_path: Path, monkeypatch) -> None:
     assert int(row["is_story_chapter"]) == 0
     assert row["validation_status"] == "non_story_chapter"
 
-    assert set_chapter_story_flag(
+    result = set_chapter_story_flag(
         conn, release_id=release_id, chapter_number=1, is_story=True,
     )
+    assert result.action == "updated_existing"
     row = conn.execute(
         "SELECT is_story_chapter, validation_status FROM summary_drafts "
         "WHERE release_id = ? AND chapter_number = 1",
@@ -1086,10 +1088,116 @@ def test_set_chapter_story_flag(tmp_path: Path, monkeypatch) -> None:
     assert int(row["is_story_chapter"]) == 1
     assert row["validation_status"] == "pending"
 
-    assert not set_chapter_story_flag(
+    result = set_chapter_story_flag(
         conn, release_id=release_id, chapter_number=99, is_story=True,
     )
+    assert result.action == "confirmed_default_story"
+    row = conn.execute(
+        "SELECT 1 FROM summary_drafts WHERE release_id = ? AND chapter_number = 99",
+        (release_id,),
+    ).fetchone()
+    assert row is None
+
+    result = set_chapter_story_flag(
+        conn,
+        release_id=release_id,
+        chapter_number=2,
+        is_story=False,
+        chapter_source_hash="hash-ch2",
+    )
+    assert result.action == "created_non_story"
+    row = conn.execute(
+        "SELECT content_json, chapter_source_hash, is_story_chapter, validation_status "
+        "FROM summary_drafts WHERE release_id = ? AND chapter_number = 2",
+        (release_id,),
+    ).fetchone()
+    assert row is not None
+    assert json.loads(row["content_json"])["is_story_chapter"] is False
+    assert row["chapter_source_hash"] == "hash-ch2"
+    assert int(row["is_story_chapter"]) == 0
+    assert row["validation_status"] == "non_story_chapter"
+
+    result = set_chapter_story_flag(
+        conn, release_id=release_id, chapter_number=3, is_story=False,
+    )
+    assert result.action == "missing_chapter_source_hash"
+    assert not result.success
     conn.close()
+
+
+def test_preseeded_non_story_flag_skips_summary_generation(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m4-preseed-non-story"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="甲在山镇出现。",
+        chapter_source_hash="hash-ch1",
+    )
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=2,
+        source_text="版权所有。未经许可，不得转载。",
+        chapter_source_hash="hash-ch2",
+    )
+
+    from resemantica.db.summary_repo import set_chapter_story_flag
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        result = set_chapter_story_flag(
+            conn,
+            release_id=release_id,
+            chapter_number=2,
+            is_story=False,
+            chapter_source_hash="hash-ch2",
+        )
+        assert result.action == "created_non_story"
+    finally:
+        conn.close()
+
+    structured_calls: list[int] = []
+
+    class RecordingSummaryLLM(ScriptedSummaryLLM):
+        def generate_text(self, *, model_name: str, prompt: str) -> str:
+            if "SUMMARY_ZH_STRUCTURED" in prompt:
+                chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+                if chapter_match is None:
+                    raise RuntimeError("chapter number missing from prompt")
+                structured_calls.append(int(chapter_match.group(1)))
+            return super().generate_text(model_name=model_name, prompt=prompt)
+
+    llm = RecordingSummaryLLM(
+        {
+            1: {
+                "chapter_number": 1,
+                "characters_mentioned": ["甲"],
+                "key_events": ["甲出场"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山镇",
+                "tone": "quiet",
+                "narrative_progression": "甲在山镇出现。",
+                "is_story_chapter": True,
+            }
+        }
+    )
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 1
+    assert structured_calls == [1]
+    skipped = [r for r in result["chapter_artifacts"] if r.get("status") == "skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["chapter_number"] == 2
+    assert skipped[0]["reason"] == "non_story_chapter"
 
 
 def test_summary_checkpoint_read_write(tmp_path: Path, monkeypatch) -> None:

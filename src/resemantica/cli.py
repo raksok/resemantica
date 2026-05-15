@@ -590,7 +590,9 @@ persistence.""",
 Override the LLM's is_story_chapter classification for a specific chapter.
 Use --story to mark a chapter as narrative content (e.g. when the LLM
 mistakenly flagged a real story chapter as non-story). Use --non-story to
-mark a chapter as non-narrative (e.g. author's commentary, afterword).""",
+mark a chapter as non-narrative (e.g. author's commentary, afterword).
+Creating a new non-story flag requires extracted chapter metadata from
+the extract stage.""",
     )
     set_chapter_flag.add_argument(
         "-r", "--release", required=True,
@@ -1160,21 +1162,45 @@ def main(argv: list[str] | None = None) -> int:
         from resemantica.db.summary_repo import set_chapter_story_flag
         from resemantica.settings import derive_paths
         paths = derive_paths(config, release_id=args.release)
+        chapter_path = paths.extracted_chapters_dir / f"chapter-{args.chapter}.json"
+        chapter_source_hash = None
+        if chapter_path.exists():
+            import json as _json
+
+            try:
+                chapter_payload = _json.loads(chapter_path.read_text(encoding="utf-8"))
+            except _json.JSONDecodeError:
+                chapter_payload = {}
+            if isinstance(chapter_payload, dict):
+                raw_hash = chapter_payload.get("chapter_source_hash")
+                if isinstance(raw_hash, str) and raw_hash.strip():
+                    chapter_source_hash = raw_hash.strip()
+
         conn = open_connection(paths.db_path)
-        ensure_schema(conn, "summaries")
-        updated = set_chapter_story_flag(
-            conn,
-            release_id=args.release,
-            chapter_number=args.chapter,
-            is_story=args.is_story,
-        )
-        conn.commit()
-        conn.close()
+        try:
+            ensure_schema(conn, "summaries")
+            result = set_chapter_story_flag(
+                conn,
+                release_id=args.release,
+                chapter_number=args.chapter,
+                is_story=args.is_story,
+                chapter_source_hash=chapter_source_hash,
+            )
+        finally:
+            conn.close()
+
         label = "story" if args.is_story else "non-story"
-        if updated:
-            print(f"Chapter {args.chapter}: is_story_chapter set to {label}")
+        if result.action == "updated_existing":
+            print(f"Chapter {args.chapter}: updated existing summary draft flag to {label}")
+        elif result.action == "created_non_story":
+            print(f"Chapter {args.chapter}: created non-story flag from extracted chapter metadata")
+        elif result.action == "confirmed_default_story":
+            print(f"Chapter {args.chapter}: confirmed default story state; no summary draft was created")
         else:
-            print(f"Chapter {args.chapter}: no existing draft found to update")
+            print(
+                f"Chapter {args.chapter}: extracted chapter metadata not found; "
+                "run extract first before creating a non-story flag"
+            )
             return 1
         return 0
 

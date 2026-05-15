@@ -4,7 +4,7 @@
 Three fixes for the non-story chapter detection system:
 1. Fix dead control flow in `generate_chapter_summary` that prevented non-story chapters from receiving the correct `validation_status`.
 2. Add a source-text length guardrail to catch LLM hallucination of `is_story_chapter: false` for real narrative chapters.
-3. Add a `set-chapter-flag` CLI command for manual override when the guardrail misses an edge case.
+3. Add a `set-chapter-flag` CLI command for manual override when the guardrail misses an edge case. After extraction, `--non-story` can seed the required summary draft flag before summaries run.
 
 ## Problem Statement
 
@@ -100,7 +100,9 @@ Updates the `summary_drafts` table:
 - `validation_status` = `"pending"` (story) or `"non_story_chapter"` (non-story)
 - `updated_at` = current timestamp
 
-Returns `True` if a row was updated, `False` if no draft exists.
+If a structured summary draft already exists, the command updates that row. If no draft exists and `--non-story` is requested, the command creates a minimal `chapter_summary_zh_structured` draft from `extracted/chapters/chapter-N.json` using its `chapter_source_hash`. If no draft exists and `--story` is requested, the command succeeds without creating a row because story is the default state.
+
+Creating a new non-story flag requires extraction metadata. If `extracted/chapters/chapter-N.json` is missing or lacks `chapter_source_hash`, the CLI exits nonzero with a "run extract first" message.
 
 **CLI registration** as a top-level command:
 
@@ -113,6 +115,7 @@ Alias: `scf`
 Two use cases:
 - `--story`: Fix a story chapter that the LLM (or guardrail) misclassified as non-story. Sets `is_story_chapter=1`, `validation_status="pending"`. Re-running the summaries pipeline will attempt regeneration.
 - `--non-story`: Fix a non-story chapter (e.g., author's commentary, afterword) that was misclassified as story. Sets `is_story_chapter=0`, `validation_status="non_story_chapter"`. Downstream pipelines will skip it.
+- `--non-story` after extraction but before summaries: seeds the flag row so summaries, idioms, graph, packets, and rebuild skip the chapter from the start.
 
 ## Data Flow (Corrected)
 
