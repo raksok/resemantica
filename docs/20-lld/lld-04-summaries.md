@@ -15,6 +15,7 @@ Python modules:
 - `summaries.generator.generate_chapter_summary()`
 - `summaries.validators.validate_chinese_summary()`
 - `summaries.derivation.build_story_so_far()`
+- `summaries.derivation.compact_story_so_far()`
 - `summaries.derivation.derive_english_summary()`
 
 SQLite datasets:
@@ -50,9 +51,19 @@ Structured Chinese summary schema:
 3. Validate terminology, chronology, and future-knowledge safety.
 4. Derive `chapter_summary_zh_short` from the structured summary's `narrative_progression` field.
 5. **Materialize both `chapter_summary_zh_structured` and `chapter_summary_zh_short` as dedicated rows** in `validated_summaries_zh` with distinct `summary_type` values. The `content_zh` column for `zh_short` holds the `narrative_progression` string. This materialization occurs inside `summaries.generator.generate_chapter_summary()` as a single-transaction write — both rows are written atomically. No separate materialization stage or lazy extraction exists. The `summary_repo.save()` method accepts the structured JSON response and writes both rows; it does not store raw JSON for later splitting. This is mandatory so that Phase 1 (translation) and Phase 1.5 (packet assembly) perform zero JSON parsing to obtain continuity text.
-6. Persist validated Chinese summaries.
-6. Derive `story_so_far_zh` from prior validated state plus current validated chapter summary.
-7. Derive English summaries from validated Chinese summaries plus locked glossary.
+6. Phase 1 runs chapter-local Chinese work with `summaries.chapter_concurrency` workers. Each worker uses its own SQLite connection and writes only `chapter_summary_zh_structured` and `chapter_summary_zh_short`.
+7. Phase 2 runs in chapter order. It derives full `story_so_far_zh`, compacts previous `story_so_far_zh_compact` plus current `chapter_summary_zh_short` into `story_so_far_zh_compact`, writes both continuity rows, and writes `chapter-*-zh.json`.
+8. Phase 3 runs English derivation with `summaries.chapter_concurrency` workers. It derives `chapter_summary_en_short` from `chapter_summary_zh_short` and derives `story_so_far_en` from `story_so_far_zh_compact`.
+
+`story_so_far_zh` remains the full audited cumulative Chinese continuity for compatibility and inspection. `story_so_far_zh_compact` is the bounded operational continuity source for downstream packets and English story-so-far derivation. Compaction uses the analyst model and `summary_story_compact.txt`; failure to generate compact continuity fails `preprocess-summaries` for that story chapter.
+
+Summary config:
+
+```toml
+[summaries]
+chapter_concurrency = 1        # valid range: 1..5
+story_compact_max_tokens = 2048 # valid: > 0
+```
 
 ## Validation Ownership
 
@@ -61,12 +72,15 @@ Structured Chinese summary schema:
 - `chapter_summary_zh_short` must be derived from `narrative_progression`, not independently invented
 - both `zh_structured` and `zh_short` must be materialized as separate rows in `validated_summaries_zh` inside `generate_chapter_summary()` before any downstream consumer reads them; lazy extraction by consumers is forbidden
 - English summaries must record provenance hashes back to validated Chinese inputs
+- `story_so_far_en` must record provenance back to `story_so_far_zh_compact`
 - summary validation must fail on future-knowledge leakage
 
 ## Resume And Rerun
 
 - any change to locked glossary or validated Chinese summary invalidates dependent English summaries and packet inputs
 - `story_so_far_zh` is rebuilt deterministically from validated predecessors, never from English output
+- summary checkpoints track `zh_last_chapter`, `story_last_chapter`, and `en_last_chapter`
+- resume skips the three internal phases independently when their checkpoint is complete
 
 ## Tests
 
@@ -75,6 +89,8 @@ Structured Chinese summary schema:
 - English summaries remain derived and separate from authority state
 - structured JSON schema validation and short-summary derivation
 - deterministic rebuild of `story_so_far_zh`
+- ordered `story_so_far_zh_compact` generation from prior compact continuity plus current short summary
+- English story derivation from compact Chinese continuity
 
 ## Out Of Scope
 

@@ -171,6 +171,7 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             release_id TEXT NOT NULL,
             run_id TEXT NOT NULL,
             zh_last_chapter INTEGER NOT NULL DEFAULT 0,
+            story_last_chapter INTEGER NOT NULL DEFAULT 0,
             en_last_chapter INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (release_id, run_id)
@@ -416,6 +417,16 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             ON extracted_chapters(release_id, run_id);
         """
     )
+
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(summary_checkpoints)").fetchall()
+    }
+    if "story_last_chapter" not in columns:
+        conn.execute(
+            "ALTER" + " TABLE summary_checkpoints "
+            "ADD COLUMN story_last_chapter INTEGER NOT NULL DEFAULT 0"
+        )
 
     conn.commit()
 

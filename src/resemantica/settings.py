@@ -88,6 +88,8 @@ class TranslationConfig:
 @dataclass(slots=True)
 class SummariesConfig:
     exclude_chapter_patterns: list[str] = field(default_factory=list)
+    chapter_concurrency: int = 1
+    story_compact_max_tokens: int = 2048
 
 
 @dataclass(slots=True)
@@ -359,6 +361,20 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 ),
                 "summaries.exclude_chapter_patterns",
             ),
+            chapter_concurrency=_as_int(
+                summaries.get(
+                    "chapter_concurrency",
+                    SummariesConfig().chapter_concurrency,
+                ),
+                "summaries.chapter_concurrency",
+            ),
+            story_compact_max_tokens=_as_int(
+                summaries.get(
+                    "story_compact_max_tokens",
+                    SummariesConfig().story_compact_max_tokens,
+                ),
+                "summaries.story_compact_max_tokens",
+            ),
         ),
         events=EventsConfig(
             persistence_mode=_as_str(
@@ -437,6 +453,10 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
     if config.translation.pass2_concurrency < 1:
         raise ValueError("translation.pass2_concurrency must be >= 1.")
+    if config.summaries.chapter_concurrency < 1 or config.summaries.chapter_concurrency > 5:
+        raise ValueError("summaries.chapter_concurrency must be in [1, 5].")
+    if config.summaries.story_compact_max_tokens <= 0:
+        raise ValueError("summaries.story_compact_max_tokens must be > 0.")
     if config.models.pruning_threshold < 0 or config.models.pruning_threshold > 1:
         raise ValueError("models.pruning_threshold must be in [0.0, 1.0].")
     if config.events.progress_sample_every <= 0:

@@ -1,0 +1,16 @@
+# version: 1.0
+SUMMARY_STORY_COMPACT
+
+## PREVIOUS STORY SO FAR ZH COMPACT
+{PREVIOUS_STORY_SO_FAR_ZH_COMPACT}
+
+## CURRENT CHAPTER SUMMARY ZH SHORT
+{CHAPTER_SUMMARY_ZH_SHORT}
+
+## TOKEN BUDGET
+{STORY_COMPACT_MAX_TOKENS}
+
+## INSTRUCTIONS
+Update the Chinese continuity summary using only the previous compact continuity and the current chapter summary.
+
+Return Chinese prose only. Preserve important character, faction, place, relationship, unresolved plot, and terminology continuity. Do not add future knowledge. Keep the result under the token budget.

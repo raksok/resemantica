@@ -145,6 +145,75 @@ class TestDerivedPaths:
 
 
 class TestValidateConfig:
+    def test_summary_config_defaults(self) -> None:
+        config = AppConfig()
+
+        assert config.summaries.chapter_concurrency == 1
+        assert config.summaries.story_compact_max_tokens == 2048
+
+    def test_accepts_summary_concurrency_and_compact_budget(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[summaries]
+chapter_concurrency = 3
+story_compact_max_tokens = 1024
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.summaries.chapter_concurrency == 3
+        assert config.summaries.story_compact_max_tokens == 1024
+
+    @pytest.mark.parametrize("value", [0, 6])
+    def test_rejects_invalid_summary_concurrency(self, tmp_path, value) -> None:
+        toml_content = f"""
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[summaries]
+chapter_concurrency = {value}
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match="summaries.chapter_concurrency"):
+            load_config(config_path)
+
+    def test_rejects_invalid_story_compact_budget(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[summaries]
+story_compact_max_tokens = 0
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match="summaries.story_compact_max_tokens"):
+            load_config(config_path)
+
     def test_accepts_valid_per_model_values(self, tmp_path) -> None:
         toml_content = """
 [models]

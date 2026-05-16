@@ -18,15 +18,16 @@ pass3 analyst for all selected chapters
 ```
 
 ## Summary Preprocessing
-`preprocess_summaries()` runs in two internal phases:
+`preprocess_summaries()` runs in three internal phases:
 
-1. Chinese phase: analyst-model structured summary generation, Chinese validation, validated Chinese rows, `story_so_far_zh`, and `chapter-*-zh.json`.
-2. English phase: translator-model derivation of `chapter_summary_en_short` and `story_so_far_en`, derived rows, and `chapter-*-en.json`.
+1. Chinese chapter-local phase: analyst-model structured summary generation, Chinese validation, and validated `chapter_summary_zh_structured` / `chapter_summary_zh_short` rows.
+2. Ordered story assembly phase: full `story_so_far_zh`, compact `story_so_far_zh_compact`, and `chapter-*-zh.json`.
+3. English phase: translator-model derivation of `chapter_summary_en_short` and `story_so_far_en`, derived rows, and `chapter-*-en.json`.
 
-The function keeps the same public entrypoint and returned `chapter_artifacts` shape. Skipped chapters remain skipped during the Chinese phase and do not enqueue English work.
+The function keeps the same public entrypoint and returned `chapter_artifacts` shape. Skipped chapters remain skipped during the Chinese phase and do not enqueue story or English work. The two LLM-heavy phases (Chinese generation/validation and English derivation) can use `summaries.chapter_concurrency`; ordered story assembly remains sequential so continuity rows are deterministic.
 
 ## Events And Artifacts
-- Chinese artifacts are written immediately after Chinese validation succeeds.
+- Chinese artifacts are written during ordered story assembly after full and compact continuity rows are saved.
 - English artifacts are written during the translator phase.
 - `preprocess-summaries.chapter_completed` is emitted after the English artifact is written for each processed chapter.
 - Final completion counters keep the same processed/skipped semantics.

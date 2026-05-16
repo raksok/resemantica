@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_entries
 from resemantica.db.sqlite import open_connection
@@ -46,8 +49,26 @@ class ScriptedSummaryLLM:
 
         if "SUMMARY_EN_DERIVE" in prompt:
             source_match = re.search(r"## SOURCE TEXT \(ZH\)\s+(.+?)\s+## INSTRUCTIONS", prompt, re.S)
-            source = "" if source_match is None else source_match.group(1).strip()
+            if source_match is not None:
+                source = source_match.group(1).strip()
+            else:
+                source = prompt.rsplit("no addintional explanation:", maxsplit=1)[-1].strip()
             return f"EN::{source}"
+
+        if "SUMMARY_STORY_COMPACT" in prompt:
+            previous_match = re.search(
+                r"## PREVIOUS STORY SO FAR ZH COMPACT\s*(.*?)\s*## CURRENT CHAPTER SUMMARY ZH SHORT",
+                prompt,
+                re.S,
+            )
+            current_match = re.search(
+                r"## CURRENT CHAPTER SUMMARY ZH SHORT\s*(.*?)\s*## TOKEN BUDGET",
+                prompt,
+                re.S,
+            )
+            previous = "" if previous_match is None else previous_match.group(1).strip()
+            current = "" if current_match is None else current_match.group(1).strip()
+            return "\n".join(part for part in [previous, current] if part)
 
         if "SUMMARY_ZH_VALIDATE" in prompt:
             self.validation_prompts.append(prompt)
@@ -213,6 +234,14 @@ def test_preprocess_summaries_materializes_authority_and_derived_rows(
         assert chapter2_story.content_zh == "第1章：张三初入山门。\n第2章：张三完成第一次试炼。"
         expected_composite = hashlib.sha256(b"hash-ch1|hash-ch2").hexdigest()
         assert chapter2_story.derived_from_chapter_hash == expected_composite
+        chapter2_compact = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=2,
+            summary_type="story_so_far_zh_compact",
+        )
+        assert chapter2_compact is not None
+        assert chapter2_compact.content_zh == "张三初入山门。\n张三完成第一次试炼。"
 
         chapter2_short = get_validated_summary(
             conn,
@@ -225,6 +254,8 @@ def test_preprocess_summaries_materializes_authority_and_derived_rows(
 
         derived = list_derived_summaries(conn, release_id=release_id, chapter_number=2)
         assert len(derived) == 2
+        story_en = next(row for row in derived if row.summary_type == "story_so_far_en")
+        assert story_en.source_summary_id == chapter2_compact.summary_id
         for row in derived:
             assert row.source_summary_hash
             assert row.glossary_version_hash
@@ -635,6 +666,8 @@ def test_summary_english_derivation_is_deferred_until_all_chinese_work(
                 calls.append("zh_structured")
             elif "SUMMARY_ZH_VALIDATE" in prompt:
                 calls.append("zh_validate")
+            elif "SUMMARY_STORY_COMPACT" in prompt:
+                calls.append("story_compact")
             elif "SUMMARY_EN_DERIVE" in prompt:
                 calls.append("en_derive")
             return super().generate_text(model_name=model_name, prompt=prompt)
@@ -673,11 +706,153 @@ def test_summary_english_derivation_is_deferred_until_all_chinese_work(
         "zh_validate",
         "zh_structured",
         "zh_validate",
+        "story_compact",
+        "story_compact",
         "en_derive",
         "en_derive",
         "en_derive",
         "en_derive",
     ]
+
+
+def test_concurrent_chinese_phase_keeps_ordered_story_and_compact_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m48-summary-concurrency"
+    for chapter_number in [1, 2]:
+        _write_extracted_chapter(
+            release_id=release_id,
+            chapter_number=chapter_number,
+            source_text=f"第{chapter_number}章内容。",
+            chapter_source_hash=f"hash-ch{chapter_number}",
+        )
+
+    chapter2_started = threading.Event()
+    structured_completion_order: list[int] = []
+
+    class OutOfOrderLLM(ScriptedSummaryLLM):
+        def generate_text(self, *, model_name: str, prompt: str) -> str:
+            if "SUMMARY_ZH_STRUCTURED" in prompt:
+                chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+                assert chapter_match is not None
+                chapter_number = int(chapter_match.group(1))
+                if chapter_number == 1:
+                    chapter2_started.wait(timeout=2)
+                else:
+                    chapter2_started.set()
+                structured_completion_order.append(chapter_number)
+            return super().generate_text(model_name=model_name, prompt=prompt)
+
+    llm = OutOfOrderLLM(
+        {
+            1: {
+                "chapter_number": 1,
+                "characters_mentioned": ["甲"],
+                "key_events": ["甲出场"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山镇",
+                "tone": "quiet",
+                "narrative_progression": "进展1。",
+                "is_story_chapter": True,
+            },
+            2: {
+                "chapter_number": 2,
+                "characters_mentioned": ["乙"],
+                "key_events": ["乙出场"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山路",
+                "tone": "tense",
+                "narrative_progression": "进展2。",
+                "is_story_chapter": True,
+            },
+        }
+    )
+    cfg = load_config()
+    cfg.summaries.chapter_concurrency = 2
+
+    preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+        config=cfg,
+    )
+
+    assert structured_completion_order[:2] == [2, 1]
+    conn = open_connection(derive_paths(load_config(), release_id=release_id).db_path)
+    ensure_summary_schema(conn)
+    try:
+        story = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=2,
+            summary_type="story_so_far_zh",
+        )
+        compact = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=2,
+            summary_type="story_so_far_zh_compact",
+        )
+        story_en = next(
+            row
+            for row in list_derived_summaries(conn, release_id=release_id, chapter_number=2)
+            if row.summary_type == "story_so_far_en"
+        )
+        assert story is not None
+        assert story.content_zh == "第1章：进展1。\n第2章：进展2。"
+        assert compact is not None
+        assert compact.content_zh == "进展1。\n进展2。"
+        assert story_en.content_en == "EN::进展1。\n进展2。"
+        assert story_en.source_summary_id == compact.summary_id
+    finally:
+        conn.close()
+
+
+def test_story_compaction_failure_fails_preprocess_summaries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m48-compact-fails"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="第一章内容。",
+        chapter_source_hash="hash-ch1",
+    )
+
+    class EmptyCompactLLM(ScriptedSummaryLLM):
+        def generate_text(self, *, model_name: str, prompt: str) -> str:
+            if "SUMMARY_STORY_COMPACT" in prompt:
+                return ""
+            return super().generate_text(model_name=model_name, prompt=prompt)
+
+    llm = EmptyCompactLLM(
+        {
+            1: {
+                "chapter_number": 1,
+                "characters_mentioned": ["甲"],
+                "key_events": ["甲出场"],
+                "new_terms": [],
+                "relationships_changed": [],
+                "setting": "山镇",
+                "tone": "quiet",
+                "narrative_progression": "甲在山镇出现。",
+                "is_story_chapter": True,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="story_so_far_zh_compact"):
+        preprocess_summaries(
+            release_id=release_id,
+            run_id="summaries-001",
+            llm_client=llm,
+        )
 
 
 def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> None:
@@ -950,6 +1125,13 @@ def test_non_story_chapter_pipeline_skipped(tmp_path: Path, monkeypatch) -> None
                 return json.dumps(llm_responses[chapter_number], ensure_ascii=False)
             if "SUMMARY_EN_DERIVE" in prompt:
                 return "EN::content"
+            if "SUMMARY_STORY_COMPACT" in prompt:
+                current_match = re.search(
+                    r"## CURRENT CHAPTER SUMMARY ZH SHORT\s*(.*?)\s*## TOKEN BUDGET",
+                    prompt,
+                    re.S,
+                )
+                return "" if current_match is None else current_match.group(1).strip()
             if "SUMMARY_ZH_VALIDATE" in prompt:
                 return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
             raise RuntimeError("Unexpected prompt")
@@ -1011,6 +1193,13 @@ def test_guardrail_overrides_non_story(tmp_path: Path, monkeypatch) -> None:
                 }, ensure_ascii=False)
             if "SUMMARY_EN_DERIVE" in prompt:
                 return "EN::content"
+            if "SUMMARY_STORY_COMPACT" in prompt:
+                current_match = re.search(
+                    r"## CURRENT CHAPTER SUMMARY ZH SHORT\s*(.*?)\s*## TOKEN BUDGET",
+                    prompt,
+                    re.S,
+                )
+                return "" if current_match is None else current_match.group(1).strip()
             if "SUMMARY_ZH_VALIDATE" in prompt:
                 return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
             raise RuntimeError("Unexpected prompt")
@@ -1214,21 +1403,31 @@ def test_summary_checkpoint_read_write(tmp_path: Path, monkeypatch) -> None:
         assert cp is not None
         assert cp[0] == 5
         assert cp[1] == 0
+        assert cp[2] == 0
+
+        set_summary_checkpoint(conn, release_id="cp-test", run_id="r1", story_last_chapter=4)
+        cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
+        assert cp[0] == 5
+        assert cp[1] == 4
+        assert cp[2] == 0
 
         set_summary_checkpoint(conn, release_id="cp-test", run_id="r1", en_last_chapter=3)
         cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
         assert cp[0] == 5
-        assert cp[1] == 3
+        assert cp[1] == 4
+        assert cp[2] == 3
 
         set_summary_checkpoint(conn, release_id="cp-test", run_id="r1", zh_last_chapter=10, en_last_chapter=8)
         cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
         assert cp[0] == 10
-        assert cp[1] == 8
+        assert cp[1] == 4
+        assert cp[2] == 8
 
         set_summary_checkpoint(conn, release_id="cp-test", run_id="r2", zh_last_chapter=1)
         cp = get_summary_checkpoint(conn, release_id="cp-test", run_id="r1")
         assert cp[0] == 10
-        assert cp[1] == 8
+        assert cp[1] == 4
+        assert cp[2] == 8
     finally:
         conn.close()
 

@@ -39,6 +39,7 @@ tmp/
 temp/
 cache/
 embedding/
+epub/
 resemantica-pilot.toml
 rp.toml
 tests/test_epub/

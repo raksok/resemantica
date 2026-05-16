@@ -118,6 +118,7 @@ def _seed_summaries(
     chapter_hash: str,
     chapter_short: str,
     story_so_far: str,
+    story_so_far_compact: str | None = None,
     structured: dict | None = None,
 ) -> None:
     config = load_config()
@@ -145,6 +146,17 @@ def _seed_summaries(
             run_id="seed-summaries",
             validation_status="approved",
         )
+        if story_so_far_compact is not None:
+            save_validated_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                summary_type="story_so_far_zh_compact",
+                content_zh=story_so_far_compact,
+                derived_from_chapter_hash=chapter_hash,
+                run_id="seed-summaries",
+                validation_status="approved",
+            )
         if structured is not None:
             save_validated_summary(
                 conn,
@@ -468,6 +480,107 @@ def test_stale_detection_triggers_packet_rebuild(
         run_id="packets-002",
         graph_client=graph_client,
     )
+    assert second.status == "rebuilt_stale"
+    assert "summary_version_hash_changed" in second.stale_reasons
+    assert second.packet_hash != first.packet_hash
+
+
+def test_packet_prefers_compact_story_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m48-compact-packet"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三进入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction")],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门，这是完整连续性。",
+        story_so_far_compact="紧凑连续性：张三入门。",
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        graph_client=graph_client,
+    )
+
+    packet_payload = _read_json(Path(result.packet_path))
+    assert packet_payload["story_so_far_summary"] == "紧凑连续性：张三入门。"
+
+
+def test_packet_compact_story_changes_summary_version_hash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m48-compact-hash"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三进入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction")],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+        story_so_far_compact="紧凑连续性A。",
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    first = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        graph_client=graph_client,
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+        story_so_far_compact="紧凑连续性B。",
+    )
+    second = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-002",
+        graph_client=graph_client,
+    )
+
     assert second.status == "rebuilt_stale"
     assert "summary_version_hash_changed" in second.stale_reasons
     assert second.packet_hash != first.packet_hash

@@ -29,7 +29,7 @@ Minimum packet sections:
 
 - chapter metadata
 - locked glossary slice relevant to the chapter
-- validated continuity summaries (short text, story-so-far, structured with new_terms/characters_mentioned/key_events)
+- validated continuity summaries (short text, compact story-so-far when present, full story-so-far fallback, structured with new_terms/characters_mentioned/key_events)
 - idiom policy slice
 - graph snapshot reference and compact graph-derived context
 - chapter-safe relationship snippets
@@ -58,6 +58,7 @@ Minimum packet sections:
 - bundle builder enforces narrow context limits
 - retrieval arbitration must prefer glossary, explicit aliases, and deterministic idiom matches over graph-derived suggestions
 - packet metadata and artifact hash must match
+- `story_so_far_summary` must prefer `story_so_far_zh_compact`; older releases without compact rows fall back to `story_so_far_zh`
 
 ## Resume And Rerun
 
@@ -83,6 +84,7 @@ Minimum packet sections:
 - graph snapshot hash change marks dependent packets stale
 - stale packets must be rebuilt before dependent translation reruns
 - `summary_version_hash` now includes structured summary content (new_terms, etc.)
+- `summary_version_hash` includes `story_so_far_zh_compact` when present; compact continuity changes trigger packet rebuilds
 - no explicit `resume` flag needed — staleness detection provides resume-by-cache-hit
 
 ## Post-MVP Improvements

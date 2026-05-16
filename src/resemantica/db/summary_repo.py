@@ -598,32 +598,43 @@ def set_summary_checkpoint(
     release_id: str,
     run_id: str,
     zh_last_chapter: int | None = None,
+    story_last_chapter: int | None = None,
     en_last_chapter: int | None = None,
 ) -> None:
     """Record or update the last completed chapter for a phase."""
     # Read existing row first to avoid overwriting the other phase's value
     existing = get_summary_checkpoint(conn, release_id=release_id, run_id=run_id)
     new_zh = zh_last_chapter if zh_last_chapter is not None else (existing[0] if existing else 0)
-    new_en = en_last_chapter if en_last_chapter is not None else (existing[1] if existing else 0)
-    conn.execute(
-        """
-        INSERT INTO summary_checkpoints(release_id, run_id, zh_last_chapter, en_last_chapter, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(release_id, run_id) DO UPDATE SET
-            zh_last_chapter = excluded.zh_last_chapter,
-            en_last_chapter = excluded.en_last_chapter,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (release_id, run_id, new_zh, new_en),
-    )
+    new_story = story_last_chapter if story_last_chapter is not None else (existing[1] if existing else 0)
+    new_en = en_last_chapter if en_last_chapter is not None else (existing[2] if existing else 0)
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO summary_checkpoints(
+                release_id, run_id, zh_last_chapter, story_last_chapter, en_last_chapter, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(release_id, run_id) DO UPDATE SET
+                zh_last_chapter = excluded.zh_last_chapter,
+                story_last_chapter = excluded.story_last_chapter,
+                en_last_chapter = excluded.en_last_chapter,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (release_id, run_id, new_zh, new_story, new_en),
+        )
 
 
-def get_summary_checkpoint(conn: sqlite3.Connection, *, release_id: str, run_id: str) -> tuple[int, int] | None:
-    """Return (zh_last_chapter, en_last_chapter) or None if no checkpoint."""
+def get_summary_checkpoint(conn: sqlite3.Connection, *, release_id: str, run_id: str) -> tuple[int, int, int] | None:
+    """Return (zh_last_chapter, story_last_chapter, en_last_chapter) or None."""
     row = conn.execute(
-        "SELECT zh_last_chapter, en_last_chapter FROM summary_checkpoints WHERE release_id = ? AND run_id = ?",
+        "SELECT zh_last_chapter, story_last_chapter, en_last_chapter "
+        "FROM summary_checkpoints WHERE release_id = ? AND run_id = ?",
         (release_id, run_id),
     ).fetchone()
     if row is None:
         return None
-    return (int(row["zh_last_chapter"]), int(row["en_last_chapter"]))
+    return (
+        int(row["zh_last_chapter"]),
+        int(row["story_last_chapter"]),
+        int(row["en_last_chapter"]),
+    )

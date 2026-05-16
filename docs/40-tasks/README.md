@@ -65,3 +65,4 @@ Always follow the milestone sequence below.
 | M45 | task-45 | M20D, M42, M44 | Local Model-Batched Inference Kaizen |
 | M46 | task-46 | M3, M42, M8 | CSV Review + Glossary-Aware Translation Cache |
 | M47 | task-47 | M8, M9, M46 | Translation Context Kaizen |
+| M48 | task-48 | M45, M46, M47 | Summary Concurrency And Compact Story |

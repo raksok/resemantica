@@ -37,3 +37,5 @@ pass2_concurrency = 3
 
 [summaries]
 exclude_chapter_patterns = ["titlepage", "nav\\.xhtml", "toc", "book.?2", "front.?matter", "ver-page", "Introdution", "cover", "copyright"]
+chapter_concurrency = 1
+story_compact_max_tokens = 2048
