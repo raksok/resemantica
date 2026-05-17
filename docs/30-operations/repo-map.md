@@ -87,7 +87,7 @@ Implemented package layout (M10 slice):
 - `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER`
 - `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production, stage execution, transition validation, gate handling, and auto review artifact generation for unresolved votes
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
-- `src/resemantica/orchestration/cleanup.py`: `plan_cleanup()` and `apply_cleanup()` for two-step cleanup workflow
+- `src/resemantica/orchestration/cleanup.py`: shared cleanup scopes plus `plan_cleanup()` and `apply_cleanup()` for validated, two-step cleanup workflow
 - `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission
 - `src/resemantica/tracking/`: event and run state models with SQLite persistence
 - `src/resemantica/tracking/models.py`: `Event` and `RunState` dataclasses with schema versioning

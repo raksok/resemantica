@@ -20,6 +20,7 @@ from resemantica.glossary.pipeline import (
 )
 from resemantica.logging_config import configure_logging
 from resemantica.orchestration import OrchestrationRunner
+from resemantica.orchestration.cleanup import CLEANUP_SCOPES
 from resemantica.orchestration.stop import StopRequested, StopToken
 from resemantica.settings import AppConfig, derive_paths, load_config
 
@@ -690,7 +691,7 @@ point to a specific stage.""",
         help="Plan cleanup by enumerating deletable artifacts.",
         description="""\
 Dry-run inspection of deletable artifacts for a given scope. No files
-removed. Scopes: run, translation, preprocess, cache, all.""",
+removed. Scopes: run, translation, preprocess, cache, keep-extracted, all, factory.""",
     )
     _add_common_release_args(run_cleanup_plan, default_run="cleanup-plan")
     run_cleanup_plan.add_argument(
@@ -698,7 +699,7 @@ removed. Scopes: run, translation, preprocess, cache, all.""",
         required=False,
         type=str,
         default="run",
-        choices=["run", "translation", "preprocess", "cache", "all"],
+        choices=CLEANUP_SCOPES,
         help="Cleanup scope (default: run).",
     )
 
@@ -707,7 +708,7 @@ removed. Scopes: run, translation, preprocess, cache, all.""",
         help="Apply a previously planned cleanup.",
         description="""\
 Deletes artifacts matching the given scope. Use cleanup-plan first to
-preview. Scopes: run, translation, preprocess, cache, all.""",
+preview. Scopes: run, translation, preprocess, cache, keep-extracted, all, factory.""",
     )
     _add_common_release_args(run_cleanup_apply, default_run="cleanup-apply")
     run_cleanup_apply.add_argument(
@@ -715,7 +716,7 @@ preview. Scopes: run, translation, preprocess, cache, all.""",
         required=False,
         type=str,
         default="run",
-        choices=["run", "translation", "preprocess", "cache", "all"],
+        choices=CLEANUP_SCOPES,
         help="Cleanup scope (default: run).",
     )
     run_cleanup_apply.add_argument(
@@ -1138,20 +1139,29 @@ def main(argv: list[str] | None = None) -> int:
             cleanup_result = apply_cleanup(
                 args.release, args.run, scope=args.scope, force=args.force
             )
-            print(f"\nCleanup Report (scope: {cleanup_result['scope']})")
-            print(f"Release: {cleanup_result['release_id']}, Run: {cleanup_result['run_id']}")
-            print(f"\nDeleted files ({len(cleanup_result['deleted_files'])}):")
-            for f in cleanup_result['deleted_files']:
+            print(f"\nCleanup Report (scope: {cleanup_result.get('scope', args.scope)})")
+            print(
+                "Release: "
+                f"{cleanup_result.get('release_id', args.release)}, "
+                f"Run: {cleanup_result.get('run_id', args.run)}"
+            )
+            if cleanup_result.get("success") is False:
+                print(f"\nCleanup failed: {cleanup_result.get('message', 'unknown error')}")
+            deleted_files = cleanup_result.get("deleted_files", [])
+            deleted_dirs = cleanup_result.get("deleted_dirs", [])
+            print(f"\nDeleted files ({len(deleted_files)}):")
+            for f in deleted_files:
                 print(f"  - {f}")
-            print(f"\nDeleted directories ({len(cleanup_result['deleted_dirs'])}):")
-            for d in cleanup_result['deleted_dirs']:
+            print(f"\nDeleted directories ({len(deleted_dirs)}):")
+            for d in deleted_dirs:
                 print(f"  - {d}")
-            print(f"\nSQLite rows deleted: {cleanup_result['sqlite_rows_deleted']}")
-            if cleanup_result['errors']:
-                print(f"\nErrors ({len(cleanup_result['errors'])}):")
-                for e in cleanup_result['errors']:
+            print(f"\nSQLite rows deleted: {cleanup_result.get('sqlite_rows_deleted', 0)}")
+            errors = cleanup_result.get("errors", [])
+            if errors:
+                print(f"\nErrors ({len(errors)}):")
+                for e in errors:
                     print(f"  - {e}")
-            return 0
+            return 0 if cleanup_result.get("success", True) else 1
 
     if args.command == "rebuild":
         config = load_config(args.config)

@@ -29,7 +29,7 @@ Add a `factory` scope that wipes all release directories and legacy global store
 ### Step 1: Scope
 
 User selects cleanup scope via `s` key. Default: `"run"`. Cycling order:
-`run` → `translation` → `preprocess` → `cache` → `all` → `factory` → `run` ...
+`run` → `translation` → `preprocess` → `cache` → `keep-extracted` → `all` → `factory` → `run` ...
 
 On scope change, `plan_cleanup(dry_run=True)` is called immediately and the display shows:
 - Scope name (highlighted)
@@ -49,9 +49,12 @@ Groups deletable artifacts by category rather than raw path dump:
 | Translation output | `runs/run-abc/translation/` |
 | Preprocess artifacts | `extracted/`, `glossary/`, `summaries/`, `idioms/`, `graph/`, `packets/` |
 | Cache | `.cache/` |
+| Keep extracted | `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/`, `.cache/`, `runs/<run_id>/translation/` |
 | Factory — all releases | `releases/` (all releases) |
 | Factory — legacy global stores | `resemantica.db`, `graph.ladybug` |
 | Other | any paths not matching above |
+
+Path grouping normalizes `\` to `/` before matching so Windows artifact paths are categorized the same way as POSIX-style paths.
 
 For factory scope, preserved list is empty (nothing preserved).
 
@@ -88,6 +91,7 @@ Post-apply report:
 | `translation` | Translation subdir of a run | Checkpoints for that run | Yes |
 | `preprocess` | extracted/, glossary/, summaries/, idioms/, graph/, packets/ | Extracted chapters + blocks for that run | Yes |
 | `cache` | `.cache/` directory | None | Yes |
+| `keep-extracted` | Downstream preprocess dirs, `.cache/`, and run translation output; preserves `extracted/` | Downstream checkpoints/metadata; preserves extracted chapters + blocks | Yes |
 | `all` | Everything in release root except tracking.db, resemantica.db, graph.ladybug, and cleanup files | All rows for that run | Yes |
 | `factory` | All release directories + legacy global `resemantica.db`/`graph.ladybug` if present | None (files deleted) | No |
 
@@ -126,7 +130,7 @@ def _content_widgets(self) -> ComposeResult:
 ## State Machine
 
 ```python
-SCOPES = ["run", "translation", "preprocess", "cache", "all", "factory"]
+SCOPES = list(CLEANUP_SCOPES)
 
 class CleanupWizardScreen(BaseScreen):
     _step: int = 1        # 1-4

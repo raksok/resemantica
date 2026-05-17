@@ -5,13 +5,14 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import Static
 
+from resemantica.orchestration.cleanup import CLEANUP_SCOPES
 from resemantica.tui.screens.base import BaseScreen
 
-SCOPES: list[str] = ["run", "translation", "preprocess", "cache", "all", "factory"]
+SCOPES: list[str] = list(CLEANUP_SCOPES)
 
 
 def _categorize(path_str: str) -> str:
-    lower = path_str.lower()
+    lower = path_str.replace("\\", "/").lower()
     if "/runs/" in lower:
         if "translation" in lower:
             return "Translation output"

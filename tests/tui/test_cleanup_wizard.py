@@ -9,6 +9,7 @@ def test_categorize():
     from resemantica.tui.screens.cleanup_wizard import _categorize
 
     assert _categorize("/releases/rel-1/runs/run-abc/") == "Run directory"
+    assert _categorize("C:\\artifacts\\releases\\rel-1\\runs\\run-abc\\") == "Run directory"
     assert _categorize("/releases/rel-1/runs/run-abc/translation/ch5") == "Translation output"
     assert _categorize("/releases/rel-1/extracted/") == "Extracted text"
     assert _categorize("/releases/rel-1/glossary/") == "Glossary candidates"
@@ -79,7 +80,8 @@ def test_wizard_factory_in_scopes():
 
     assert "factory" in SCOPES
     assert SCOPES[-1] == "factory"
-    assert len(SCOPES) == 6
+    assert "keep-extracted" in SCOPES
+    assert len(SCOPES) == 7
 
 
 def test_wizard_scope_cycle_resets_to_step_1():
@@ -227,6 +229,10 @@ def test_mounted_wizard_scope_cycle_updates_display():
 
             await pilot.press("s")
             await pilot.pause()
+            assert "keep-extracted" in str(scope_info.content)
+
+            await pilot.press("s")
+            await pilot.pause()
             assert "all" in str(scope_info.content)
 
             await pilot.press("s")
@@ -359,8 +365,8 @@ def test_mounted_wizard_factory_shows_warning_on_step_1():
             await pilot.press("7")
             await pilot.pause()
 
-            # Cycle to factory (5 presses: trans, preprocess, cache, all, factory)
-            for _ in range(5):
+            # Cycle to factory (6 presses: trans, preprocess, cache, keep-extracted, all, factory)
+            for _ in range(6):
                 await pilot.press("s")
                 await pilot.pause()
 
@@ -385,7 +391,7 @@ def test_mounted_wizard_factory_confirm_shows_warning():
             await pilot.pause()
 
             # Cycle to factory then advance to confirm
-            for _ in range(5):
+            for _ in range(6):
                 await pilot.press("s")
                 await pilot.pause()
 

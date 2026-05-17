@@ -8,8 +8,8 @@ Implement the explicit, scoped, and previewable cleanup/reset workflow to allow 
 
 CLI:
 
-- `uv run python -m resemantica.cli run cleanup-plan --scope <run|translation|preprocess|cache|all> [--run-id <id>]`
-- `uv run python -m resemantica.cli run cleanup-apply --scope <run|translation|preprocess|cache|all> [--run-id <id>]`
+- `uv run python -m resemantica.cli run cleanup-plan --scope <run|translation|preprocess|cache|keep-extracted|all|factory> [--run-id <id>]`
+- `uv run python -m resemantica.cli run cleanup-apply --scope <run|translation|preprocess|cache|keep-extracted|all|factory> [--run-id <id>]`
 
 Python modules:
 
@@ -25,20 +25,40 @@ Artifacts:
 
 1. Resolve requested scope and run/release context.
 2. Identify deletable artifacts:
-    - `run`: specific run folder and SQLite run/checkpoint/cache rows.
-    - `translation`: translation artifacts within a run.
-    - `preprocess`: extracted text, glossary candidates, draft summaries, packets.
-    - `cache`: LLM completion cache and intermediate artifacts.
-    - `all`: everything except source EPUB and project config.
+    - `run`: selected run directory.
+    - `translation`: selected run's `translation/` directory.
+    - `preprocess`: release-level `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, and `packets/`.
+    - `cache`: release-level `.cache/`.
+    - `keep-extracted`: downstream artifacts and selected run translation output while preserving `extracted/`.
+    - `all`: everything under the release root except release-local stores and cleanup files.
+    - `factory`: all release directories plus legacy global stores under artifact root.
 3. Generate a "Cleanup Plan" listing all targets for deletion and all preserved assets.
 4. If `--dry-run` is not set, execute deletions and row removals.
 5. Record the final Cleanup Report.
+
+## Scope Contract
+
+Cleanup scopes are defined once in `orchestration.cleanup.CLEANUP_SCOPES` and reused by CLI and TUI.
+
+| Scope | Filesystem deletion | SQLite deletion |
+|---|---|---|
+| `run` | `runs/<run_id>/` | tracking `events`/`run_state`, translation checkpoints, extraction metadata, preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows |
+| `translation` | `runs/<run_id>/translation/` | translation checkpoints only |
+| `preprocess` | `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/` | extraction metadata plus preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows |
+| `cache` | `.cache/` | none |
+| `keep-extracted` | `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/`, `.cache/`, selected run `translation/` | tracking rows, translation checkpoints, downstream preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows; preserves `extracted_chapters` and `extracted_blocks` |
+| `all` | all direct release-root children except protected stores and cleanup files | same run-scoped rows as `run` |
+| `factory` | artifact-root `releases/`, legacy global `resemantica.db`, legacy global `graph.ladybug` | none |
+
+Protected release-local files are `tracking.db`, `resemantica.db`, `graph.ladybug`, `cleanup_plan.json`, and `cleanup_report.json`.
 
 ## Validation Ownership
 
 - cleanup MUST NOT delete source EPUBs or configuration files by default
 - cleanup MUST NOT delete authoritative `locked_glossary` unless scope is `all`
 - plans must be generated and persisted before execution
+- apply validates plan schema, release/run identity, scope, expected root, and target containment
+- `--force` may bypass scope mismatch only; it must not bypass release/run mismatch or path safety
 
 ## Resume And Rerun
 

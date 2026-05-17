@@ -329,6 +329,24 @@ class TestCliDispatch:
         assert args.scope == "all"
         assert args.force is True
 
+    def test_run_cleanup_plan_keep_extracted(self):
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run", "cleanup-plan", "--release", "r1",
+            "--scope", "keep-extracted"
+        ])
+        assert args.run_command == "cleanup-plan"
+        assert args.scope == "keep-extracted"
+
+    def test_run_cleanup_apply_factory(self):
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run", "cleanup-apply", "--release", "r1",
+            "--scope", "factory"
+        ])
+        assert args.run_command == "cleanup-apply"
+        assert args.scope == "factory"
+
     def test_epub_roundtrip(self):
         parser = _build_parser()
         args = parser.parse_args([

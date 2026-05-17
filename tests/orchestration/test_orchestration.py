@@ -514,6 +514,8 @@ class TestM11CleanupScopes:
         (release_root / "summaries" / "chapter-1-zh.json").write_text('{"test": 5}')
         (release_root / "packets").mkdir(parents=True, exist_ok=True)
         (release_root / "packets" / "chapter-1-1.json").write_text('{"test": 6}')
+        (release_root / ".cache").mkdir(parents=True, exist_ok=True)
+        (release_root / ".cache" / "llm.json").write_text('{"test": 7}')
 
         # Create protected assets
         (release_root / "tracking.db").touch()
@@ -521,6 +523,81 @@ class TestM11CleanupScopes:
         (release_root / "graph.ladybug").touch()
 
         return release_root, run_dir
+
+    def _seed_cleanup_db_rows(self, release_id: str, run_id: str) -> Path:
+        from resemantica.db.sqlite import ensure_full_schema, open_connection
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        try:
+            ensure_full_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO translation_checkpoints(
+                    release_id, run_id, chapter_number, pass_name, source_hash,
+                    prompt_version, packet_version_hash, status, artifact_path
+                ) VALUES (?, ?, 1, 'pass1', 'src', 'p', 'pkt', 'completed', 'artifact')
+                """,
+                (release_id, run_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO extracted_chapters(
+                    chapter_id, release_id, run_id, chapter_number,
+                    source_document_path, chapter_source_hash, placeholder_map_ref,
+                    created_by_stage, validation_status, schema_version, created_at, updated_at
+                ) VALUES ('chapter-1', ?, ?, 1, 'chapter.xhtml', 'hash', 'none',
+                          'extract', 'valid', '1', 'now', 'now')
+                """,
+                (release_id, run_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO extracted_blocks(
+                    block_id, chapter_id, release_id, run_id, chapter_number, segment_id,
+                    parent_block_id, block_order, segment_order, source_text_zh,
+                    placeholder_map_ref, chapter_source_hash, schema_version, created_at, updated_at
+                ) VALUES ('block-1', 'chapter-1', ?, ?, 1, NULL, 'block-1', 1, NULL,
+                          '文本', 'none', 'hash', '1', 'now', 'now')
+                """,
+                (release_id, run_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO summary_checkpoints(
+                    release_id, run_id, zh_last_chapter, story_last_chapter, en_last_chapter
+                ) VALUES (?, ?, 1, 1, 1)
+                """,
+                (release_id, run_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO packet_metadata(
+                    packet_id, release_id, chapter_number, run_id, packet_path, bundle_path,
+                    packet_hash, chapter_source_hash, glossary_version_hash, summary_version_hash,
+                    graph_snapshot_hash, idiom_policy_hash, packet_builder_version
+                ) VALUES ('packet-1', ?, 1, ?, 'packet.json', 'bundle.json',
+                          'packet-hash', 'chapter-hash', 'glossary-hash', 'summary-hash',
+                          'graph-hash', 'idiom-hash', 'v1')
+                """,
+                (release_id, run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return paths.db_path
+
+    @staticmethod
+    def _count_rows(db_path: Path, table: str) -> int:
+        from resemantica.db.sqlite import open_connection
+
+        conn = open_connection(db_path)
+        try:
+            row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
+            return int(row["count"])
+        finally:
+            conn.close()
 
     def test_scope_run_deletes_only_run_dir(self, tmp_path: Path):
         import uuid
@@ -564,6 +641,55 @@ class TestM11CleanupScopes:
         # Run dir should NOT be in deletable
         assert not any("runs" in a for a in plan["deletable_artifacts"])
 
+    def test_scope_keep_extracted_preserves_extraction_and_deletes_downstream(self):
+        import uuid
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        release_root, run_dir = self._create_test_artifacts(release_id, run_id)
+        db_path = self._seed_cleanup_db_rows(release_id, run_id)
+
+        plan = plan_cleanup(release_id, run_id, scope="keep-extracted", dry_run=True)
+        assert str(release_root / "extracted") in plan["preserved_artifacts"]
+        assert str(release_root / "extracted") not in plan["deletable_artifacts"]
+        assert str(release_root / "summaries") in plan["deletable_artifacts"]
+        assert str(run_dir / "translation") in plan["deletable_artifacts"]
+        assert not any(row["table"] == "extracted_chapters" for row in plan["sqlite_rows"])
+        assert not any(row["table"] == "extracted_blocks" for row in plan["sqlite_rows"])
+
+        result = apply_cleanup(release_id, run_id, scope="keep-extracted")
+
+        assert result["success"] is True
+        assert (release_root / "extracted").exists()
+        assert not (release_root / "summaries").exists()
+        assert not (run_dir / "translation").exists()
+        assert self._count_rows(db_path, "extracted_chapters") == 1
+        assert self._count_rows(db_path, "extracted_blocks") == 1
+        assert self._count_rows(db_path, "summary_checkpoints") == 0
+        assert self._count_rows(db_path, "packet_metadata") == 0
+        assert self._count_rows(db_path, "translation_checkpoints") == 0
+
+    def test_scope_cache_deletes_no_sqlite_rows(self):
+        import uuid
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        release_root, _run_dir = self._create_test_artifacts(release_id, run_id)
+        db_path = self._seed_cleanup_db_rows(release_id, run_id)
+
+        plan = plan_cleanup(release_id, run_id, scope="cache", dry_run=True)
+        assert str(release_root / ".cache") in plan["deletable_artifacts"]
+        assert plan["sqlite_rows"] == []
+
+        result = apply_cleanup(release_id, run_id, scope="cache")
+
+        assert result["success"] is True
+        assert not (release_root / ".cache").exists()
+        assert self._count_rows(db_path, "translation_checkpoints") == 1
+        assert self._count_rows(db_path, "extracted_chapters") == 1
+
     def test_scope_all_preserves_release_stores(self):
         import uuid
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"
@@ -594,6 +720,46 @@ class TestM11CleanupScopes:
         result = apply_cleanup(release_id, run_id, scope="all")
         assert result["success"] is False
         assert "scope" in result["message"].lower()
+
+    def test_cleanup_apply_refuses_release_mismatch_even_with_force(self):
+        import json
+        import uuid
+
+        from resemantica.orchestration.cleanup import _get_cleanup_plan_path
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        self._create_test_artifacts(release_id, run_id)
+        plan = plan_cleanup(release_id, run_id, scope="run", dry_run=True)
+        plan["release_id"] = f"test-release-{uuid.uuid4().hex[:8]}"
+        plan_path = _get_cleanup_plan_path(release_id, scope="run")
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        result = apply_cleanup(release_id, run_id, scope="run", force=True)
+
+        assert result["success"] is False
+        assert "release" in result["message"].lower()
+
+    def test_cleanup_apply_refuses_out_of_root_plan_target(self):
+        import json
+        import uuid
+
+        from resemantica.orchestration.cleanup import _get_cleanup_plan_path
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        self._create_test_artifacts(release_id, run_id)
+        plan = plan_cleanup(release_id, run_id, scope="run", dry_run=True)
+        plan["deletable_artifacts"] = [str(Path.cwd().parent)]
+        plan_path = _get_cleanup_plan_path(release_id, scope="run")
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        result = apply_cleanup(release_id, run_id, scope="run")
+
+        assert result["success"] is False
+        assert "outside expected root" in result["message"]
 
     def test_cleanup_report_generated(self):
         import uuid
