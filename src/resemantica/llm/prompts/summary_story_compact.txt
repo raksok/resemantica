@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 1.1
 SUMMARY_STORY_COMPACT
 
 ## PREVIOUS STORY SO FAR ZH COMPACT
@@ -13,4 +13,11 @@ SUMMARY_STORY_COMPACT
 ## INSTRUCTIONS
 Update the Chinese continuity summary using only the previous compact continuity and the current chapter summary.
 
-Return Chinese prose only. Preserve important character, faction, place, relationship, unresolved plot, and terminology continuity. Do not add future knowledge. Keep the result under the token budget.
+Return Chinese prose only. Do not include markdown, headings, explanations, analysis, chain-of-thought, or <think> text.
+
+Write dense active continuity:
+- preserve unresolved plot threads, current character/faction/location state, relationship changes, important terms, and active risks
+- drop resolved event detail unless it still affects later chapters
+- do not restate the same fact twice
+- do not add future knowledge
+- keep the result under the token budget

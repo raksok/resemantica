@@ -1,5 +1,51 @@
 # Handover Next Session
 
+## Current Session: M50 — Analyst Prompt Optimization
+
+### Goal
+
+Reduce local analyst-model latency without introducing a new model role and without touching fragile translator prompts.
+
+### Implemented
+
+- Analyst prompt versions bumped and tightened for compact schema-only output:
+  - `summary_zh_structured.txt`
+  - `summary_zh_validate.txt`
+  - `summary_story_compact.txt`
+  - `translate_pass2.txt`
+  - `graph_extract.txt`
+  - `glossary_evaluate.txt`
+  - `idiom_evaluate.txt`
+- Pass 2 no-error prompt contract now returns empty `corrected_text`; the parser remains compatible with older responses.
+- Translator prompts remain intentionally unchanged.
+
+### Measurement Workflow
+
+Before broad reruns, compare a representative chapter range before/after the prompt change:
+
+- summaries: elapsed time, `llm_completion_tokens`, `llm_total_tokens`, validation flags, skipped chapters
+- pass2: elapsed time, fallback count, structure failures, fidelity failures, completion tokens
+- graph: elapsed time, parse/skipped counts, entity/relationship counts
+- glossary/idioms eval: elapsed time, parse errors, kept/rejected counts, completion tokens
+
+Use a small range first, then the full 107-chapter summary run if validation remains stable.
+
+### Expected Impact
+
+The largest prompt-only savings should come from:
+
+- summaries no longer over-expanding structured fields and compact continuity
+- pass2 no-error blocks no longer echoing the full unchanged draft
+- graph/eval prompts avoiding prose or thinking artifacts
+
+Runtime will not scale perfectly linearly with model speed. A rough estimate is:
+
+`new_time = non_llm_time + llm_time / speedup`
+
+If a stage is 80-90% LLM-bound and raw inference is 3x faster, total stage time usually improves by about 2.1-2.5x rather than a full 3x.
+
+---
+
 ## Current Session: M14B — Batch Pilot Bugfixes and Verification
 
 ### Problem

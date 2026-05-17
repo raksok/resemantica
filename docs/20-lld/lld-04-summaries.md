@@ -65,6 +65,15 @@ chapter_concurrency = 1        # valid range: 1..5
 story_compact_max_tokens = 2048 # valid: > 0
 ```
 
+## Analyst Prompt Optimization
+
+Summary preprocessing is a primary local-inference bottleneck. The analyst prompts therefore optimize for compact, schema-stable output:
+
+- `summary_zh_structured.txt` keeps the existing JSON schema but caps list sizes and asks for 1-3 dense Chinese continuity sentences.
+- `summary_zh_validate.txt` returns only compact `flags` and short `warnings`; no prose analysis is allowed.
+- `summary_story_compact.txt` keeps active continuity only: unresolved plot, current state, relationship changes, key terms, and active risks. Resolved detail should be dropped unless it still affects later chapters.
+- All three prompts forbid markdown, explanations, chain-of-thought, and `<think>` artifacts.
+
 ## Validation Ownership
 
 - only validated Chinese summaries may feed continuity state
@@ -93,6 +102,7 @@ story_compact_max_tokens = 2048 # valid: > 0
 - deterministic rebuild of `story_so_far_zh`
 - ordered `story_so_far_zh_compact` generation from prior compact continuity plus current short summary
 - English story derivation from compact Chinese continuity
+- pilot comparison of summary elapsed time and LLM completion tokens on a representative chapter range
 
 ## Out Of Scope
 

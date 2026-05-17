@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 1.1
 SUMMARY_ZH_VALIDATE
 
 ## CHAPTER NUMBER
@@ -18,12 +18,17 @@ SUMMARY_ZH_VALIDATE
 
 ## INSTRUCTIONS
 Validate this Chinese structured summary against the source text.
-Return JSON with two keys: "flags" (list of applicable flag strings) and "warnings" (list of warning strings).
+Return compact JSON only with two keys: "flags" and "warnings".
+Do not include markdown, explanations, analysis, chain-of-thought, or <think> text.
 
 The pipeline chapter number is canonical. EPUB filenames and visible source headings can
 use a different story-facing number because of front matter or publisher naming. Do not
 flag a filename or visible-heading chapter-number mismatch by itself. Only flag chapter
 identity if the structured summary describes a different source text than the one shown.
+
+"flags" must contain only applicable flag strings from the list below.
+"warnings" must contain only short Chinese or English warning strings, up to 12 words each.
+If there are no issues, return {{"flags": [], "warnings": []}}.
 
 Available flags (include only those that apply):
 - unsupported_claim: summary asserts something not present in the source text

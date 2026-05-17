@@ -44,6 +44,8 @@ SQLite datasets:
 8. Run deterministic normalization and conflict checks.
 9. Promote approved entries into locked glossary.
 
+Analyst prompt optimization applies only to the deterministic discovery LLM evaluator documented in LLD 39. Glossary translation prompts are translator-facing and are intentionally out of scope for M50.
+
 ## Candidate Status Lifecycle
 
 ```

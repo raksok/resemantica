@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 1.1
 
 ## TASK
 IDIOM_EVALUATE
@@ -10,7 +10,7 @@ IDIOM_EVALUATE
 Evaluate each Chinese candidate phrase from a web novel.
 Decide whether it is an idiom, chengyu, proverb, or fixed expression.
 
-Return reason codes only. Do not include chain-of-thought.
+Return compact JSON only. Do not include markdown, prose, explanations, analysis, chain-of-thought, or <think> text.
 
 For each candidate, return:
 - candidate_id

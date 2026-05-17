@@ -42,6 +42,16 @@ SQLite datasets:
 6. Promote confirmed graph state.
 7. Export snapshot metadata for packet reproducibility.
 
+## Analyst Prompt Optimization
+
+`graph_extract.txt` remains schema-compatible but is optimized for compact extraction:
+
+- output raw JSON only, with no markdown, prose analysis, chain-of-thought, or `<think>` artifacts
+- extract significant named entities and evidenced relationships only
+- keep evidence snippets short
+- avoid speculative relationships added only to satisfy coverage
+- preserve Chinese-only `source_term`, alias, evidence, and relationship term fields
+
 ## Content Validation
 
 Three deterministic guardrails applied at entity extraction time (in `graph/extractor.py`):

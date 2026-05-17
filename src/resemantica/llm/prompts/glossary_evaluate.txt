@@ -1,4 +1,4 @@
-# version: 1.0
+# version: 1.1
 
 ## TASK
 GLOSSARY_EVALUATE
@@ -7,9 +7,9 @@ GLOSSARY_EVALUATE
 {CANDIDATES_JSON}
 
 ## INSTRUCTIONS
-You are evaluating candidate terms extracted from a Chinese web novel (玄幻/仙侠 genre).
-For each candidate, decide if it is a genuine glossary-worthy term that requires
-consistent translation across the novel.
+Evaluate candidate terms extracted from a Chinese web novel (玄幻/仙侠 genre).
+For each candidate, decide if it is a genuine glossary-worthy term that requires consistent translation across the novel.
+Return compact JSON only. Do not include markdown, prose, explanations, analysis, chain-of-thought, or <think> text.
 
 Glossary-worthy terms include: character names, aliases, titles/honorifics,
 faction/sect/clan names, location names, martial techniques, items/artifacts,

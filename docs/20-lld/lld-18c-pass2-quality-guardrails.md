@@ -13,17 +13,24 @@ The Analyst persona in `translate_pass2.txt` will be restricted from "Editor" to
 - **Instruction:** "You are a translation auditor. Your sole objective is to ensure the English Draft is factually faithful to the Source. You are NOT an editor. Do not change the prose, flow, or vocabulary of the Draft unless it is required to fix a fidelity error (omission, mistranslation, or terminology violation)."
 - **Prompt version:** Bumped from `1.0` to `2.0`.
 
-### 2. "Critique-then-Correct" Workflow
-The output format will be moved to a structured JSON response to force the model to justify every change it makes. This discourages "just because" edits.
+### 2. Compact Audit Workflow
+The output format is a structured JSON response that records whether a fidelity correction is required. To reduce redundant analyst output, no-error responses do not echo the unchanged draft.
 
-**New Schema:**
+**Schema:**
 ```json
 {
   "fidelity_errors_found": true,
-  "analysis": "Briefly state if the draft is missing facts or using wrong terms.",
-  "corrected_text": "The full text with MINIMAL corrections. Must be identical to the original draft if fidelity_errors_found is false."
+  "corrected_text": "The full text with MINIMAL corrections when fidelity_errors_found is true; otherwise an empty string."
 }
 ```
+
+When `fidelity_errors_found` is `false`, the model should return:
+
+```json
+{"fidelity_errors_found": false, "corrected_text": ""}
+```
+
+The parser remains backward-compatible with older responses that include `analysis` or populate `corrected_text` in a no-error case.
 
 ### 3. Verification Logic
 The `translation.pass2.translate_pass2` function will:
@@ -40,7 +47,7 @@ The `translation.pass2.translate_pass2` function will:
 1. `translate_chapter_pass2` calls `translate_pass2` with Pass 1 draft.
 2. Analyst LLM receives source, draft, and context.
 3. Analyst performs a fidelity comparison.
-4. Analyst returns JSON with `fidelity_errors_found` and `analysis`.
+4. Analyst returns compact JSON with `fidelity_errors_found` and `corrected_text`.
 5. Code validates the decision:
    - If `errors_found=false` -> return original draft.
    - If `errors_found=true` and `corrected_text` non-empty -> return `corrected_text`.
@@ -56,6 +63,7 @@ The `translation.pass2.translate_pass2` function will:
 | `fidelity_errors_found: true`, empty `corrected_text` | Return original `draft_text` |
 | `fidelity_errors_found: false`, `corrected_text` differs from draft | Ignore `corrected_text`, return original `draft_text` |
 | `fidelity_errors_found: true`, valid `corrected_text` | Return `corrected_text` |
+| Older response includes `analysis` | Ignore it |
 
 ## Out of Scope
 - Automatic BLEU/ROUGE comparison (handled implicitly by "Stability Check").

@@ -251,9 +251,9 @@ GLOSSARY_EVALUATE
 {CANDIDATES_JSON}
 
 ## INSTRUCTIONS
-You are evaluating candidate terms extracted from a Chinese web novel (玄幻/仙侠 genre).
-For each candidate, decide if it is a genuine glossary-worthy term that requires
-consistent translation across the novel.
+Evaluate candidate terms extracted from a Chinese web novel (玄幻/仙侠 genre).
+For each candidate, decide if it is a genuine glossary-worthy term that requires consistent translation across the novel.
+Return compact JSON only. Do not include markdown, prose, explanations, analysis, chain-of-thought, or <think> text.
 
 Glossary-worthy terms include: character names, aliases, titles/honorifics,
 faction/sect/clan names, location names, martial techniques, items/artifacts,
@@ -274,6 +274,8 @@ Return a JSON array only. No markdown fences. No explanation text.
 Each element: {"candidate_id": "...", "keep": true/false, "term_type": "...", "reason_code": "...", "confidence": 0.9}
 If you cannot evaluate a candidate, set keep=false, reason_code="ambiguous", confidence=0.0.
 ```
+
+The evaluator prompt is analyst-facing and optimized for compact schema-only output. Translator prompts used later in glossary translation are intentionally excluded from this optimization pass.
 
 ### Expanded `glossary/validators.py`
 

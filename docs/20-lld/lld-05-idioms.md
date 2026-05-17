@@ -41,6 +41,8 @@ SQLite datasets:
 7. Promote validated idioms into the authoritative idiom store.
 8. Provide exact-match lookup for packet assembly.
 
+Analyst prompt optimization applies only to the deterministic idiom evaluator documented in LLD 41. Idiom translation and meaning prompts are translator-facing and are intentionally out of scope for M50.
+
 ## Detect Prompt (`llm/prompts/idiom_detect.txt`)
 
 The prompt instructs the LLM to identify Chinese idioms (成语、惯用语) from chapter text. v2.0 adds:

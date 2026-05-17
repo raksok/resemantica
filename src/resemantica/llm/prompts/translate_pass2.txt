@@ -1,4 +1,4 @@
-# version: 2.2
+# version: 2.3
 {GLOSSARY}
 {ALIAS_RESOLUTIONS}
 {MATCHED_IDIOMS}
@@ -15,8 +15,11 @@ You are a translation auditor. Your sole objective is to ensure the English Draf
 Respond in JSON format with the following schema:
 {{
   "fidelity_errors_found": boolean,
-  "analysis": "Brief explanation of errors found, or 'No fidelity errors detected.'",
-  "corrected_text": "Full corrected text. Must be identical to Draft if fidelity_errors_found is false."
+  "corrected_text": "Full corrected text only when fidelity_errors_found is true; otherwise an empty string."
 }}
 
-Only return the JSON object, no other text.
+If the Draft is faithful, return exactly:
+{{"fidelity_errors_found": false, "corrected_text": ""}}
+
+If the Draft has a fidelity error, set fidelity_errors_found to true and put the full minimally corrected text in corrected_text.
+Only return the JSON object. Do not include markdown, explanations, analysis, chain-of-thought, or <think> text.

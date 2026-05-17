@@ -263,6 +263,22 @@ def test_pass2_no_fidelity_errors_returns_original_draft() -> None:
     assert result == "Original draft text."
 
 
+def test_pass2_no_fidelity_errors_accepts_empty_corrected_text() -> None:
+    client = MockLLMClient(json.dumps({
+        "fidelity_errors_found": False,
+        "corrected_text": "",
+    }))
+    result = translate_pass2(
+        client=client,
+        model_name="test-model",
+        prompt_template="# version: 2.3\nSource: {SOURCE_TEXT}\nDraft: {DRAFT_TEXT}",
+        source_text="源文本",
+        draft_text="Original draft text.",
+        full_source_block="源文本",
+    )
+    assert result == "Original draft text."
+
+
 def test_pass2_fidelity_errors_with_corrected_text_returns_corrected() -> None:
     client = MockLLMClient(json.dumps({
         "fidelity_errors_found": True,

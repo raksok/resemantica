@@ -16,6 +16,13 @@ Config fields:
 - `models.analyst_name`
 - `models.embedding_name`
 
+Prompt contract:
+
+- Analyst prompts must prefer compact schema-only responses and explicitly forbid prose, markdown, chain-of-thought, and `<think>` artifacts.
+- Prompt schemas are stage-owned interfaces; prompt optimization must not break existing parsers or artifact shapes.
+- Prompt version bumps are required when prompt behavior changes so affected caches and checkpoints invalidate.
+- Translator prompts are fragile and are excluded from the analyst prompt optimization pass unless a later task explicitly owns them.
+
 Python modules:
 
 - `llm.client.LLMClient`
@@ -78,6 +85,6 @@ Prompt files:
 
 ## Out Of Scope
 
-- prompt text quality iteration
+- broad prompt rewrites that change stage schemas
 - direct llama-cpp-python bindings
 - framework wrappers around simple OpenAI-compatible calls

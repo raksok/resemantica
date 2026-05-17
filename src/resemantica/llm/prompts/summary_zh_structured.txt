@@ -1,4 +1,4 @@
-# version: 1.2
+# version: 1.3
 SUMMARY_ZH_STRUCTURED
 
 ## CHAPTER NUMBER
@@ -15,7 +15,8 @@ visible heading contains a different chapter number.
 {SOURCE_TEXT}
 
 ## INSTRUCTIONS
-Return JSON only and follow this schema exactly:
+Return compact JSON only. Do not include markdown, explanations, analysis, chain-of-thought, or <think> text.
+Follow this schema exactly:
 {{
   "chapter_number": 0,
   "characters_mentioned": [],
@@ -29,6 +30,15 @@ Return JSON only and follow this schema exactly:
 }}
 
 The "is_story_chapter" field is REQUIRED. It MUST be present in every response.
+
+Keep the response concise:
+- characters_mentioned: up to 12 important names, Chinese text only
+- key_events: up to 6 short event strings
+- new_terms: up to 8 glossary-worthy terms, Chinese text only
+- relationships_changed: up to 6 entries, only changed or newly revealed relationships
+- setting: one short phrase
+- tone: one short phrase
+- narrative_progression: 1-3 compact Chinese sentences preserving the chapter's continuity-critical facts
 
 ## NON-STORY CHAPTER DETECTION
 You must determine if this chapter contains actual story content. Set "is_story_chapter" to false if the chapter is:
