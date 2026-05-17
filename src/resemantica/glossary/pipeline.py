@@ -93,6 +93,7 @@ def discover_glossary_candidates(
     eval_batch_size: int | None = None,
     skip_llm_eval: bool = False,
     resume: bool = False,
+    force: bool = False,
     dedup_threshold: float | None = None,
     stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
@@ -132,7 +133,7 @@ def discover_glossary_candidates(
     except Exception:
         pass  # Table may not exist if summaries haven't run yet
 
-    resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume else None
+    resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume and not force else None
 
     try:
         _emit(
@@ -249,14 +250,19 @@ def discover_glossary_candidates(
 
                 # Checkpoint after LLM eval
                 replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
-                set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="eval_started")
+                set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="eval_completed")
+            elif resume_stage == "filtered":
+                set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="eval_completed")
+                resume_stage = "eval_completed"
 
         raise_if_stop_requested(stop_token)
 
         # --- Stage 5: Embedding-based Dedup / Alias Clustering ---
         to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
         clusters: list[AliasCluster] = []
-        if to_dedup:
+        if resume_stage == "dedup_completed":
+            logger.info("Resuming glossary: skipping dedup phase")
+        elif to_dedup:
             _emit(
                 run_id,
                 release_id,
@@ -367,6 +373,7 @@ def translate_glossary_candidates(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
+    force: bool = False,
     stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
@@ -387,7 +394,15 @@ def translate_glossary_candidates(
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
     try:
-        pending = list_candidates_for_translation(conn, release_id=release_id)
+        pending = (
+            [
+                candidate
+                for candidate in list_candidates(conn, release_id=release_id)
+                if candidate.llm_keep == 1 and candidate.candidate_status != "filtered"
+            ]
+            if force
+            else list_candidates_for_translation(conn, release_id=release_id)
+        )
         chapters_with_pending = {candidate.first_seen_chapter for candidate in pending}
         _emit(
             run_id,
@@ -594,6 +609,7 @@ def promote_glossary_candidates(
     config: AppConfig | None = None,
     project_root: Path | None = None,
     review_file_path: Path | None = None,
+    force: bool = False,
     stop_token: StopToken | None = None,
     llm_usage_payload: dict[str, int] | None = None,
 ) -> dict[str, Any]:
@@ -619,7 +635,15 @@ def promote_glossary_candidates(
                 conn, release_id=release_id, review_data=review_data
             )
         else:
-            promotable_candidates = list_candidates_for_promotion(conn, release_id=release_id)
+            promotable_candidates = (
+                [
+                    candidate
+                    for candidate in list_candidates(conn, release_id=release_id)
+                    if candidate.llm_keep == 1 and candidate.candidate_translation_en
+                ]
+                if force
+                else list_candidates_for_promotion(conn, release_id=release_id)
+            )
 
         existing_entries = list_locked_entries(conn, release_id=release_id)
         promotion_entries, conflicts = validate_candidates_for_promotion(

@@ -57,6 +57,8 @@ The production plan is explicit and inspectable. It should include:
 
 If the saved checkpoint contains `chapter_start` or `chapter_end`, those bounds are reused when the operator does not pass explicit bounds on the new command. Explicit CLI bounds take precedence.
 
+Internal stage resume is enabled by default. When production reaches summaries, glossary, idioms, graph, packets, or translation, the stage also skips its own completed durable units. Operators use `--force` on production or an individual command to rebuild the requested scope.
+
 ## Translation Stage Behavior
 
 `translate-chapter` must:
@@ -140,8 +142,19 @@ re-running, proceed forward with `rsem run resume` or individual
 `rsem pre` / `rsem pac build` commands.
 
 The `--allow-rewind` flag is available on `summaries`, `idioms`, `graph`,
-`packets-build`, and `epub-rebuild`. It is intentionally omitted from
-`run production` and `resume` — those must stay forward-only.
+`packets-build`, and `epub-rebuild`. It changes only stage-order validation.
+It does not mean "ignore summary checkpoints", "rerun packet cache hits", or
+"drop graph drafts".
+
+Use `--force` when the operator needs to rebuild:
+
+    rsem pre sum -r p1 -R 001 --force -s 1 -e 20
+    rsem pac build -r p1 -R 001 --force -C 12
+    rsem run resume -r p1 -R 001 --force
+
+`run production --force` starts again at `preprocess-summaries` and forwards
+`force=True` to each stage. `run resume --force` keeps the resume start point
+but tells each resumed stage to bypass its internal checkpoints.
 
 ## Tests
 

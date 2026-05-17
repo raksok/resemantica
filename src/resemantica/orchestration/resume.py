@@ -15,6 +15,7 @@ def resume_run(
     run_id: str,
     *,
     from_stage: Optional[str] = None,
+    force: bool = False,
     stop_token: StopToken | None = None,
 ) -> StageResult:
     conn = ensure_tracking_db(release_id)
@@ -61,6 +62,7 @@ def resume_run(
             checkpoint=state.checkpoint if current == start_stage else None,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
+            force=force,
             stop_token=stop_token,
             enforce_gates=True,
         )

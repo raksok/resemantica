@@ -53,7 +53,7 @@ Implemented package layout (M5 slice):
 Implemented package layout (M6 slice):
 
 - `src/resemantica/graph/`: graph models, Ladybug client wrapper, deterministic extraction, validation, filtering, and preprocessing pipeline
-- `src/resemantica/db/graph_repo.py`: SQLite repository for deferred entities and graph snapshot metadata
+- `src/resemantica/db/graph_repo.py`: SQLite repository for deferred entities, graph extraction drafts, and graph snapshot metadata
 - `tests/graph/`: alias reveal gating, relationship chapter eligibility, validation, deferred lifecycle, and snapshot metadata tests
 
 Implemented package layout (M7 slice):

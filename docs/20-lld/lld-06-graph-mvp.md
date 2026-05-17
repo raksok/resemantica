@@ -26,6 +26,12 @@ LadybugDB datasets:
 - appearances
 - relationships
 
+SQLite datasets:
+
+- `deferred_entities`
+- `graph_snapshots`
+- `graph_extraction_drafts`
+
 ## Data Flow
 
 1. Read extracted chapter content with glossary anchors and summaries.
@@ -65,6 +71,10 @@ Alias `alias_language` is detected from content rather than hardcoded:
 
 - graph exports used by packets must be identifiable by snapshot hash or version
 - provisional graph state may be rerun without mutating confirmed graph state
+- extraction drafts are persisted per release, run, chapter, chapter source hash, and graph prompt version
+- resume skips chapter extraction when a matching draft row exists, merges requested drafts in chapter order, validates, and writes confirmed graph state plus a new snapshot
+- draft merging preserves cross-chapter relationship intervals before validation
+- `--force` deletes or ignores matching draft rows for the requested scope before extraction
 
 ## Tests
 

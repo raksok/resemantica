@@ -319,6 +319,28 @@ class TestRunStage:
         assert result.success is True
         assert calls[0][0] == "preprocess-graph"
 
+    def test_runner_production_force_starts_at_first_stage_and_forwards_force(self, monkeypatch):
+        import uuid
+
+        from resemantica.orchestration.models import StageResult
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+        _make_run_state(release_id, run_id, "translate-range", status="completed")
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def fake_run_stage(self, stage_name: str, **kwargs):
+            calls.append((stage_name, kwargs))
+            return StageResult(True, stage_name, "ok")
+
+        monkeypatch.setattr(OrchestrationRunner, "run_stage", fake_run_stage)
+
+        result = OrchestrationRunner(release_id, run_id).run_production(force=True)
+
+        assert result.success is True
+        assert calls[0][0] == "preprocess-summaries"
+        assert all(call_kwargs["force"] is True for _, call_kwargs in calls)
+
     def test_translate_range_requires_bounds(self):
         import uuid
         release_id = f"test-release-{uuid.uuid4().hex[:8]}"

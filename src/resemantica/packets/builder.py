@@ -426,6 +426,7 @@ def build_chapter_packet(
     project_root: Path | None = None,
     graph_client: GraphClient | None = None,
     budget_tokens: int | None = None,
+    force_rebuild: bool = False,
 ) -> PacketBuildOutput:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -652,6 +653,11 @@ def build_chapter_packet(
             idiom_policy_hash=idiom_policy_hash,
         )
 
+        if force_rebuild and latest_metadata is not None:
+            staleness.is_stale = True
+            if "forced_rebuild" not in staleness.reasons:
+                staleness.reasons.append("forced_rebuild")
+
         if latest_metadata is not None and not staleness.is_stale:
             packet_path_ref = Path(latest_metadata.packet_path)
             bundle_path_ref = Path(latest_metadata.bundle_path)
@@ -860,6 +866,7 @@ def build_packets(
     graph_client: GraphClient | None = None,
     stop_token: StopToken | None = None,
     budget_tokens: int | None = None,
+    force_rebuild: bool = False,
 ) -> dict[str, object]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -907,6 +914,7 @@ def build_packets(
                 project_root=project_root,
                 graph_client=graph_client,
                 budget_tokens=budget_tokens,
+                force_rebuild=force_rebuild,
             )
             results.append(result)
             if result.status == "skipped":

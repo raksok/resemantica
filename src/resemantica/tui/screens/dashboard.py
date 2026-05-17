@@ -78,9 +78,20 @@ class DashboardScreen(BaseScreen):
             if stage.action.reason:
                 hint += f" [dim]({stage.action.reason})[/]"
             stage_lines.append(hint)
-        self.query_one("#dashboard-stage-list", Static).update("\n".join(stage_lines))
+        stage_widget = self.query_one_optional("#dashboard-stage-list", Static)
+        worker_widget = self.query_one_optional("#dashboard-active-worker", Static)
+        failure_widget = self.query_one_optional("#dashboard-latest-failure", Static)
+        tail_widget = self.query_one_optional("#dashboard-event-tail", Static)
+        if (
+            stage_widget is None
+            or worker_widget is None
+            or failure_widget is None
+            or tail_widget is None
+        ):
+            return
 
-        worker_widget = self.query_one("#dashboard-active-worker", Static)
+        stage_widget.update("\n".join(stage_lines))
+
         if snapshot.active_action:
             sdef = next((d for d in STAGE_DEFINITIONS if d["key"] == snapshot.active_action), None)
             lbl = sdef["label"] if sdef else snapshot.active_action
@@ -88,13 +99,12 @@ class DashboardScreen(BaseScreen):
         else:
             worker_widget.update("")
 
-        failure_widget = self.query_one("#dashboard-latest-failure", Static)
         if snapshot.latest_failure:
             failure_widget.update(f"[red]Latest failure: {snapshot.latest_failure}[/]")
         else:
             failure_widget.update("")
 
-        self.query_one("#dashboard-event-tail", Static).update(
+        tail_widget.update(
             self._render_cached_event_tail(
                 events,
                 title="Recent Events",

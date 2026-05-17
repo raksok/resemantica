@@ -53,7 +53,8 @@ Artifacts:
 ## Command Behavior
 
 - `translate-chapter` targets exactly one chapter.
-- If a valid Pass 1 checkpoint exists, resume from Pass 2 unless `--force-pass1` is supplied.
+- If valid pass checkpoints exist, reruns skip completed Pass 1, Pass 2, and Pass 3 work by default.
+- `--force` ignores pass checkpoints for the requested chapter or range; `--force-pass1` remains a backward-compatible alias.
 - If structure validation fails, resegment the failed block at sentence boundaries, retry each segment in Pass 1, then run Pass 2 sequentially with full original block context and prior segment translations against each segment draft before marking the chapter failed.
 - Outputs are written under the run-scoped translation artifact tree.
 
@@ -79,6 +80,7 @@ Rerun rule:
 
 - if source hash or prompt version changes, prior pass artifacts are stale for that pass and below
 - if resegmentation changes block segment identity, dependent segment artifacts are stale and must be regenerated
+- range and batched translation both forward `force` consistently into Pass 1, Pass 2, and Pass 3
 
 ## Tests
 

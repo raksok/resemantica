@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -8,16 +9,25 @@ from typing import Any
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import find_exact_locked_entry, list_locked_entries
 from resemantica.db.graph_repo import (
+    delete_graph_extraction_drafts,
+    get_graph_extraction_draft,
     list_deferred_entities,
     mark_deferred_graph_created,
     mark_deferred_promoted,
+    save_graph_extraction_draft,
     save_graph_snapshot,
     upsert_deferred_entities,
 )
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.graph.client import GraphClient
-from resemantica.graph.extractor import extract_entities
-from resemantica.graph.models import GraphAppearance, GraphEntity
+from resemantica.graph.extractor import GraphExtractionResult, extract_entities
+from resemantica.graph.models import (
+    DeferredEntityRecord,
+    GraphAlias,
+    GraphAppearance,
+    GraphEntity,
+    GraphRelationship,
+)
 from resemantica.graph.validators import validate_graph_state
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
@@ -72,6 +82,108 @@ def _merge_appearances(appearances: list[GraphAppearance]) -> list[GraphAppearan
     return sorted(by_id.values(), key=lambda row: (row.chapter_number, row.appearance_id))
 
 
+def _merge_aliases(aliases: list[GraphAlias]) -> list[GraphAlias]:
+    by_id: dict[str, GraphAlias] = {}
+    for alias in aliases:
+        current = by_id.get(alias.alias_id)
+        if current is None:
+            by_id[alias.alias_id] = alias
+            continue
+        current.first_seen_chapter = min(current.first_seen_chapter, alias.first_seen_chapter)
+        current.last_seen_chapter = max(current.last_seen_chapter, alias.last_seen_chapter)
+        current.revealed_chapter = min(current.revealed_chapter, alias.revealed_chapter)
+        current.confidence = max(current.confidence, alias.confidence)
+    return sorted(by_id.values(), key=lambda row: row.alias_id)
+
+
+def _merge_relationships(relationships: list[GraphRelationship]) -> list[GraphRelationship]:
+    by_scope: dict[tuple[str, str], list[GraphRelationship]] = {}
+    for relationship in relationships:
+        by_scope.setdefault((relationship.type, relationship.source_entity_id), []).append(relationship)
+
+    merged: list[GraphRelationship] = []
+    for (_edge_type, _source_entity_id), group in sorted(by_scope.items()):
+        ordered = sorted(group, key=lambda row: (row.start_chapter, row.target_entity_id))
+        if not ordered:
+            continue
+        current = replace(ordered[0])
+
+        def _flush(end_chapter: int | None) -> None:
+            current.end_chapter = end_chapter
+            merged.append(replace(current))
+
+        for relationship in ordered[1:]:
+            if relationship.target_entity_id == current.target_entity_id:
+                if current.lore_text is None and relationship.lore_text is not None:
+                    current.lore_text = relationship.lore_text
+                current.is_masked_identity = current.is_masked_identity or relationship.is_masked_identity
+                current.confidence = max(current.confidence, relationship.confidence)
+                current.end_chapter = None
+                continue
+            if relationship.start_chapter == current.start_chapter:
+                if current.lore_text is None and relationship.lore_text is not None:
+                    current.lore_text = relationship.lore_text
+                current.is_masked_identity = current.is_masked_identity or relationship.is_masked_identity
+                current.confidence = max(current.confidence, relationship.confidence)
+                continue
+
+            _flush(relationship.start_chapter - 1)
+            current = replace(relationship)
+
+        _flush(None)
+
+    return sorted(merged, key=lambda row: row.relationship_id)
+
+
+def _extraction_to_payload(extraction: GraphExtractionResult) -> dict[str, object]:
+    return {
+        "provisional_entities": [row.to_json_dict() for row in extraction.provisional_entities],
+        "provisional_aliases": [row.to_json_dict() for row in extraction.provisional_aliases],
+        "provisional_appearances": [row.to_json_dict() for row in extraction.provisional_appearances],
+        "provisional_relationships": [row.to_json_dict() for row in extraction.provisional_relationships],
+        "deferred_entities": [row.to_json_dict() for row in extraction.deferred_entities],
+        "warnings": extraction.warnings,
+    }
+
+
+def _payload_to_extraction(payload: dict[str, object]) -> GraphExtractionResult:
+    def _rows(name: str) -> list[dict[str, Any]]:
+        raw = payload.get(name, [])
+        return [dict(row) for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+
+    warnings_raw = payload.get("warnings", [])
+    warnings = [str(item) for item in warnings_raw] if isinstance(warnings_raw, list) else []
+    return GraphExtractionResult(
+        provisional_entities=[GraphEntity(**row) for row in _rows("provisional_entities")],
+        provisional_aliases=[GraphAlias(**row) for row in _rows("provisional_aliases")],
+        provisional_appearances=[GraphAppearance(**row) for row in _rows("provisional_appearances")],
+        provisional_relationships=[GraphRelationship(**row) for row in _rows("provisional_relationships")],
+        deferred_entities=[DeferredEntityRecord(**row) for row in _rows("deferred_entities")],
+        warnings=warnings,
+    )
+
+
+def _merge_extractions(extractions: list[GraphExtractionResult]) -> GraphExtractionResult:
+    return GraphExtractionResult(
+        provisional_entities=_merge_entities(
+            [row for extraction in extractions for row in extraction.provisional_entities]
+        ),
+        provisional_aliases=_merge_aliases(
+            [row for extraction in extractions for row in extraction.provisional_aliases]
+        ),
+        provisional_appearances=_merge_appearances(
+            [row for extraction in extractions for row in extraction.provisional_appearances]
+        ),
+        provisional_relationships=_merge_relationships(
+            [row for extraction in extractions for row in extraction.provisional_relationships]
+        ),
+        deferred_entities=[
+            row for extraction in extractions for row in extraction.deferred_entities
+        ],
+        warnings=[warning for extraction in extractions for warning in extraction.warnings],
+    )
+
+
 def preprocess_graph(
     *,
     release_id: str,
@@ -83,6 +195,8 @@ def preprocess_graph(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     stop_token: StopToken | None = None,
+    resume: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -126,29 +240,83 @@ def preprocess_graph(
         for row in cursor.fetchall():
             skip_chapters.add(int(row[0]))
 
-        extraction = extract_entities(
-            release_id=release_id,
-            extracted_chapters_dir=paths.extracted_chapters_dir,
-            locked_glossary=locked_glossary,
-            llm_client=llm_client_internal,
-            model_name=config_obj.models.analyst_name,
-            prompt_template=prompt.template,
-            prompt_version=prompt.version,
-            chapter_start=chapter_start,
-            chapter_end=chapter_end,
-            skip_chapters=skip_chapters or None,
-            config=config_obj,
-            chapter_refs=chapter_refs,
-            cache_root=paths.release_root / "cache" / "llm",
-            event_callback=lambda event_name, chapter_number, payload: _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.{event_name}",
-                chapter_number=chapter_number,
-                **payload,
-            ),
-            stop_token=stop_token,
-        )
+        if force:
+            delete_graph_extraction_drafts(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_numbers=[ref.chapter_number for ref in chapter_refs],
+            )
+
+        chapter_extractions: list[GraphExtractionResult] = []
+        for ref in chapter_refs:
+            chapter_source_hash = ref.chapter_source_hash
+            if not chapter_source_hash:
+                payload = json.loads(ref.chapter_path.read_text(encoding="utf-8"))
+                chapter_source_hash = str(payload.get("chapter_source_hash") or "")
+            draft = (
+                get_graph_extraction_draft(
+                    conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    chapter_number=ref.chapter_number,
+                    chapter_source_hash=chapter_source_hash,
+                    prompt_version=prompt.version,
+                )
+                if resume and not force
+                else None
+            )
+            if draft is not None:
+                chapter_extractions.append(_payload_to_extraction(json.loads(draft.payload_json)))
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.draft_cache_hit",
+                    chapter_number=ref.chapter_number,
+                    message=f"Graph extraction draft cache hit for chapter {ref.chapter_number}",
+                )
+                continue
+
+            chapter_extraction = extract_entities(
+                release_id=release_id,
+                extracted_chapters_dir=paths.extracted_chapters_dir,
+                locked_glossary=locked_glossary,
+                llm_client=llm_client_internal,
+                model_name=config_obj.models.analyst_name,
+                prompt_template=prompt.template,
+                prompt_version=prompt.version,
+                chapter_start=ref.chapter_number,
+                chapter_end=ref.chapter_number,
+                skip_chapters=skip_chapters or None,
+                config=config_obj,
+                chapter_refs=[ref],
+                cache_root=paths.release_root / "cache" / "llm",
+                event_callback=lambda event_name, chapter_number, payload: _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.{event_name}",
+                    chapter_number=chapter_number,
+                    **payload,
+                ),
+                stop_token=stop_token,
+            )
+            save_graph_extraction_draft(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=ref.chapter_number,
+                chapter_source_hash=chapter_source_hash,
+                prompt_version=prompt.version,
+                payload=_extraction_to_payload(chapter_extraction),
+            )
+            chapter_extractions.append(chapter_extraction)
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"graph_draft_last_chapter": ref.chapter_number},
+                message=f"Graph preprocess stopped after draft chapter {ref.chapter_number}",
+            )
+
+        extraction = _merge_extractions(chapter_extractions)
         warnings.extend(extraction.warnings)
         raise_if_stop_requested(
             stop_token,

@@ -485,6 +485,63 @@ def test_stale_detection_triggers_packet_rebuild(
     assert second.packet_hash != first.packet_hash
 
 
+def test_packet_force_rebuild_bypasses_up_to_date_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m49-packet-force"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三进入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction"), ("李四", "Li Si", "character")],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    first = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        graph_client=graph_client,
+    )
+    cache_hit = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-002",
+        graph_client=graph_client,
+    )
+    forced = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-003",
+        graph_client=graph_client,
+        force_rebuild=True,
+    )
+
+    assert first.status in {"built", "rebuilt_stale"}
+    assert cache_hit.status == "up_to_date"
+    assert forced.status == "rebuilt_stale"
+    assert forced.stale_reasons == ["forced_rebuild"]
+
+
 def test_packet_prefers_compact_story_summary(
     tmp_path: Path,
     monkeypatch,

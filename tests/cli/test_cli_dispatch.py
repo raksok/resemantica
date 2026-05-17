@@ -239,6 +239,14 @@ class TestCliDispatch:
         )
         assert args.allow_rewind is False
 
+    def test_preprocess_force_flags_are_separate_from_allow_rewind(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["preprocess", "summaries", "--release", "r1", "--force", "--allow-rewind"]
+        )
+        assert args.force is True
+        assert args.allow_rewind is True
+
     def test_preprocess_idioms_allow_rewind(self):
         parser = _build_parser()
         args = parser.parse_args(
@@ -259,6 +267,13 @@ class TestCliDispatch:
             ["packets", "build", "--release", "r1", "--chapter", "5", "-w"]
         )
         assert args.allow_rewind is True
+
+    def test_packets_build_force(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["packets", "build", "--release", "r1", "--chapter", "5", "--force"]
+        )
+        assert args.force is True
 
     def test_packets_build(self):
         parser = _build_parser()
@@ -288,6 +303,12 @@ class TestCliDispatch:
         args = parser.parse_args(["run", "resume", "--release", "r1", "--from-stage", "translate-chapter"])
         assert args.run_command == "resume"
         assert args.from_stage == "translate-chapter"
+
+    def test_run_resume_force(self):
+        parser = _build_parser()
+        args = parser.parse_args(["run", "resume", "--release", "r1", "--force"])
+        assert args.run_command == "resume"
+        assert args.force is True
 
     def test_run_cleanup_plan(self):
         parser = _build_parser()
@@ -576,6 +597,10 @@ class TestCliDispatch:
         assert args.release == "r1"
         assert args.run == "run-1"
         assert args.chapter == 3
+
+    def test_translate_force_aliases(self):
+        args = _parse_and_resolve(["tra", "-r", "r1", "-R", "run-1", "-C", "3", "--force-pass1"])
+        assert args.force is True
 
     def test_glossary_discover_short_flags(self):
         args = _parse_and_resolve(["pre", "gls-discover", "-r", "r1", "-p", "0.5"])

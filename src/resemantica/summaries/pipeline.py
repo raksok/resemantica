@@ -590,6 +590,7 @@ def preprocess_summaries(
     chapter_end: int | None = None,
     stop_token: StopToken | None = None,
     resume: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -620,7 +621,7 @@ def preprocess_summaries(
     zh_skip_until = 0
     story_skip_until = 0
     en_skip_until = 0
-    if resume:
+    if resume and not force:
         checkpoint = get_summary_checkpoint(conn, release_id=release_id, run_id=run_id)
         if checkpoint is not None:
             zh_skip_until, story_skip_until, en_skip_until = checkpoint

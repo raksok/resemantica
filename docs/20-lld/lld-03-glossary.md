@@ -188,6 +188,10 @@ Without `--review-file`, behavior is identical to the original MVP flow.
 ## Resume And Rerun
 
 - repeated discovery for the same source hash must be idempotent
+- discovery uses the durable phase checkpoint `filtered`, `eval_completed`, and `dedup_completed`
+- interrupted LLM evaluation resumes by evaluating candidates that still lack LLM fields
+- translate/promote reruns are state-driven: untranslated or unpromoted candidates are processed by default
+- `--force` reruns discovery, translation, or promotion for the requested scope instead of honoring phase checkpoints or already translated/promoted state
 - promotion never mutates historical candidate evidence
 - glossary-dependent downstream artifacts are invalidated by locked glossary hash changes
 

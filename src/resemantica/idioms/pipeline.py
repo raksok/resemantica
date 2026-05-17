@@ -105,6 +105,7 @@ def translate_idiom_candidates(
     rendering_prompt_version: str,
     meaning_prompt_template: str,
     meaning_prompt_version: str,
+    force: bool = False,
     stop_token: StopToken | None = None,
     event_callback: Callable[[str, dict[str, object]], None] | None = None,
 ) -> int:
@@ -115,7 +116,15 @@ def translate_idiom_candidates(
         if event_callback is not None:
             event_callback(event_name, payload)
 
-    pending = list_candidates_for_translation(conn, release_id=release_id)
+    pending = (
+        [
+            candidate
+            for candidate in list_candidates(conn, release_id=release_id)
+            if candidate.candidate_status in {"discovered", "translated", "promoted"}
+        ]
+        if force
+        else list_candidates_for_translation(conn, release_id=release_id)
+    )
     _notify(
         "translate.started",
         pending_count=len(pending),
@@ -389,6 +398,7 @@ def preprocess_idioms(
     skip_llm_eval: bool = False,
     score_threshold: float | None = None,
     resume: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -412,7 +422,7 @@ def preprocess_idioms(
     ensure_schema(conn, "idioms")
     ensure_schema(conn, "summaries")
 
-    resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume else None
+    resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume and not force else None
     if resume_stage:
         logger.info("Resuming idioms from checkpoint stage: {}", resume_stage)
 
@@ -509,6 +519,7 @@ def preprocess_idioms(
                 rendering_prompt_version=translate_prompt.version,
                 meaning_prompt_template=meaning_prompt.template,
                 meaning_prompt_version=meaning_prompt.version,
+                force=force,
                 stop_token=stop_token,
                 event_callback=lambda event_name, payload: _emit(
                     run_id,
@@ -537,7 +548,16 @@ def preprocess_idioms(
             checkpoint={"promote_completed": False},
             message="Idiom promotion stopped before starting",
         )
-        pending_candidates = list_candidates_for_promotion(conn, release_id=release_id)
+        pending_candidates = (
+            [
+                candidate
+                for candidate in list_candidates(conn, release_id=release_id)
+                if candidate.candidate_status in {"translated", "promoted"}
+                and candidate.preferred_rendering_en
+            ]
+            if force
+            else list_candidates_for_promotion(conn, release_id=release_id)
+        )
         existing_policies = list_policies(conn, release_id=release_id)
         validation = validate_idiom_policy(
             candidates=pending_candidates,

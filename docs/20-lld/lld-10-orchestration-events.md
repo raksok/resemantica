@@ -55,7 +55,11 @@ Event model minimum fields:
 ## Resume And Rerun
 
 - rerun behavior is stage-scoped and hash-aware
-- resume is driven by persisted checkpoints, not inferred from filesystem guesses
+- default reruns for the same `release_id` and `run_id` resume by skipping completed durable work
+- `--force` bypasses internal checkpoints and cache hits for the requested command scope
+- `--allow-rewind` only permits a stage-order transition; it does not disable internal resume
+- resume is driven by persisted SQLite checkpoints or authoritative metadata, not inferred from filesystem guesses
+- stage checkpoints advance only after the corresponding durable unit has been safely written
 - cleanup never deletes authority state outside its declared scope
 
 ## Tests

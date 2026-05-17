@@ -116,6 +116,10 @@ This prevents duplicate rows when the same idiom is detected across multiple cha
 
 - idioms are additive; new chapters can be processed without clearing existing idioms
 - re-running a chapter updates appearance counts and chapter range metadata
+- default reruns use the durable phase checkpoint: `detect_completed`, `translated`, then `promoted`
+- translate reruns skip already translated candidates and continue pending candidates
+- promotion reruns process only unpromoted translated candidates by default
+- `--force` reruns detect, translate, and promote for the requested scope
 
 ## Tests
 

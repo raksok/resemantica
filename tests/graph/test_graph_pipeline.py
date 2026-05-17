@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_entries
-from resemantica.db.graph_repo import ensure_graph_schema, list_deferred_entities, list_graph_snapshots
+from resemantica.db.graph_repo import (
+    ensure_graph_schema,
+    get_graph_extraction_draft,
+    list_deferred_entities,
+    list_graph_snapshots,
+)
 from resemantica.db.sqlite import open_connection
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
@@ -113,8 +118,10 @@ class ScriptedGraphLLM:
     ) -> None:
         self.entities_by_chapter = entities_by_chapter
         self.relationships_by_chapter = relationships_by_chapter or {}
+        self.calls = 0
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        self.calls += 1
         chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
         if chapter_match is None:
             return '{"entities": [], "relationships": []}'
@@ -524,6 +531,71 @@ def test_snapshot_metadata_written_for_packet_reproducibility(
         assert snapshots[0].snapshot_hash == result["snapshot_hash"]
     finally:
         conn.close()
+
+
+def test_graph_resume_uses_persisted_chapter_drafts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m49-graph-resume"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="青云门今日议事。",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="青云门",
+        target_term="Azure Sect",
+        category="faction",
+    )
+
+    first_llm = ScriptedGraphLLM({
+        1: [
+            {"source_term": "青云门", "entity_type": "faction", "aliases": [], "evidence_snippet": "青云门今日议事。"},
+        ],
+    })
+    client = GraphClient(backend=InMemoryGraphBackend())
+
+    first = preprocess_graph(
+        release_id=release_id,
+        run_id="graph-001",
+        graph_client=client,
+        llm_client=first_llm,
+        resume=True,
+    )
+    assert first["status"] == "success"
+    assert first_llm.calls == 1
+
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_graph_schema(conn)
+    try:
+        draft = get_graph_extraction_draft(
+            conn,
+            release_id=release_id,
+            run_id="graph-001",
+            chapter_number=1,
+            chapter_source_hash="hash-1",
+            prompt_version="2.0",
+        )
+        assert draft is not None
+    finally:
+        conn.close()
+
+    second_llm = ScriptedGraphLLM({})
+    second = preprocess_graph(
+        release_id=release_id,
+        run_id="graph-001",
+        graph_client=client,
+        llm_client=second_llm,
+        resume=True,
+    )
+
+    assert second["status"] == "success"
+    assert second_llm.calls == 0
 
 
 def test_role_state_transition_across_chapters(

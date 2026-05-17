@@ -356,6 +356,19 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             UNIQUE (release_id, snapshot_hash)
         );
 
+        CREATE TABLE IF NOT EXISTS graph_extraction_drafts (
+            draft_id TEXT PRIMARY KEY,
+            release_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            chapter_number INTEGER NOT NULL,
+            chapter_source_hash TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (release_id, run_id, chapter_number, chapter_source_hash, prompt_version)
+        );
+
         CREATE TABLE IF NOT EXISTS packet_metadata (
             packet_id TEXT PRIMARY KEY,
             release_id TEXT NOT NULL,

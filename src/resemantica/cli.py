@@ -41,6 +41,14 @@ def _add_allow_rewind_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_force_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-f", "--force",
+        action="store_true",
+        help="Rebuild the requested scope instead of resuming from durable checkpoints or cache hits.",
+    )
+
+
 def _add_common_release_args(parser: argparse.ArgumentParser, *, default_run: str) -> None:
     parser.add_argument(
         "-r", "--release", required=True,
@@ -345,9 +353,10 @@ and terminology violations.""",
     )
     _add_chapter_scope_args(translate, required=True)
     translate.add_argument(
-        "-f", "--force-pass1",
+        "-f", "--force", "--force-pass1",
+        dest="force",
         action="store_true",
-        help="Ignore cached pass1 checkpoint and re-run from scratch.",
+        help="Ignore translation pass checkpoints and re-run the requested chapter or range.",
     )
     translate.add_argument(
         "-c", "--config",
@@ -402,8 +411,9 @@ candidates.json with frequency counts and context snippets.""",
     glossary_discover.add_argument(
         "--resume",
         action="store_true",
-        help="Resume from DB checkpoint (skip completed stages).",
+        help="Deprecated: resume is the default. Use --force to rebuild.",
     )
+    _add_force_arg(glossary_discover)
     glossary_discover.add_argument(
         "--dedup-threshold",
         type=float,
@@ -419,6 +429,7 @@ produce provisional English renderings. Updates candidates.json.""",
     )
     _add_common_release_args(glossary_translate, default_run="glossary-translate")
     _add_chapter_scope_args(glossary_translate)
+    _add_force_arg(glossary_translate)
 
     glossary_review = preprocess_subparsers.add_parser(
         "glossary-review", aliases=["gls-review"],
@@ -441,6 +452,7 @@ glossary-review run before promotion.""",
     )
     _add_common_release_args(glossary_promote, default_run="glossary-promote")
     _add_chapter_scope_args(glossary_promote)
+    _add_force_arg(glossary_promote)
     glossary_promote.add_argument(
         "-F", "--review", "--review-file",
         dest="review_file",
@@ -461,6 +473,7 @@ arc_summary_zh (active narrative arc context). Stored in resemantica.db.""",
     )
     _add_common_release_args(summaries, default_run="summaries")
     _add_chapter_scope_args(summaries)
+    _add_force_arg(summaries)
     _add_allow_rewind_arg(summaries)
 
     idioms = preprocess_subparsers.add_parser(
@@ -473,6 +486,7 @@ policies with preferred English renderings to resemantica.db.""",
     )
     _add_common_release_args(idioms, default_run="idioms")
     _add_chapter_scope_args(idioms)
+    _add_force_arg(idioms)
     _add_allow_rewind_arg(idioms)
 
     idiom_review = preprocess_subparsers.add_parser(
@@ -516,6 +530,7 @@ with chapter-safe spoiler filters. Outputs graph.ladybug and snapshot.json.""",
     )
     _add_common_release_args(graph, default_run="graph")
     _add_chapter_scope_args(graph)
+    _add_force_arg(graph)
     _add_allow_rewind_arg(graph)
 
     packets = subparsers.add_parser(
@@ -539,6 +554,7 @@ detection rebuilds automatically when upstream hashes change.""",
     )
     _add_common_release_args(packets_build, default_run="packets-build")
     _add_chapter_scope_args(packets_build)
+    _add_force_arg(packets_build)
     _add_allow_rewind_arg(packets_build)
 
     rebuild = subparsers.add_parser(
@@ -646,6 +662,7 @@ list without executing.""",
         help="Print the deterministic stage plan without executing any stages.",
     )
     _add_chapter_scope_args(run_production)
+    _add_force_arg(run_production)
     _add_batched_model_order_arg(run_production)
 
     run_resume = run_subparsers.add_parser(
@@ -666,6 +683,7 @@ point to a specific stage.""",
         metavar="STAGE",
         help="Stage name to resume from. Default: auto-detect from checkpoint.",
     )
+    _add_force_arg(run_resume)
 
     run_cleanup_plan = run_subparsers.add_parser(
         "cleanup-plan", aliases=["cln-plan"],
@@ -780,7 +798,7 @@ def main(argv: list[str] | None = None) -> int:
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                     "translate-chapter",
                     chapter_number=args.chapter,
-                    force=bool(getattr(args, "force_pass1", False)),
+                    force=bool(getattr(args, "force", False)),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -792,6 +810,7 @@ def main(argv: list[str] | None = None) -> int:
                     "translate-range",
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
                     batched_model_order=getattr(args, "batched_model_order", None),
                     stop_token=stop_token,
                 ),
@@ -820,7 +839,8 @@ def main(argv: list[str] | None = None) -> int:
                     pruning_threshold=getattr(args, "pruning_threshold", None),
                     eval_batch_size=getattr(args, "eval_batch_size", None),
                     skip_llm_eval=bool(getattr(args, "skip_llm_eval", False)),
-                    resume=bool(getattr(args, "resume", False)),
+                    resume=not bool(getattr(args, "force", False)),
+                    force=bool(getattr(args, "force", False)),
                     dedup_threshold=getattr(args, "dedup_threshold", None),
                     stop_token=stop_token,
                 ),
@@ -841,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
+                    force=bool(getattr(args, "force", False)),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -879,6 +900,7 @@ def main(argv: list[str] | None = None) -> int:
                     run_id=args.run,
                     config=config,
                     review_file_path=getattr(args, "review_file", None),
+                    force=bool(getattr(args, "force", False)),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -909,6 +931,7 @@ def main(argv: list[str] | None = None) -> int:
                     "preprocess-summaries",
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
                     allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
@@ -926,6 +949,7 @@ def main(argv: list[str] | None = None) -> int:
                     "preprocess-idioms",
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
                     allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
@@ -994,6 +1018,7 @@ def main(argv: list[str] | None = None) -> int:
                     "preprocess-graph",
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
                     allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
@@ -1019,6 +1044,7 @@ def main(argv: list[str] | None = None) -> int:
                     chapter_number=args.chapter,
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
                     allow_rewind=getattr(args, "allow_rewind", False),
                     stop_token=stop_token,
                 ),
@@ -1047,6 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=True,
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
                     batched_model_order=getattr(args, "batched_model_order", None),
                 )
                 for stage in result.metadata.get("stages", []):
@@ -1063,6 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=False,
                     chapter_start=args.start,
                     chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
                     batched_model_order=getattr(args, "batched_model_order", None),
                 ),
                 stop_token=stop_token,
@@ -1079,6 +1107,7 @@ def main(argv: list[str] | None = None) -> int:
                 lambda: resume_run(
                     args.release, args.run,
                     from_stage=args.from_stage,
+                    force=bool(getattr(args, "force", False)),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,

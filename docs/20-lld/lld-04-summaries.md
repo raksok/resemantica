@@ -81,6 +81,8 @@ story_compact_max_tokens = 2048 # valid: > 0
 - `story_so_far_zh` is rebuilt deterministically from validated predecessors, never from English output
 - summary checkpoints track `zh_last_chapter`, `story_last_chapter`, and `en_last_chapter`
 - resume skips the three internal phases independently when their checkpoint is complete
+- `preprocess summaries` and orchestration enable resume by default for the same release/run
+- `--force` ignores summary checkpoints for the requested chapter scope and rebuilds all three phases
 
 ## Tests
 

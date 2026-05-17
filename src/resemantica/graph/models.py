@@ -149,3 +149,18 @@ class GraphSnapshotRecord:
 
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class GraphExtractionDraftRecord:
+    draft_id: str
+    release_id: str
+    run_id: str
+    chapter_number: int
+    chapter_source_hash: str
+    prompt_version: str
+    payload_json: str
+    schema_version: int = 1
+
+    def to_json_dict(self) -> dict[str, object]:
+        return asdict(self)

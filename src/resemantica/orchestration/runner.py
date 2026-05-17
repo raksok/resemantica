@@ -82,13 +82,14 @@ class OrchestrationRunner:
         dry_run: bool = False,
         chapter_start: int | None = None,
         chapter_end: int | None = None,
+        force: bool = False,
         batched_model_order: bool | None = None,
     ) -> StageResult:
         state = self._get_run_state()
         effective_chapter_start = chapter_start
         effective_chapter_end = chapter_end
         start_index = 0
-        if state is not None and state.stage_name in STAGE_ORDER:
+        if state is not None and state.stage_name in STAGE_ORDER and not force:
             if effective_chapter_start is None:
                 effective_chapter_start = self._checkpoint_int(state.checkpoint, "chapter_start")
             if effective_chapter_end is None:
@@ -146,6 +147,7 @@ class OrchestrationRunner:
             stage_result = self.run_stage(
                 item["stage_name"],
                 **dict(item.get("options", {})),
+                force=force,
                 batched_model_order=batched_model_order,
                 enforce_gates=True,
             )
@@ -522,6 +524,8 @@ class OrchestrationRunner:
                 llm_client=llm_client,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                resume=not force,
+                force=force,
                 stop_token=stop_token,
             )
             translate_result = translate_glossary_candidates(
@@ -529,12 +533,14 @@ class OrchestrationRunner:
                 run_id=self.run_id,
                 config=self.config,
                 llm_client=llm_client,
+                force=force,
                 stop_token=stop_token,
             )
             promote_result = promote_glossary_candidates(
                 release_id=self.release_id,
                 run_id=self.run_id,
                 config=self.config,
+                force=force,
                 stop_token=stop_token,
                 llm_usage_payload=capture_usage_snapshot(llm_client).to_payload(),
             )
@@ -554,6 +560,8 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                resume=not force,
+                force=force,
                 stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Summaries preprocess completed", metadata=summary_result)
@@ -567,6 +575,8 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                resume=not force,
+                force=force,
                 stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Idioms preprocess completed", metadata=idiom_result)
@@ -580,6 +590,8 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                resume=not force,
+                force=force,
                 stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Graph preprocess completed", metadata=graph_result)
@@ -599,6 +611,7 @@ class OrchestrationRunner:
                 chapter_end=chapter_end,
                 stop_token=stop_token,
                 budget_tokens=translator_budget,
+                force_rebuild=force,
             )
             failed_value = packet_result.get("chapters_failed", 0)
             failed = int(failed_value) if isinstance(failed_value, (int, str)) else 0

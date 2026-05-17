@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from hashlib import sha256
 from typing import Sequence
 
 from resemantica.db.sqlite import ensure_schema
-from resemantica.graph.models import DeferredEntityRecord, GraphSnapshotRecord
+from resemantica.graph.models import DeferredEntityRecord, GraphExtractionDraftRecord, GraphSnapshotRecord
 
 
 def ensure_graph_schema(conn: sqlite3.Connection) -> None:
@@ -40,6 +42,33 @@ def _snapshot_from_row(row: sqlite3.Row) -> GraphSnapshotRecord:
         appearance_count=int(row["appearance_count"]),
         relationship_count=int(row["relationship_count"]),
         created_at=str(row["created_at"]),
+        schema_version=int(row["schema_version"]),
+    )
+
+
+def _draft_id(
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+    prompt_version: str,
+) -> str:
+    digest = sha256(
+        f"{release_id}:{run_id}:{chapter_number}:{chapter_source_hash}:{prompt_version}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"gdr_{digest}"
+
+
+def _draft_from_row(row: sqlite3.Row) -> GraphExtractionDraftRecord:
+    return GraphExtractionDraftRecord(
+        draft_id=str(row["draft_id"]),
+        release_id=str(row["release_id"]),
+        run_id=str(row["run_id"]),
+        chapter_number=int(row["chapter_number"]),
+        chapter_source_hash=str(row["chapter_source_hash"]),
+        prompt_version=str(row["prompt_version"]),
+        payload_json=str(row["payload_json"]),
         schema_version=int(row["schema_version"]),
     )
 
@@ -174,6 +203,112 @@ def save_graph_snapshot(conn: sqlite3.Connection, *, snapshot: GraphSnapshotReco
         )
 
 
+def save_graph_extraction_draft(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+    prompt_version: str,
+    payload: dict[str, object],
+) -> GraphExtractionDraftRecord:
+    payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    record = GraphExtractionDraftRecord(
+        draft_id=_draft_id(
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            chapter_source_hash=chapter_source_hash,
+            prompt_version=prompt_version,
+        ),
+        release_id=release_id,
+        run_id=run_id,
+        chapter_number=chapter_number,
+        chapter_source_hash=chapter_source_hash,
+        prompt_version=prompt_version,
+        payload_json=payload_json,
+        schema_version=1,
+    )
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO graph_extraction_drafts(
+                draft_id, release_id, run_id, chapter_number, chapter_source_hash,
+                prompt_version, payload_json, schema_version, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(release_id, run_id, chapter_number, chapter_source_hash, prompt_version)
+            DO UPDATE SET
+                payload_json = excluded.payload_json,
+                schema_version = excluded.schema_version,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                record.draft_id,
+                record.release_id,
+                record.run_id,
+                record.chapter_number,
+                record.chapter_source_hash,
+                record.prompt_version,
+                record.payload_json,
+                record.schema_version,
+            ),
+        )
+    return record
+
+
+def get_graph_extraction_draft(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+    prompt_version: str,
+) -> GraphExtractionDraftRecord | None:
+    row = conn.execute(
+        """
+        SELECT draft_id, release_id, run_id, chapter_number, chapter_source_hash,
+               prompt_version, payload_json, schema_version
+        FROM graph_extraction_drafts
+        WHERE release_id = ?
+          AND run_id = ?
+          AND chapter_number = ?
+          AND chapter_source_hash = ?
+          AND prompt_version = ?
+        LIMIT 1
+        """,
+        (release_id, run_id, chapter_number, chapter_source_hash, prompt_version),
+    ).fetchone()
+    return None if row is None else _draft_from_row(row)
+
+
+def delete_graph_extraction_drafts(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_numbers: Sequence[int] | None = None,
+) -> None:
+    with conn:
+        if chapter_numbers is None:
+            conn.execute(
+                "DELETE FROM graph_extraction_drafts WHERE release_id = ? AND run_id = ?",
+                (release_id, run_id),
+            )
+            return
+        numbers = list(chapter_numbers)
+        if not numbers:
+            return
+        placeholders = ",".join("?" for _ in numbers)
+        conn.execute(
+            f"DELETE FROM graph_extraction_drafts "
+            f"WHERE release_id = ? AND run_id = ? AND chapter_number IN ({placeholders})",
+            (release_id, run_id, *numbers),
+        )
+
+
 def list_graph_snapshots(conn: sqlite3.Connection, *, release_id: str) -> list[GraphSnapshotRecord]:
     rows = conn.execute(
         """
@@ -187,4 +322,3 @@ def list_graph_snapshots(conn: sqlite3.Connection, *, release_id: str) -> list[G
         (release_id,),
     ).fetchall()
     return [_snapshot_from_row(row) for row in rows]
-
