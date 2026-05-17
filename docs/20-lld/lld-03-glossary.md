@@ -194,6 +194,7 @@ Without `--review-file`, behavior is identical to the original MVP flow.
 - interrupted LLM evaluation resumes by evaluating candidates that still lack LLM fields
 - translate/promote reruns are state-driven: untranslated or unpromoted candidates are processed by default
 - `--force` reruns discovery, translation, or promotion for the requested scope instead of honoring phase checkpoints or already translated/promoted state
+- `run retry-failed --stage preprocess-glossary` retries incomplete translation or promotion state without forcing promoted candidates. Candidates in `conflict` state and rows in `glossary_conflicts` are reported as review-required, not retried.
 - promotion never mutates historical candidate evidence
 - glossary-dependent downstream artifacts are invalidated by locked glossary hash changes
 

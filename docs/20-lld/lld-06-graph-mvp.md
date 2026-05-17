@@ -84,6 +84,7 @@ Alias `alias_language` is detected from content rather than hardcoded:
 - extraction drafts are persisted per release, run, chapter, chapter source hash, and graph prompt version
 - resume skips chapter extraction when a matching draft row exists, merges requested drafts in chapter order, validates, and writes confirmed graph state plus a new snapshot
 - draft merging preserves cross-chapter relationship intervals before validation
+- `run retry-failed --stage preprocess-graph` retries chapters missing graph extraction drafts. If extraction drafts exist but the stage failed during merge or validation, the existing drafts are reused and merge/validation runs again.
 - `--force` deletes or ignores matching draft rows for the requested scope before extraction
 
 ## Tests

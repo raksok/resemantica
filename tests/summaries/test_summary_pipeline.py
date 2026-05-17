@@ -402,8 +402,132 @@ def test_future_knowledge_leak_fails_validation(tmp_path: Path, monkeypatch) -> 
         run_id="summaries-001",
         llm_client=llm,
     )
-    assert result["status"] == "success"
+    assert result["status"] == "failed"
     assert result["chapters_processed"] == 0
+    assert result["failed_chapters"] == [1]
+    assert result["failure_reasons"]["1"] == "future_knowledge_failed"
+
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        cp = get_summary_checkpoint(conn, release_id=release_id, run_id="summaries-001")
+        assert cp is None or cp[0] == 0
+        row = conn.execute(
+            "SELECT validation_status, content_json FROM summary_drafts "
+            "WHERE release_id = ? AND chapter_number = 1",
+            (release_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["validation_status"] == "failed"
+        content = json.loads(row["content_json"])
+        assert content["failure_category"] == "future_knowledge_failed"
+    finally:
+        conn.close()
+
+
+def test_summary_generation_retries_with_reason_only_feedback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m52-summary-retry"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+
+    prompts: list[str] = []
+
+    class RetryLLM:
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            if "SUMMARY_ZH_STRUCTURED" in prompt:
+                prompts.append(prompt)
+                if len(prompts) == 1:
+                    return "{not-json"
+                assert "Failure category: parse_failed" in prompt
+                assert "{not-json" not in prompt
+                return json.dumps(
+                    {
+                        "chapter_number": 1,
+                        "characters_mentioned": ["张三"],
+                        "key_events": ["张三开始修炼"],
+                        "new_terms": [],
+                        "relationships_changed": [{"entity": "张三", "change": "开始修炼"}],
+                        "setting": "山中",
+                        "tone": "calm",
+                        "narrative_progression": "张三开始修炼。",
+                        "is_story_chapter": True,
+                    },
+                    ensure_ascii=False,
+                )
+            if "SUMMARY_STORY_COMPACT" in prompt:
+                return "张三开始修炼。"
+            if "SUMMARY_EN_DERIVE" in prompt:
+                return "EN::content"
+            if "SUMMARY_ZH_VALIDATE" in prompt:
+                return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
+            raise RuntimeError("Unexpected prompt")
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=RetryLLM(),
+    )
+
+    assert result["status"] == "success"
+    assert result["chapters_processed"] == 1
+    assert len(prompts) == 2
+
+
+def test_exhausted_summary_failure_stops_story_assembly(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m52-summary-hard-fail"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=2,
+        source_text="李四来到山门。",
+        chapter_source_hash="hash-ch2",
+    )
+
+    class BrokenChapterLLM(ScriptedSummaryLLM):
+        def generate_text(self, *, model_name: str, prompt: str) -> str:
+            if "SUMMARY_ZH_STRUCTURED" in prompt and "## CHAPTER NUMBER\n1" in prompt:
+                return "{not-json"
+            return super().generate_text(model_name=model_name, prompt=prompt)
+
+    llm = BrokenChapterLLM(
+        {
+            2: {
+                "chapter_number": 2,
+                "characters_mentioned": ["李四"],
+                "key_events": ["李四来到山门"],
+                "new_terms": [],
+                "relationships_changed": [{"entity": "李四", "change": "arrived"}],
+                "setting": "山门",
+                "tone": "quiet",
+                "narrative_progression": "李四来到山门。",
+                "is_story_chapter": True,
+            }
+        }
+    )
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failed_chapters"] == [1]
+    paths = derive_paths(load_config(), release_id=release_id)
+    assert not (paths.summaries_dir / "chapter-2-zh.json").exists()
 
 
 def test_summary_chapter_number_mismatch_is_normalized_with_warning(
@@ -1209,12 +1333,12 @@ def test_guardrail_overrides_non_story(tmp_path: Path, monkeypatch) -> None:
         run_id="summaries-001",
         llm_client=HallucinatingLLM(),
     )
-    assert result["status"] == "success"
+    assert result["status"] == "failed"
 
-    skipped = [r for r in result["chapter_artifacts"] if r.get("status") == "skipped"]
-    assert len(skipped) == 1
-    assert skipped[0]["chapter_number"] == 1
-    assert "non_story_chapter" not in skipped[0].get("reason", "")
+    failed = [r for r in result["chapter_artifacts"] if r.get("status") == "failed"]
+    assert len(failed) == 1
+    assert failed[0]["chapter_number"] == 1
+    assert failed[0]["reason"] == "schema_failed"
 
     conn = open_connection(derive_paths(load_config(), release_id=release_id).db_path)
     ensure_summary_schema(conn)
@@ -1225,6 +1349,7 @@ def test_guardrail_overrides_non_story(tmp_path: Path, monkeypatch) -> None:
     ).fetchone()
     assert row is not None
     assert int(row["is_story_chapter"]) == 1, "guardrail should have overridden to story"
+    assert row["validation_status"] == "failed"
     conn.close()
 
 

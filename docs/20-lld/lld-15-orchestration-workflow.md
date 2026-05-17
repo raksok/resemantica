@@ -10,6 +10,7 @@ CLI:
 
 - `uv run python -m resemantica.cli run-production --release <id> --run <id> [--dry-run]`
 - `uv run python -m resemantica.cli run production --release <id> --run <id> [--dry-run]`
+- `uv run python -m resemantica.cli run retry-failed --release <id> --run <id> --stage <stage|all> [--dry-run]`
 - `uv run python -m resemantica.cli translate-chapter --release <id> --run <id> --chapter <n>`
 - `uv run python -m resemantica.cli translate-range --release <id> --run <id> --start <n> --end <n>`
 - `uv run python -m resemantica.cli rebuild-epub --release <id> --run-id <id>`
@@ -20,6 +21,8 @@ Python:
 - `OrchestrationRunner.run_production(dry_run=False, chapter_start=None, chapter_end=None)`
 - `OrchestrationRunner.run_stage(stage_name, **stage_options)`
 - `OrchestrationRunner.plan_production(chapter_start=None, chapter_end=None)`
+- `orchestration.retry_failed.plan_retry_failed(...)`
+- `orchestration.retry_failed.execute_retry_failed(...)`
 - module-level compatibility wrapper `run_stage(...)` may remain, but must delegate to `OrchestrationRunner`.
 
 ## Stage Model
@@ -58,6 +61,22 @@ The production plan is explicit and inspectable. It should include:
 If the saved checkpoint contains `chapter_start` or `chapter_end`, those bounds are reused when the operator does not pass explicit bounds on the new command. Explicit CLI bounds take precedence.
 
 Internal stage resume is enabled by default. When production reaches summaries, glossary, idioms, graph, packets, or translation, the stage also skips its own completed durable units. Operators use `--force` on production or an individual command to rebuild the requested scope.
+
+## Failed Unit Retry
+
+`run retry-failed` is an operator recovery command, not a force rebuild. It inspects durable state and tracking events, reports retryable units and review-required blockers, and then delegates to existing stage runners with the smallest chapter scope it can infer.
+
+Supported retry stages are:
+
+- `preprocess-summaries`
+- `preprocess-glossary`
+- `preprocess-idioms`
+- `preprocess-graph`
+- `packets-build`
+- `translate-range`
+- `all`
+
+`--dry-run` performs read-only discovery and prints the retry plan. `--chapter`, `--start`, and `--end` constrain discovery and execution. Summaries rewind `summary_checkpoints` to before the earliest affected chapter before execution; glossary and idiom conflicts are reported as review-required and are not retried automatically. EPUB rebuild/extract are intentionally excluded because they do not expose finer durable failed units.
 
 ## Translation Stage Behavior
 
@@ -146,6 +165,11 @@ The `--allow-rewind` flag is available on `summaries`, `idioms`, `graph`,
 It does not mean "ignore summary checkpoints", "rerun packet cache hits", or
 "drop graph drafts".
 
+For failed durable units, prefer:
+
+    rsem run retry-failed -r p1 -R 001 --stage all --dry-run
+    rsem run retry-failed -r p1 -R 001 --stage preprocess-summaries -s 10 -e 20
+
 Use `--force` when the operator needs to rebuild:
 
     rsem pre sum -r p1 -R 001 --force -s 1 -e 20
@@ -162,6 +186,8 @@ but tells each resumed stage to bypass its internal checkpoints.
 - `translate-chapter` runner stage calls pass1/pass2/pass3 in the correct order.
 - `translate-range` emits chapter events for each chapter.
 - CLI commands delegate to `OrchestrationRunner`.
+- `run retry-failed --dry-run` reports retryable and review-required units without mutation.
+- `run retry-failed --stage preprocess-summaries` rewinds summary checkpoints and reruns the affected range.
 - Illegal transitions and missing stage options fail before subsystem invocation.
 - Existing `run production` remains compatible or is explicitly migrated with tests updated.
 

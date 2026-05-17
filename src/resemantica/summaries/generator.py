@@ -50,6 +50,8 @@ _CHINESE_DIGITS = {
     "九": 9,
 }
 _CHINESE_UNITS = {"十": 10, "百": 100, "千": 1000}
+_MAX_GENERATION_ATTEMPTS = 4
+_MAX_RETRY_ERRORS = 4
 
 
 @dataclass(slots=True)
@@ -60,6 +62,17 @@ class GeneratedChapterSummary:
     short_record: ValidatedSummaryZhRecord
     validation: ValidationResult
     warnings: list[str]
+
+
+@dataclass(slots=True)
+class _SummaryAttemptFailure:
+    attempt_number: int
+    category: str
+    errors: list[str]
+    hints: list[str]
+    raw_output: str = ""
+    parsed_summary: dict[str, Any] | None = None
+    warnings: list[str] | None = None
 
 
 def _parse_chapter_number_token(value: str) -> int | None:
@@ -208,6 +221,47 @@ def _combine_chunk_summaries(
     }
 
 
+def _categorize_validation_errors(errors: list[str]) -> str:
+    if any("future_knowledge" in error for error in errors):
+        return "future_knowledge_failed"
+    if any("continuity_conflict" in error for error in errors):
+        return "chapter_identity_failed"
+    if any("schema_invalid" in error for error in errors):
+        return "schema_failed"
+    return "validation_failed"
+
+
+def _correction_hints(category: str) -> list[str]:
+    if category == "parse_failed":
+        return ["Return one valid JSON object only.", "Do not include markdown fences or prose."]
+    if category == "schema_failed":
+        return ["Use every required field with the exact expected type."]
+    if category == "future_knowledge_failed":
+        return ["Use only facts visible in the current source text.", "Do not mention later chapters."]
+    if category == "chapter_identity_failed":
+        return ["Echo the canonical pipeline chapter number exactly."]
+    return ["Correct only the listed validation issues."]
+
+
+def _render_retry_feedback(failure: _SummaryAttemptFailure | None) -> str:
+    if failure is None:
+        return ""
+    errors = failure.errors[:_MAX_RETRY_ERRORS]
+    lines = [
+        "## RETRY FEEDBACK",
+        f"Previous attempt: {failure.attempt_number}",
+        f"Failure category: {failure.category}",
+    ]
+    if errors:
+        lines.append("Validation errors:")
+        lines.extend(f"- {error}" for error in errors)
+    if failure.hints:
+        lines.append("Correction hints:")
+        lines.extend(f"- {hint}" for hint in failure.hints)
+    lines.append("Do not copy any previous invalid output. Produce a fresh compact JSON object.")
+    return "\n".join(lines)
+
+
 def _generate_structured_summary(
     *,
     release_id: str,
@@ -221,13 +275,16 @@ def _generate_structured_summary(
     prompt_version: str,
     config: AppConfig,
     cache_root: Path | None,
+    retry_feedback: _SummaryAttemptFailure | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
+    retry_feedback_text = _render_retry_feedback(retry_feedback)
     static_prompt = render_named_sections(
         prompt_template,
         sections={
             "CHAPTER_NUMBER": str(chapter_number),
             "SOURCE_TEXT": "",
             "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
+            "RETRY_FEEDBACK": retry_feedback_text,
         },
     )
 
@@ -254,6 +311,7 @@ def _generate_structured_summary(
                 "CHAPTER_NUMBER": str(chapter_number),
                 "SOURCE_TEXT": chunk_text,
                 "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
+                "RETRY_FEEDBACK": retry_feedback_text,
             },
         )
         ensure_prompt_within_budget(
@@ -300,6 +358,44 @@ def _generate_structured_summary(
     return _combine_chunk_summaries(chapter_number=chapter_number, summaries=parsed_chunks), "\n".join(raw_outputs)
 
 
+def _save_final_failed_draft(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+    model_name: str,
+    prompt_version: str,
+    failure: _SummaryAttemptFailure,
+) -> SummaryDraftRecord:
+    content: dict[str, object] = {
+        "attempts": failure.attempt_number,
+        "failure_category": failure.category,
+        "validation_errors": failure.errors,
+        "correction_hints": failure.hints,
+    }
+    if failure.parsed_summary is not None:
+        content["parsed_summary"] = failure.parsed_summary
+    else:
+        content["raw_output"] = failure.raw_output
+    if failure.warnings:
+        content["warnings"] = failure.warnings
+    return save_summary_draft(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
+        summary_type="chapter_summary_zh_structured",
+        content=content,
+        chapter_source_hash=chapter_source_hash,
+        model_name=model_name,
+        prompt_version=prompt_version,
+        run_id=run_id,
+        validation_status="failed",
+        is_story_chapter=1,
+    )
+
+
 def generate_chapter_summary(
     *,
     conn: sqlite3.Connection,
@@ -337,20 +433,106 @@ def generate_chapter_summary(
         )
         return None
 
+    failure: _SummaryAttemptFailure | None = None
+    parsed: dict[str, Any] | None = None
+    validation: ValidationResult | None = None
+    identity_warnings: list[str] = []
+    allowed_future_chapter_numbers: set[int] = set()
     try:
-        parsed, raw_output = _generate_structured_summary(
-            release_id=release_id,
-            chapter_number=chapter_number,
-            chapter_source_hash=chapter_source_hash,
-            source_text_zh=source_text_zh,
-            locked_glossary=locked_glossary,
-            llm_client=llm_client,
-            model_name=model_name,
-            prompt_template=prompt_template,
-            prompt_version=prompt_version,
-            config=config_obj,
-            cache_root=cache_root,
-        )
+        for attempt_number in range(1, _MAX_GENERATION_ATTEMPTS + 1):
+            parsed, raw_output = _generate_structured_summary(
+                release_id=release_id,
+                chapter_number=chapter_number,
+                chapter_source_hash=chapter_source_hash,
+                source_text_zh=source_text_zh,
+                locked_glossary=locked_glossary,
+                llm_client=llm_client,
+                model_name=model_name,
+                prompt_template=prompt_template,
+                prompt_version=prompt_version,
+                config=config_obj,
+                cache_root=cache_root,
+                retry_feedback=failure,
+            )
+            if parsed is None:
+                category = "parse_failed"
+                failure = _SummaryAttemptFailure(
+                    attempt_number=attempt_number,
+                    category=category,
+                    errors=["invalid JSON object"],
+                    hints=_correction_hints(category),
+                    raw_output=raw_output,
+                )
+                continue
+
+            identity_warnings, allowed_future_chapter_numbers = _normalize_summary_chapter_identity(
+                parsed=parsed,
+                canonical_chapter_number=chapter_number,
+                source_document_path=source_document_path,
+                source_text_zh=source_text_zh,
+            )
+
+            is_story_chapter = parsed.get("is_story_chapter", True)
+
+            if is_story_chapter is False and len(source_text_zh) > _NON_STORY_GUARDRAIL_LENGTH:
+                logger.warning(
+                    "Guardrail: overrode non-story flag for chapter {} "
+                    "(source_text_zh length={}, threshold={})",
+                    chapter_number,
+                    len(source_text_zh),
+                    _NON_STORY_GUARDRAIL_LENGTH,
+                )
+                is_story_chapter = True
+                parsed["is_story_chapter"] = True
+
+            is_story = 0 if is_story_chapter is False else 1
+
+            if is_story == 0:
+                save_summary_draft(
+                    conn,
+                    release_id=release_id,
+                    chapter_number=chapter_number,
+                    summary_type="chapter_summary_zh_structured",
+                    content=parsed,
+                    chapter_source_hash=chapter_source_hash,
+                    model_name=model_name,
+                    prompt_version=prompt_version,
+                    run_id=run_id,
+                    validation_status="non_story_chapter",
+                    is_story_chapter=0,
+                )
+                return None
+
+            validation = validate_chinese_summary(
+                structured_summary=parsed,
+                expected_chapter_number=chapter_number,
+                allowed_future_chapter_numbers=allowed_future_chapter_numbers,
+            )
+            if validation.is_valid:
+                break
+
+            category = _categorize_validation_errors(validation.errors)
+            failure = _SummaryAttemptFailure(
+                attempt_number=attempt_number,
+                category=category,
+                errors=validation.errors,
+                hints=_correction_hints(category),
+                parsed_summary=parsed,
+                warnings=identity_warnings,
+            )
+        else:
+            assert failure is not None
+            _save_final_failed_draft(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                chapter_source_hash=chapter_source_hash,
+                model_name=model_name,
+                prompt_version=prompt_version,
+                failure=failure,
+            )
+            return None
     except PromptBudgetError as exc:
         is_story = 1
         save_summary_draft(
@@ -371,63 +553,8 @@ def generate_chapter_summary(
         )
         return None
 
-    if parsed is None:
-        is_story = 1
-        save_summary_draft(
-            conn,
-            release_id=release_id,
-            chapter_number=chapter_number,
-            summary_type="chapter_summary_zh_structured",
-            content={
-                "raw_output": raw_output,
-                "parse_error": "invalid JSON object",
-            },
-            chapter_source_hash=chapter_source_hash,
-            model_name=model_name,
-            prompt_version=prompt_version,
-            run_id=run_id,
-            validation_status="failed",
-            is_story_chapter=is_story,
-        )
-        return None
-
-    identity_warnings, allowed_future_chapter_numbers = _normalize_summary_chapter_identity(
-        parsed=parsed,
-        canonical_chapter_number=chapter_number,
-        source_document_path=source_document_path,
-        source_text_zh=source_text_zh,
-    )
-
-    is_story_chapter = parsed.get("is_story_chapter", True)
-
-    if is_story_chapter is False and len(source_text_zh) > _NON_STORY_GUARDRAIL_LENGTH:
-        logger.warning(
-            "Guardrail: overrode non-story flag for chapter {} "
-            "(source_text_zh length={}, threshold={})",
-            chapter_number,
-            len(source_text_zh),
-            _NON_STORY_GUARDRAIL_LENGTH,
-        )
-        is_story_chapter = True
-
-    is_story = 0 if is_story_chapter is False else 1
-
-    if is_story == 0:
-        save_summary_draft(
-            conn,
-            release_id=release_id,
-            chapter_number=chapter_number,
-            summary_type="chapter_summary_zh_structured",
-            content=parsed,
-            chapter_source_hash=chapter_source_hash,
-            model_name=model_name,
-            prompt_version=prompt_version,
-            run_id=run_id,
-            validation_status="non_story_chapter",
-            is_story_chapter=0,
-        )
-        return None
-
+    assert parsed is not None
+    assert validation is not None
     draft_record = save_summary_draft(
         conn,
         release_id=release_id,
@@ -441,31 +568,6 @@ def generate_chapter_summary(
         validation_status="pending",
         is_story_chapter=1,
     )
-
-    validation = validate_chinese_summary(
-        structured_summary=parsed,
-        expected_chapter_number=chapter_number,
-        allowed_future_chapter_numbers=allowed_future_chapter_numbers,
-    )
-    if not validation.is_valid:
-        save_summary_draft(
-            conn,
-            release_id=release_id,
-            chapter_number=chapter_number,
-            summary_type="chapter_summary_zh_structured",
-            content={
-                "parsed_summary": parsed,
-                "validation_errors": validation.errors,
-                "warnings": identity_warnings,
-            },
-            chapter_source_hash=chapter_source_hash,
-            model_name=model_name,
-            prompt_version=prompt_version,
-            run_id=run_id,
-            validation_status="failed",
-            is_story_chapter=1,
-        )
-        return None
 
     narrative_progression = str(parsed["narrative_progression"]).strip()
     structured_record, short_record = save_chapter_structured_and_short(

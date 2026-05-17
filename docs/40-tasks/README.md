@@ -69,3 +69,4 @@ Always follow the milestone sequence below.
 | M49 | task-49 | M10, M48 | Resume Granularity Standardization |
 | M50 | task-50 | M48, M49 | Analyst Prompt Optimization |
 | M51 | task-51 | M11, M49 | Cleanup Pipeline Kaizen |
+| M52 | task-52 | M51 | Failed Validation Retry Recovery Kaizen |

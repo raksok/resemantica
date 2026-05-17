@@ -686,6 +686,37 @@ point to a specific stage.""",
     )
     _add_force_arg(run_resume)
 
+    run_retry_failed = run_subparsers.add_parser(
+        "retry-failed",
+        help="Retry failed durable pipeline units without forcing a full rebuild.",
+        description="""\
+Inspect durable failed units and retry only the affected stage scopes.
+Supported stages: preprocess-summaries, preprocess-glossary,
+preprocess-idioms, preprocess-graph, packets-build, translate-range, all.""",
+    )
+    _add_common_release_args(run_retry_failed, default_run="production")
+    run_retry_failed.add_argument(
+        "-t", "--stage",
+        required=False,
+        default="all",
+        choices=[
+            "preprocess-summaries",
+            "preprocess-glossary",
+            "preprocess-idioms",
+            "preprocess-graph",
+            "packets-build",
+            "translate-range",
+            "all",
+        ],
+        help="Stage to inspect and retry (default: all).",
+    )
+    _add_chapter_scope_args(run_retry_failed)
+    run_retry_failed.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="Report retryable units and review-required blockers without mutation.",
+    )
+
     run_cleanup_plan = run_subparsers.add_parser(
         "cleanup-plan", aliases=["cln-plan"],
         help="Plan cleanup by enumerating deletable artifacts.",
@@ -1118,6 +1149,44 @@ def main(argv: list[str] | None = None) -> int:
                 return 130
             _print_stage_result(resume_result)
             return _exit_code(resume_result)
+
+        if args.run_command == "retry-failed":
+            from resemantica.orchestration.retry_failed import execute_retry_failed
+
+            retry_result = _with_cli_progress(
+                lambda: execute_retry_failed(
+                    release_id=args.release,
+                    run_id=args.run,
+                    stage=args.stage,
+                    chapter=getattr(args, "chapter", None),
+                    chapter_start=args.start,
+                    chapter_end=args.end,
+                    dry_run=bool(getattr(args, "dry_run", False)),
+                    config=config,
+                ),
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if retry_result is _INTERRUPTED_STOP:
+                return 130
+            _print_stage_result(retry_result)
+            metadata = getattr(retry_result, "metadata", {}) or {}
+            retryable = metadata.get("retryable", [])
+            non_retryable = metadata.get("non_retryable", [])
+            if isinstance(retryable, list):
+                print(f"retryable_count={len(retryable)}")
+                for item in retryable:
+                    if isinstance(item, dict):
+                        print(
+                            "retryable="
+                            f"{item.get('stage')}:{item.get('chapter_start')}-{item.get('chapter_end')}:"
+                            f"{item.get('reason')}"
+                        )
+            if isinstance(non_retryable, list):
+                print(f"non_retryable_count={len(non_retryable)}")
+                for item in non_retryable:
+                    if isinstance(item, dict):
+                        print(f"non_retryable={item.get('stage')}:{item.get('reason')}")
+            return _exit_code(retry_result)
 
         if args.run_command == "cleanup-plan":
             plan = plan_cleanup(

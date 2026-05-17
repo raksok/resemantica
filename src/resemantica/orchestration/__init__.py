@@ -4,6 +4,7 @@ from .cleanup import apply_cleanup, plan_cleanup
 from .events import EventBus, emit_event, subscribe, unsubscribe
 from .models import STAGE_ORDER, StageResult, legal_transition, next_stage
 from .resume import resume_run
+from .retry_failed import execute_retry_failed, plan_retry_failed
 from .runner import OrchestrationRunner, run_stage
 from .stop import StopRequested, StopToken
 
@@ -21,6 +22,8 @@ __all__ = [
     "OrchestrationRunner",
     "run_stage",
     "resume_run",
+    "plan_retry_failed",
+    "execute_retry_failed",
     "plan_cleanup",
     "apply_cleanup",
 ]

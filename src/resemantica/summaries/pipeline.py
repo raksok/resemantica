@@ -47,6 +47,7 @@ from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-summaries"
 _CHECKPOINTABLE_SKIP_REASONS = {"exclude_pattern", "non_story_chapter"}
+_FAILED_DRAFT_STATUSES = {"failed"}
 
 
 @dataclass(slots=True)
@@ -118,6 +119,43 @@ def _checkpoint_can_advance(result: _ChinesePhaseResult) -> bool:
     return result.status == "completed" or (
         result.status == "skipped" and result.reason in _CHECKPOINTABLE_SKIP_REASONS
     )
+
+
+def _latest_summary_draft_failure(
+    conn: Any,
+    *,
+    release_id: str,
+    chapter_number: int,
+) -> tuple[str, list[str]]:
+    row = conn.execute(
+        """
+        SELECT validation_status, content_json
+        FROM summary_drafts
+        WHERE release_id = ?
+          AND chapter_number = ?
+          AND summary_type = 'chapter_summary_zh_structured'
+        LIMIT 1
+        """,
+        (release_id, chapter_number),
+    ).fetchone()
+    if row is None or str(row["validation_status"]) not in _FAILED_DRAFT_STATUSES:
+        return "generation_failed", []
+    try:
+        content = _read_json_from_text(str(row["content_json"]))
+    except ValueError:
+        return "generation_failed", []
+    category = str(content.get("failure_category") or "generation_failed")
+    errors = content.get("validation_errors", [])
+    return category, [str(error) for error in errors] if isinstance(errors, list) else []
+
+
+def _read_json_from_text(text: str) -> dict[str, Any]:
+    import json
+
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("expected JSON object")
+    return parsed
 
 
 def _advance_chinese_checkpoint(
@@ -378,22 +416,41 @@ def _handle_empty_generation(
         logger.info(message)
         reason = "non_story_chapter"
         severity = None
+        status = "skipped"
     else:
-        message = f"Chapter {chapter_number} skipped: summary generation failed"
+        failure_category, errors = _latest_summary_draft_failure(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+        )
+        message = f"Chapter {chapter_number} failed: summary generation exhausted"
         logger.warning(message)
-        reason = "generation_failed"
-        severity = "warning"
+        reason = failure_category
+        severity = "error"
         _emit(
             run_id,
             release_id,
             f"{_STAGE_NAME}.generation_failed",
             chapter_number=chapter_number,
-            severity="warning",
+            severity="error",
             message=message,
             model_name=model_name,
-            reason="generation_returned_none",
+            reason=reason,
+            errors=errors,
             **usage_payload_delta(llm_client, usage_before),
         )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.chapter_failed",
+            chapter_number=chapter_number,
+            severity="error",
+            message=message,
+            reason=reason,
+            errors=errors,
+            **usage_payload_delta(llm_client, usage_before),
+        )
+        status = "failed"
     payload = {
         "chapter_number": chapter_number,
         "message": message,
@@ -402,11 +459,12 @@ def _handle_empty_generation(
     }
     if severity is not None:
         payload["severity"] = severity
-    _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_skipped", **payload)
+    if status == "skipped":
+        _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_skipped", **payload)
     return _ChinesePhaseResult(
         chapter_number=chapter_number,
         chapter_source_hash=chapter_source_hash,
-        status="skipped",
+        status=status,
         reason=reason,
         zh_usage_payload=usage_payload_delta(llm_client, usage_before),
     )
@@ -672,6 +730,10 @@ def preprocess_summaries(
                 entry["status"] = "skipped"
                 if chinese_result.reason is not None:
                     entry["reason"] = chinese_result.reason
+            elif chinese_result.status == "failed":
+                entry["status"] = "failed"
+                if chinese_result.reason is not None:
+                    entry["reason"] = chinese_result.reason
             if chinese_result.warnings:
                 entry["warnings"] = chinese_result.warnings
             results_by_chapter[chinese_result.chapter_number] = entry
@@ -695,6 +757,52 @@ def preprocess_summaries(
                 zh_skip_until = new_zh_checkpoint
         finally:
             conn.close()
+
+    failed_chinese = [
+        result
+        for result in chinese_results.values()
+        if result.status == "failed"
+    ]
+    if failed_chinese:
+        failed_chinese.sort(key=lambda result: result.chapter_number)
+        failed_chapters = [result.chapter_number for result in failed_chinese]
+        failure_reasons = {
+            str(result.chapter_number): result.reason or "generation_failed"
+            for result in failed_chinese
+        }
+        chapter_results = [
+            results_by_chapter[number]
+            for number in ordered_numbers
+            if number in results_by_chapter
+        ]
+        message = (
+            "Summary generation failed for chapter(s): "
+            + ", ".join(str(chapter) for chapter in failed_chapters)
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.failed",
+            severity="error",
+            message=message,
+            failed=len(failed_chapters),
+            failed_chapters=failed_chapters,
+            failure_reasons=failure_reasons,
+            **capture_usage_snapshot(client).to_payload(),
+        )
+        return {
+            "status": "failed",
+            "release_id": release_id,
+            "run_id": run_id,
+            "chapters_processed": sum(
+                1 for result in chapter_results if result.get("status") not in {"skipped", "failed"}
+            ),
+            "chapters_failed": len(failed_chapters),
+            "failed_chapters": failed_chapters,
+            "failure_reasons": failure_reasons,
+            "chapter_artifacts": chapter_results,
+            **capture_usage_snapshot(client).to_payload(),
+        }
 
     english_jobs: list[_EnglishPhaseJob] = []
     conn = open_connection(paths.db_path)

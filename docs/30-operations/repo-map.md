@@ -86,13 +86,14 @@ Implemented package layout (M10 slice):
 - `src/resemantica/orchestration/`: centralized run control, stage ordering, retries, resume behavior, cleanup planning, and structured events
 - `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER`
 - `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production, stage execution, transition validation, gate handling, and auto review artifact generation for unresolved votes
+- `src/resemantica/orchestration/retry_failed.py`: durable failed-unit planner and executor for `run retry-failed`
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
 - `src/resemantica/orchestration/cleanup.py`: shared cleanup scopes plus `plan_cleanup()` and `apply_cleanup()` for validated, two-step cleanup workflow
 - `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission
 - `src/resemantica/tracking/`: event and run state models with SQLite persistence
 - `src/resemantica/tracking/models.py`: `Event` and `RunState` dataclasses with schema versioning
 - `src/resemantica/tracking/repo.py`: SQLite persistence for events and run state
-- `src/resemantica/cli.py`: `run` command with `production`, `resume`, `cleanup-plan`, `cleanup-apply` subcommands
+- `src/resemantica/cli.py`: `run` command with `production`, `resume`, `retry-failed`, `cleanup-plan`, `cleanup-apply` subcommands
 - `tests/orchestration/`: stage transition, event emission, cleanup plan/apply, resume, and run stage tests
 
 ## Target State

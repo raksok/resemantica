@@ -564,7 +564,13 @@ class OrchestrationRunner:
                 force=force,
                 stop_token=stop_token,
             )
-            return StageResult(True, stage_name, "Summaries preprocess completed", metadata=summary_result)
+            summary_success = summary_result.get("status") == "success"
+            message = (
+                "Summaries preprocess completed"
+                if summary_success
+                else "Summaries preprocess failed"
+            )
+            return StageResult(summary_success, stage_name, message, metadata=summary_result)
 
         if stage_name == "preprocess-idioms":
             from resemantica.idioms.pipeline import preprocess_idioms

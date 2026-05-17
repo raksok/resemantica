@@ -86,6 +86,7 @@ Minimum packet sections:
 - `summary_version_hash` now includes structured summary content (new_terms, etc.)
 - `summary_version_hash` includes `story_so_far_zh_compact` when present; compact continuity changes trigger packet rebuilds
 - no explicit `resume` flag needed — staleness detection provides resume-by-cache-hit
+- `run retry-failed --stage packets-build` retries chapters with missing packet metadata or persisted packet chapter-failure events. Normal packet staleness still decides whether each targeted packet is rebuilt or skipped as up to date.
 - `packets build --force` sets `force_rebuild=True`, ignores an `up_to_date` metadata hit, and rebuilds requested packets with `forced_rebuild` as the stale reason
 
 ## Post-MVP Improvements

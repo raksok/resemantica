@@ -121,6 +121,7 @@ This prevents duplicate rows when the same idiom is detected across multiple cha
 - default reruns use the durable phase checkpoint: `detect_completed`, `translated`, then `promoted`
 - translate reruns skip already translated candidates and continue pending candidates
 - promotion reruns process only unpromoted translated candidates by default
+- `run retry-failed --stage preprocess-idioms` retries incomplete translation or promotion state without forcing approved policies. Idiom conflicts are reported as review-required and are not retried automatically.
 - `--force` reruns detect, translate, and promote for the requested scope
 
 ## Tests

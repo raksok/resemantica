@@ -8,6 +8,7 @@ from resemantica.orchestration import (
     apply_cleanup,
     emit_event,
     plan_cleanup,
+    plan_retry_failed,
     resume_run,
     run_stage,
 )
@@ -490,6 +491,124 @@ class TestRunStage:
 
         assert result.stopped is True
         assert translated == [1]
+
+
+class TestRetryFailed:
+    @staticmethod
+    def _write_extracted_chapter(release_id: str, chapter_number: int) -> None:
+        import json
+
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "chapter_id": f"chapter-{chapter_number}",
+            "chapter_number": chapter_number,
+            "source_document_path": f"OEBPS/chapter{chapter_number}.xhtml",
+            "chapter_source_hash": f"hash-ch{chapter_number}",
+            "schema_version": 1,
+            "records": [],
+        }
+        (paths.extracted_chapters_dir / f"chapter-{chapter_number}.json").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+
+    def test_retry_failed_dry_run_reports_summary_failure(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-summary"
+        run_id = "production"
+        self._write_extracted_chapter(release_id, 1)
+        self._write_extracted_chapter(release_id, 2)
+
+        from resemantica.db.sqlite import open_connection
+        from resemantica.db.summary_repo import ensure_summary_schema, save_summary_draft, set_summary_checkpoint
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        manifest_path = paths.extracted_chapter_manifest_path
+        assert not manifest_path.exists()
+        conn = open_connection(paths.db_path)
+        ensure_summary_schema(conn)
+        try:
+            save_summary_draft(
+                conn,
+                release_id=release_id,
+                chapter_number=1,
+                summary_type="chapter_summary_zh_structured",
+                content={"failure_category": "parse_failed", "validation_errors": ["invalid JSON object"]},
+                chapter_source_hash="hash-ch1",
+                model_name="model",
+                prompt_version="1",
+                run_id=run_id,
+                validation_status="failed",
+                is_story_chapter=1,
+            )
+            set_summary_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                zh_last_chapter=1,
+                story_last_chapter=1,
+                en_last_chapter=1,
+            )
+        finally:
+            conn.close()
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-summaries",
+        )
+
+        assert len(plan.retryable) == 1
+        unit = plan.retryable[0]
+        assert unit.stage == "preprocess-summaries"
+        assert unit.chapter_start == 1
+        assert unit.chapter_end == 2
+        assert unit.reason == "failed_or_missing_summary_rows"
+        assert not manifest_path.exists()
+
+    def test_retry_failed_reports_glossary_conflict_as_non_retryable(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-glossary-conflict"
+        run_id = "production"
+
+        from resemantica.db.glossary_repo import ensure_glossary_schema, insert_conflicts
+        from resemantica.db.sqlite import open_connection
+        from resemantica.glossary.models import GlossaryConflict
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        ensure_glossary_schema(conn)
+        try:
+            insert_conflicts(
+                conn,
+                conflicts=[
+                    GlossaryConflict(
+                        conflict_id="conflict-1",
+                        release_id=release_id,
+                        candidate_id="candidate-1",
+                        conflict_type="canon_conflict",
+                        conflict_reason="duplicate",
+                        existing_glossary_id="glex-1",
+                    )
+                ],
+            )
+        finally:
+            conn.close()
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-glossary",
+        )
+
+        assert plan.retryable == []
+        assert len(plan.non_retryable) == 1
+        assert "conflict" in plan.non_retryable[0].reason
 
 
 class TestM11CleanupScopes:

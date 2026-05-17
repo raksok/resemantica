@@ -1,4 +1,4 @@
-# version: 1.3
+# version: 1.4
 SUMMARY_ZH_STRUCTURED
 
 ## CHAPTER NUMBER
@@ -13,6 +13,8 @@ visible heading contains a different chapter number.
 
 ## SOURCE TEXT
 {SOURCE_TEXT}
+
+{RETRY_FEEDBACK}
 
 ## INSTRUCTIONS
 Return compact JSON only. Do not include markdown, explanations, analysis, chain-of-thought, or <think> text.

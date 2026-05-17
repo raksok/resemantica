@@ -81,6 +81,7 @@ Rerun rule:
 - if source hash or prompt version changes, prior pass artifacts are stale for that pass and below
 - if resegmentation changes block segment identity, dependent segment artifacts are stale and must be regenerated
 - range and batched translation both forward `force` consistently into Pass 1, Pass 2, and Pass 3
+- `run retry-failed --stage translate-range` retries chapters with failed or incomplete translation checkpoints. It delegates to `translate-range` with the inferred chapter scope and does not force completed pass checkpoints by default.
 
 ## Tests
 
