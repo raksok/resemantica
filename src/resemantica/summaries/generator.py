@@ -32,6 +32,7 @@ from resemantica.summaries.validators import validate_chinese_summary
 from resemantica.validators import ValidationResult
 
 _NON_STORY_GUARDRAIL_LENGTH = 500
+_SUMMARY_UNKNOWN_VALUE_ZH = "未明确"
 _SOURCE_PATH_CHAPTER_RE = re.compile(r"(?:chapter|chap|ch)[-_ ]*0*(\d+)", re.IGNORECASE)
 _SOURCE_HEADING_ZH_RE = re.compile(r"第\s*([0-9零〇一二两三四五六七八九十百千]+)\s*[章节回]")
 _SOURCE_HEADING_EN_RE = re.compile(r"\bchapter\s+0*(\d+)\b", re.IGNORECASE)
@@ -62,6 +63,7 @@ class GeneratedChapterSummary:
     short_record: ValidatedSummaryZhRecord
     validation: ValidationResult
     warnings: list[str]
+    identity_warnings: list[str]
 
 
 @dataclass(slots=True)
@@ -231,10 +233,107 @@ def _categorize_validation_errors(errors: list[str]) -> str:
     return "validation_failed"
 
 
-def _correction_hints(category: str) -> list[str]:
+def _missing_schema_fields(error: str) -> set[str]:
+    prefix = "schema_invalid: missing fields:"
+    if not error.startswith(prefix):
+        return set()
+    return {field.strip() for field in error.removeprefix(prefix).split(",") if field.strip()}
+
+
+def _classify_recoverable_schema_errors(errors: list[str]) -> tuple[set[str], list[str]]:
+    recoverable: set[str] = set()
+    unrecoverable: list[str] = []
+    for error in errors:
+        missing_fields = _missing_schema_fields(error)
+        if missing_fields:
+            if missing_fields == {"is_story_chapter"}:
+                recoverable.add("missing_is_story_chapter")
+            else:
+                unrecoverable.append(error)
+            continue
+        if error.startswith("schema_invalid: relationships_changed["):
+            recoverable.add("invalid_relationships_changed_entries")
+            continue
+        if error in {
+            "schema_invalid: setting must be a non-empty string",
+            "schema_invalid: tone must be a non-empty string",
+        }:
+            recoverable.add("empty_setting_or_tone")
+            continue
+        unrecoverable.append(error)
+    return recoverable, unrecoverable
+
+
+def _valid_relationship_change(item: object) -> dict[str, object] | None:
+    if not isinstance(item, dict):
+        return None
+    entity = item.get("entity")
+    change = item.get("change")
+    if not isinstance(entity, str) or not entity.strip():
+        return None
+    if not isinstance(change, str) or not change.strip():
+        return None
+    return {"entity": entity.strip(), "change": change.strip()}
+
+
+def _recover_summary_schema(
+    parsed: dict[str, Any],
+    *,
+    errors: list[str],
+) -> list[str] | None:
+    recoverable_classes, unrecoverable_errors = _classify_recoverable_schema_errors(errors)
+    if not recoverable_classes or unrecoverable_errors:
+        return None
+
+    warnings: list[str] = []
+    if "missing_is_story_chapter" in recoverable_classes:
+        parsed["is_story_chapter"] = True
+        warnings.append("missing_is_story_chapter_defaulted_true")
+
+    if "invalid_relationships_changed_entries" in recoverable_classes:
+        relationships = parsed.get("relationships_changed")
+        if not isinstance(relationships, list):
+            return None
+        parsed["relationships_changed"] = [
+            item
+            for item in (_valid_relationship_change(item) for item in relationships)
+            if item is not None
+        ]
+        warnings.append("invalid_relationships_changed_entries_dropped")
+
+    if "empty_setting_or_tone" in recoverable_classes:
+        for field_name in ("setting", "tone"):
+            value = parsed.get(field_name)
+            if not isinstance(value, str) or not value.strip():
+                parsed[field_name] = _SUMMARY_UNKNOWN_VALUE_ZH
+        warnings.append("empty_setting_or_tone_defaulted")
+
+    return warnings
+
+
+def _correction_hints(category: str, errors: list[str] | None = None) -> list[str]:
     if category == "parse_failed":
         return ["Return one valid JSON object only.", "Do not include markdown fences or prose."]
     if category == "schema_failed":
+        field_hints: list[str] = []
+        for error in errors or []:
+            missing_fields = _missing_schema_fields(error)
+            if "is_story_chapter" in missing_fields:
+                field_hints.append('Add "is_story_chapter" as literal true or false.')
+            if error.startswith("schema_invalid: relationships_changed["):
+                field_hints.append(
+                    'Use only relationships_changed objects: {"entity":"...","change":"..."}.'
+                )
+            if error == "schema_invalid: relationships_changed must be a list":
+                field_hints.append('"relationships_changed" must be an array, not a string.')
+            if error == "schema_invalid: setting must be a non-empty string":
+                field_hints.append('"setting" must be a short non-empty string.')
+            if error == "schema_invalid: tone must be a non-empty string":
+                field_hints.append('"tone" must be a short non-empty string.')
+            if error == "schema_invalid: narrative_progression must be a non-empty string":
+                field_hints.append('"narrative_progression" must be a non-empty Chinese sentence.')
+        if field_hints:
+            return list(dict.fromkeys(field_hints))
         return ["Use every required field with the exact expected type."]
     if category == "future_knowledge_failed":
         return ["Use only facts visible in the current source text.", "Do not mention later chapters."]
@@ -437,6 +536,8 @@ def generate_chapter_summary(
     parsed: dict[str, Any] | None = None
     validation: ValidationResult | None = None
     identity_warnings: list[str] = []
+    recovery_warnings: list[str] = []
+    recoverable_schema_retries: set[str] = set()
     allowed_future_chapter_numbers: set[int] = set()
     try:
         for attempt_number in range(1, _MAX_GENERATION_ATTEMPTS + 1):
@@ -473,6 +574,7 @@ def generate_chapter_summary(
             )
 
             is_story_chapter = parsed.get("is_story_chapter", True)
+            guardrail_overrode_non_story = False
 
             if is_story_chapter is False and len(source_text_zh) > _NON_STORY_GUARDRAIL_LENGTH:
                 logger.warning(
@@ -484,6 +586,7 @@ def generate_chapter_summary(
                 )
                 is_story_chapter = True
                 parsed["is_story_chapter"] = True
+                guardrail_overrode_non_story = True
 
             is_story = 0 if is_story_chapter is False else 1
 
@@ -512,13 +615,43 @@ def generate_chapter_summary(
                 break
 
             category = _categorize_validation_errors(validation.errors)
+            recoverable_classes, unrecoverable_errors = _classify_recoverable_schema_errors(
+                validation.errors
+            )
+            if (
+                recoverable_classes
+                and not unrecoverable_errors
+                and not guardrail_overrode_non_story
+            ):
+                if not recoverable_classes.issubset(recoverable_schema_retries):
+                    recoverable_schema_retries.update(recoverable_classes)
+                else:
+                    recovered_warnings = _recover_summary_schema(
+                        parsed,
+                        errors=validation.errors,
+                    )
+                    if recovered_warnings is not None:
+                        validation = validate_chinese_summary(
+                            structured_summary=parsed,
+                            expected_chapter_number=chapter_number,
+                            allowed_future_chapter_numbers=allowed_future_chapter_numbers,
+                        )
+                        if validation.is_valid:
+                            recovery_warnings.extend(recovered_warnings)
+                            logger.warning(
+                                "Recovered summary schema for chapter {}: {}",
+                                chapter_number,
+                                recovered_warnings,
+                            )
+                            break
+                        category = _categorize_validation_errors(validation.errors)
             failure = _SummaryAttemptFailure(
                 attempt_number=attempt_number,
                 category=category,
                 errors=validation.errors,
-                hints=_correction_hints(category),
+                hints=_correction_hints(category, validation.errors),
                 parsed_summary=parsed,
-                warnings=identity_warnings,
+                warnings=identity_warnings + recovery_warnings,
             )
         else:
             assert failure is not None
@@ -594,5 +727,6 @@ def generate_chapter_summary(
         structured_record=structured_record,
         short_record=short_record,
         validation=validation,
-        warnings=identity_warnings,
+        warnings=identity_warnings + recovery_warnings,
+        identity_warnings=identity_warnings,
     )

@@ -333,7 +333,7 @@ def _run_chinese_phase(
                 source_text_zh=source_text_zh,
                 structured_summary=generated.structured_summary,
                 locked_glossary=locked_glossary,
-                chapter_identity_warnings=generated.warnings,
+                chapter_identity_warnings=generated.identity_warnings,
                 config=config,
             )
         except PromptBudgetError:
@@ -487,10 +487,10 @@ def _emit_generated_summary_events(
         model_name=model_name,
         status=generated.validation.status,
     )
-    if generated.warnings:
+    if generated.identity_warnings:
         warning_message = (
             f"Chapter {chapter_number} identity warning: "
-            + "; ".join(generated.warnings)
+            + "; ".join(generated.identity_warnings)
         )
         _emit(
             run_id,
@@ -499,7 +499,7 @@ def _emit_generated_summary_events(
             chapter_number=chapter_number,
             severity="warning",
             message=warning_message,
-            warnings=generated.warnings,
+            warnings=generated.identity_warnings,
         )
     _emit(run_id, release_id, f"{_STAGE_NAME}.draft_generated", chapter_number=chapter_number)
     _emit(

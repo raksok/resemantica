@@ -70,3 +70,5 @@ Always follow the milestone sequence below.
 | M50 | task-50 | M48, M49 | Analyst Prompt Optimization |
 | M51 | task-51 | M11, M49 | Cleanup Pipeline Kaizen |
 | M52 | task-52 | M51 | Failed Validation Retry Recovery Kaizen |
+| M53 | task-53 | M52 | LLM Throttle And Event DB Locks |
+| M54 | task-54 | M53 | Summary Schema Recovery |

@@ -40,8 +40,9 @@ Implemented package layout (M4 slice):
 
 - `src/resemantica/summaries/`: chapter summary generation, deterministic validation, and summary derivation pipeline
 - `src/resemantica/db/summary_repo.py`: SQLite repository for summary drafts, validated Chinese summaries, and derived English summaries
-- `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_en_derive.txt`: M4 summary prompt files
+- `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_en_derive.txt`: M4 summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
 - `tests/summaries/`: continuity conflict, glossary conflict, future-leak, and deterministic story rebuild tests
+- Summary schema recovery is scoped to `src/resemantica/summaries/generator.py`: after one targeted retry, known recoverable structured-summary drift can be defaulted or dropped with warning codes that are written to summary artifacts under `warnings`.
 
 Implemented package layout (M5 slice):
 

@@ -84,6 +84,56 @@ class ScriptedSummaryLLM:
         raise RuntimeError("Unexpected prompt")
 
 
+def _structured_summary_payload(
+    *,
+    chapter_number: int = 1,
+    **overrides: object,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "chapter_number": chapter_number,
+        "characters_mentioned": ["张三"],
+        "key_events": ["张三开始修炼"],
+        "new_terms": [],
+        "relationships_changed": [{"entity": "张三", "change": "开始修炼"}],
+        "setting": "山中",
+        "tone": "calm",
+        "narrative_progression": "张三开始修炼。",
+        "is_story_chapter": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class SequencedSummaryLLM:
+    def __init__(self, structured_responses: list[dict[str, object] | str]) -> None:
+        self.structured_responses = structured_responses
+        self.prompts: list[str] = []
+        self._last_structured: dict[str, object] | None = None
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        if "SUMMARY_ZH_STRUCTURED" in prompt:
+            self.prompts.append(prompt)
+            index = min(len(self.prompts) - 1, len(self.structured_responses) - 1)
+            response = self.structured_responses[index]
+            if isinstance(response, str):
+                return response
+            self._last_structured = response
+            return json.dumps(response, ensure_ascii=False)
+
+        if "SUMMARY_STORY_COMPACT" in prompt:
+            if self._last_structured is None:
+                return "张三开始修炼。"
+            return str(self._last_structured.get("narrative_progression", "张三开始修炼。"))
+
+        if "SUMMARY_EN_DERIVE" in prompt:
+            return "EN::content"
+
+        if "SUMMARY_ZH_VALIDATE" in prompt:
+            return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
+
+        raise RuntimeError("Unexpected prompt")
+
+
 def _write_extracted_chapter(
     *,
     release_id: str,
@@ -478,6 +528,254 @@ def test_summary_generation_retries_with_reason_only_feedback(tmp_path: Path, mo
     assert result["status"] == "success"
     assert result["chapters_processed"] == 1
     assert len(prompts) == 2
+
+
+def test_summary_schema_retry_success_for_missing_story_flag(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m54-missing-story-retry"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    first = _structured_summary_payload()
+    first.pop("is_story_chapter")
+    llm = SequencedSummaryLLM([first, _structured_summary_payload()])
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert len(llm.prompts) == 2
+    assert 'Add "is_story_chapter" as literal true or false.' in llm.prompts[1]
+
+
+def test_summary_schema_recovers_missing_story_flag_after_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m54-missing-story-default"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    missing = _structured_summary_payload()
+    missing.pop("is_story_chapter")
+    llm = SequencedSummaryLLM([missing, dict(missing)])
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert result["chapter_artifacts"][0]["warnings"] == [
+        "missing_is_story_chapter_defaulted_true"
+    ]
+    paths = derive_paths(load_config(), release_id=release_id)
+    payload = json.loads((paths.summaries_dir / "chapter-1-zh.json").read_text(encoding="utf-8"))
+    structured = json.loads(payload["validated"]["chapter_summary_zh_structured"]["content_zh"])
+    assert structured["is_story_chapter"] is True
+    assert payload["warnings"] == ["missing_is_story_chapter_defaulted_true"]
+
+
+def test_summary_schema_retry_success_for_relationship_entries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m54-relationships-retry"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    malformed = _structured_summary_payload(relationships_changed=["张三开始修炼"])
+    llm = SequencedSummaryLLM([malformed, _structured_summary_payload()])
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert len(llm.prompts) == 2
+    assert 'Use only relationships_changed objects: {"entity":"...","change":"..."}.' in llm.prompts[1]
+
+
+def test_summary_schema_drops_malformed_relationship_entries_after_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m54-relationships-drop"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    malformed = _structured_summary_payload(
+        relationships_changed=[
+            {"entity": "张三", "change": "开始修炼"},
+            "张三开始修炼",
+            {"entity": "", "change": "缺少对象"},
+            {"entity": "李四", "change": ""},
+        ]
+    )
+    llm = SequencedSummaryLLM([malformed, json.loads(json.dumps(malformed, ensure_ascii=False))])
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert result["chapter_artifacts"][0]["warnings"] == [
+        "invalid_relationships_changed_entries_dropped"
+    ]
+    paths = derive_paths(load_config(), release_id=release_id)
+    payload = json.loads((paths.summaries_dir / "chapter-1-zh.json").read_text(encoding="utf-8"))
+    structured = json.loads(payload["validated"]["chapter_summary_zh_structured"]["content_zh"])
+    assert structured["relationships_changed"] == [{"entity": "张三", "change": "开始修炼"}]
+
+
+def test_summary_schema_retry_success_for_empty_setting_and_tone(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m54-setting-tone-retry"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    empty_fields = _structured_summary_payload(setting="", tone="")
+    llm = SequencedSummaryLLM([empty_fields, _structured_summary_payload()])
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert len(llm.prompts) == 2
+    assert '"setting" must be a short non-empty string.' in llm.prompts[1]
+    assert '"tone" must be a short non-empty string.' in llm.prompts[1]
+
+
+def test_summary_schema_defaults_empty_setting_and_tone_after_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m54-setting-tone-default"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    empty_fields = _structured_summary_payload(setting="", tone="")
+    llm = SequencedSummaryLLM([empty_fields, _structured_summary_payload(setting="", tone="")])
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert result["chapter_artifacts"][0]["warnings"] == [
+        "empty_setting_or_tone_defaulted"
+    ]
+    paths = derive_paths(load_config(), release_id=release_id)
+    payload = json.loads((paths.summaries_dir / "chapter-1-zh.json").read_text(encoding="utf-8"))
+    structured = json.loads(payload["validated"]["chapter_summary_zh_structured"]["content_zh"])
+    assert structured["setting"] == "未明确"
+    assert structured["tone"] == "未明确"
+
+
+def test_summary_schema_recovery_skips_mixed_unrecoverable_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m54-mixed-hard-fail"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三开始修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    mixed = _structured_summary_payload()
+    mixed.pop("is_story_chapter")
+    mixed.pop("narrative_progression")
+    llm = SequencedSummaryLLM([mixed])
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failed_chapters"] == [1]
+    assert len(llm.prompts) == 4
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        row = conn.execute(
+            "SELECT content_json FROM summary_drafts "
+            "WHERE release_id = ? AND chapter_number = 1",
+            (release_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    content = json.loads(row["content_json"])
+    parsed_summary = content["parsed_summary"]
+    assert "is_story_chapter" not in parsed_summary
+    assert "narrative_progression" not in parsed_summary
+    assert "warnings" not in content
+
+
+def test_summary_structured_prompt_schema_regression() -> None:
+    from resemantica.llm.prompts import load_prompt
+
+    prompt = load_prompt("summary_zh_structured.txt")
+
+    assert prompt.version == "1.5"
+    for key in [
+        "chapter_number",
+        "characters_mentioned",
+        "key_events",
+        "new_terms",
+        "relationships_changed",
+        "setting",
+        "tone",
+        "narrative_progression",
+        "is_story_chapter",
+    ]:
+        assert f"- {key}" in prompt.template
+    assert "is_story_chapter must be a JSON boolean" in prompt.template
+    assert '"relationships_changed": [{{"entity": "张三", "change": "与李四结盟"}}]' in prompt.template
+    assert '{{"entity": "张三", "change": "发现李四身份"}}' in prompt.template
 
 
 def test_exhausted_summary_failure_stops_story_assembly(tmp_path: Path, monkeypatch) -> None:
