@@ -760,7 +760,7 @@ def test_summary_structured_prompt_schema_regression() -> None:
 
     prompt = load_prompt("summary_zh_structured.txt")
 
-    assert prompt.version == "1.5"
+    assert prompt.version == "1.6"
     for key in [
         "chapter_number",
         "characters_mentioned",

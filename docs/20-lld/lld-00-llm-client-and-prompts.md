@@ -12,6 +12,7 @@ Config fields:
 - `llm.timeout_seconds`
 - `llm.max_retries`
 - `llm.context_window`
+- `llm.max_concurrent_requests_per_model`
 - `models.translator_name`
 - `models.analyst_name`
 - `models.embedding_name`
@@ -19,9 +20,12 @@ Config fields:
 Prompt contract:
 
 - Analyst prompts must prefer compact schema-only responses and explicitly forbid prose, markdown, chain-of-thought, and `<think>` artifacts.
+- Analyst prompts allow one deliberate reasoning pass but must discourage recursive restarts, repeated uncertainty loops, and narrated self-corrections; after one pass they must return only the requested output.
+- JSON analyst prompts should tell uncertain models to choose the safest schema-valid value and return the required JSON shape without explaining uncertainty. Prose analyst prompts should choose the most evidence-supported wording and return only final prose.
 - Prompt schemas are stage-owned interfaces; prompt optimization must not break existing parsers or artifact shapes.
 - Prompt version bumps are required when prompt behavior changes so affected caches and checkpoints invalidate.
 - Translator prompts are fragile and are excluded from the analyst prompt optimization pass unless a later task explicitly owns them.
+- This prompt-policy slice does not add system-message support; prompt-local text remains the contract for analyst behavior.
 
 Python modules:
 
@@ -59,12 +63,13 @@ Prompt files:
 6. Render prompt input through named sections using Python `str.format()`. Template files contain uppercase section names in curly braces (e.g., `{GLOSSARY}`, `{CONTEXT}`, `{SOURCE_TEXT}`, `{INSTRUCTIONS}`). The `render_named_sections(template, sections)` function raises `KeyError` on any missing section. No conditionals, loops, or nested expressions are supported in templates.
 7. Keep embedding support behind an `llm/embeddings.py` interface stub until fuzzy retrieval is implemented.
 8. Token counting uses tiktoken (Cl100k encoding) via `llm.tokens.count_tokens()`. This function is deterministic, offline, and does not require a running inference server. Packet assembly (M8) uses it for budget enforcement; the risk classifier (M9) uses it for context size estimation.
+9. `LLMClient.generate_text()` applies a process-local semaphore before each OpenAI-compatible request. The semaphore registry is keyed by `model_name`; by default, `llm.max_concurrent_requests_per_model = 1`, so same-model requests serialize across summaries, glossary, idioms, graph, packets, and translation. Different model names have independent semaphores and may run concurrently.
 
 ## Validation Ownership
 
 - `llm.prompts.load_prompt()` validates that every prompt file has a version header.
 - Prompt rendering validates required named sections before calling the model.
-- `LLMClient` owns retry limits, timeout handling, streaming support, token counting hooks, and structured output parsing.
+- `LLMClient` owns retry limits, timeout handling, per-model request throttling, streaming support, token counting hooks, and structured output parsing.
 - Stage-specific workflows own semantic validation of model output.
 
 ## Resume And Rerun
@@ -78,6 +83,7 @@ Prompt files:
 - prompt version extraction from files
 - named-section rendering with missing-section failure
 - mocked OpenAI-compatible client request with configured model name
+- per-model request throttling serializes same-model calls and allows different-model calls
 - prompt version recorded in checkpoint metadata
 - embedding stub can be imported without requiring a live embedding backend
 - `count_tokens()` returns deterministic counts for identical input
@@ -88,3 +94,4 @@ Prompt files:
 - broad prompt rewrites that change stage schemas
 - direct llama-cpp-python bindings
 - framework wrappers around simple OpenAI-compatible calls
+- system-message API support for prompt layering

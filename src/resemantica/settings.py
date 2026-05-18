@@ -53,6 +53,7 @@ class LLMConfig:
     timeout_seconds: int = 300
     max_retries: int = 2
     context_window: int = 65536
+    max_concurrent_requests_per_model: int = 1
 
 
 @dataclass(slots=True)
@@ -297,6 +298,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 llm.get("context_window", LLMConfig().context_window),
                 "llm.context_window",
             ),
+            max_concurrent_requests_per_model=_as_int(
+                llm.get(
+                    "max_concurrent_requests_per_model",
+                    LLMConfig().max_concurrent_requests_per_model,
+                ),
+                "llm.max_concurrent_requests_per_model",
+            ),
         ),
         paths=PathsConfig(
             artifact_root=_as_str(
@@ -447,6 +455,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("llm.timeout_seconds must be > 0.")
     if config.llm.max_retries < 0:
         raise ValueError("llm.max_retries must be >= 0.")
+    if config.llm.max_concurrent_requests_per_model < 1:
+        raise ValueError("llm.max_concurrent_requests_per_model must be >= 1.")
     if config.translation.risk_threshold_high < 0 or config.translation.risk_threshold_high > 1:
         raise ValueError("translation.risk_threshold_high must be in [0.0, 1.0].")
     if config.events.persistence_mode not in {"normal", "reduced"}:

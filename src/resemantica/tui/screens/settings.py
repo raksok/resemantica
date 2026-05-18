@@ -62,6 +62,7 @@ class SettingsScreen(BaseScreen):
             lines.append(f"  timeout:     {config.llm.timeout_seconds}s")
             lines.append(f"  max_retries: {config.llm.max_retries}")
             lines.append(f"  context_win: {config.llm.context_window}")
+            lines.append(f"  per_model_concurrency: {config.llm.max_concurrent_requests_per_model}")
 
             lines.append("")
             lines.append("[bold]Paths[/bold]")

@@ -1,4 +1,7 @@
-# version: 2.3
+# version: 2.4
+Reason through the task once. Do not restart your reasoning, loop over the same uncertainty, or narrate self-corrections such as "but wait", "let me rethink", or "I should check again". After one reasoning pass, return only the required output.
+If uncertain after one pass, choose the safest schema-valid value and return the JSON object. Do not explain uncertainty.
+
 {GLOSSARY}
 {ALIAS_RESOLUTIONS}
 {MATCHED_IDIOMS}

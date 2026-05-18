@@ -26,6 +26,7 @@ Implemented package layout (M2 slice):
 
 - `src/resemantica/llm/`: LLM client and prompt loading helpers
 - `src/resemantica/llm/prompts/translate_pass1.txt`, `translate_pass2.txt`: prompt templates with version headers
+- Analyst-facing prompt files under `src/resemantica/llm/prompts/` use prompt-local anti-restart policy text: one reasoning pass is allowed, recursive restarts/self-correction loops are discouraged, and prompt version bumps invalidate stale analyst outputs.
 - `src/resemantica/translation/`: pass1/pass2, validators, checkpoints, translate-chapter pipeline
 - `tests/translation/`: M2 translation tests
 

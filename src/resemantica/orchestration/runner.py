@@ -515,6 +515,7 @@ class OrchestrationRunner:
                 base_url=self.config.llm.base_url,
                 timeout_seconds=self.config.llm.timeout_seconds,
                 max_retries=self.config.llm.max_retries,
+                max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
             )
 
             discover_glossary_candidates(
@@ -709,6 +710,7 @@ class OrchestrationRunner:
             base_url=self.config.llm.base_url,
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
+            max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
         )
         usage_before = capture_usage_snapshot(shared_client)
 
@@ -838,6 +840,7 @@ class OrchestrationRunner:
             base_url=self.config.llm.base_url,
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
+            max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
         )
         usage_before = capture_usage_snapshot(client)
         completed: list[int] = []
@@ -902,6 +905,7 @@ class OrchestrationRunner:
             base_url=self.config.llm.base_url,
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
+            max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
         )
         usage_before = capture_usage_snapshot(client)
         chapter_usage_before = {

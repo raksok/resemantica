@@ -339,3 +339,43 @@ db_filename = "test.db"
             "translator", config.budget.max_context_per_pass, config.llm.context_window
         )
         assert eff_translator == config.budget.max_context_per_pass
+
+    def test_accepts_llm_per_model_concurrency(self, tmp_path) -> None:
+        toml_content = """
+[llm]
+max_concurrent_requests_per_model = 3
+
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.llm.max_concurrent_requests_per_model == 3
+
+    def test_rejects_invalid_llm_per_model_concurrency(self, tmp_path) -> None:
+        toml_content = """
+[llm]
+max_concurrent_requests_per_model = 0
+
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match="llm.max_concurrent_requests_per_model"):
+            load_config(config_path)

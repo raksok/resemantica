@@ -1,5 +1,9 @@
-# version: 1.5
+# version: 1.6
 SUMMARY_ZH_STRUCTURED
+
+## ANALYST INSTRUCTION
+Reason through the task once. Do not restart your reasoning, loop over the same uncertainty, or narrate self-corrections such as "but wait", "let me rethink", or "I should check again". After one reasoning pass, return only the required output.
+If uncertain after one pass, choose the safest schema-valid value and return the JSON object. Do not explain uncertainty.
 
 ## CHAPTER NUMBER
 {CHAPTER_NUMBER}

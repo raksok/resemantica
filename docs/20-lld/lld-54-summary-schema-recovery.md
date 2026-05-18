@@ -33,7 +33,7 @@ Hard failures remain hard:
 
 ## Prompt Contract
 
-`summary_zh_structured.txt` is versioned at `1.5`. It is schema-first for 4B-9B analyst models:
+`summary_zh_structured.txt` is versioned at `1.6`. It is schema-first for 4B-9B analyst models:
 
 - Compact directives.
 - Required-key checklist.

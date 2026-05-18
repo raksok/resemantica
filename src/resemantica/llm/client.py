@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -18,6 +19,8 @@ LLM_USAGE_PAYLOAD_FIELDS = (
     "llm_completion_tokens",
     "llm_total_tokens",
 )
+_MODEL_SEMAPHORE_LOCK = threading.Lock()
+_MODEL_SEMAPHORES: dict[str, tuple[int, threading.BoundedSemaphore]] = {}
 
 
 @dataclass(slots=True)
@@ -80,6 +83,7 @@ class LLMClient:
     base_url: str
     timeout_seconds: int
     max_retries: int = 2
+    max_concurrent_requests_per_model: int = 1
     generation_hook: GenerationHook | None = None
     _openai_client: Any | None = field(default=None, init=False, repr=False)
     openai_request_count: int = field(default=0, init=False)
@@ -93,6 +97,11 @@ class LLMClient:
         last_error: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
+            semaphore = _model_semaphore(
+                model_name,
+                self.max_concurrent_requests_per_model,
+            )
+            semaphore.acquire()
             try:
                 self.openai_request_count += 1
                 self._usage_totals.llm_request_count += 1
@@ -115,6 +124,8 @@ class LLMClient:
                     exc,
                 )
                 time.sleep(0.2)
+            finally:
+                semaphore.release()
 
         if last_error is None:  # pragma: no cover - defensive fallback
             raise RuntimeError("LLM generation failed with unknown error.")
@@ -223,3 +234,15 @@ class LLMClient:
             api_key="not-required-for-local-router",
             timeout=self.timeout_seconds,
         )
+
+
+def _model_semaphore(model_name: str, limit: int) -> threading.BoundedSemaphore:
+    if limit < 1:
+        raise ValueError("max_concurrent_requests_per_model must be >= 1.")
+    with _MODEL_SEMAPHORE_LOCK:
+        registered = _MODEL_SEMAPHORES.get(model_name)
+        if registered is not None and registered[0] == limit:
+            return registered[1]
+        semaphore = threading.BoundedSemaphore(limit)
+        _MODEL_SEMAPHORES[model_name] = (limit, semaphore)
+        return semaphore

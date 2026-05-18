@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+import pytest
 from loguru import logger
 
 from resemantica.llm.client import LLMClient
@@ -46,6 +50,44 @@ class _FlakyCompletions:
 class _FlakyOpenAIClient:
     def __init__(self) -> None:
         self.completions = _FlakyCompletions()
+        self.chat = _FakeChat(self.completions)
+
+
+class _ConcurrentCompletions:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.active_by_model: dict[str, int] = {}
+        self.max_active_by_model: dict[str, int] = {}
+        self.max_active_total = 0
+        self._active_total = 0
+        self._fail = fail
+        self._lock = threading.Lock()
+
+    def create(self, **kwargs: Any) -> Any:
+        model = str(kwargs["model"])
+        with self._lock:
+            self.active_by_model[model] = self.active_by_model.get(model, 0) + 1
+            self._active_total += 1
+            self.max_active_by_model[model] = max(
+                self.max_active_by_model.get(model, 0),
+                self.active_by_model[model],
+            )
+            self.max_active_total = max(self.max_active_total, self._active_total)
+        try:
+            time.sleep(0.02)
+            if self._fail:
+                raise RuntimeError("boom")
+            message = type("Message", (), {"content": "ok"})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice], "usage": None})()
+        finally:
+            with self._lock:
+                self.active_by_model[model] -= 1
+                self._active_total -= 1
+
+
+class _ConcurrentOpenAIClient:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.completions = _ConcurrentCompletions(fail=fail)
         self.chat = _FakeChat(self.completions)
 
 
@@ -156,6 +198,69 @@ def test_generate_text_logs_retry_warning(monkeypatch) -> None:
     assert "max_retries=2" in log_output
     assert "temporary outage" in log_output
     assert flaky.completions.calls == 2
+
+
+def test_same_model_requests_obey_per_model_concurrency_limit() -> None:
+    openai_client = _ConcurrentOpenAIClient()
+    client = LLMClient(
+        base_url="http://local",
+        timeout_seconds=30,
+        max_concurrent_requests_per_model=1,
+    )
+    client._openai_client = openai_client
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(
+            executor.map(
+                lambda _: client.generate_text(model_name="throttle-same", prompt="p"),
+                range(8),
+            )
+        )
+
+    assert results == ["ok"] * 8
+    assert openai_client.completions.max_active_by_model["throttle-same"] == 1
+
+
+def test_different_models_have_independent_concurrency_keys() -> None:
+    openai_client = _ConcurrentOpenAIClient()
+    client = LLMClient(
+        base_url="http://local",
+        timeout_seconds=30,
+        max_concurrent_requests_per_model=1,
+    )
+    client._openai_client = openai_client
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(client.generate_text, model_name="throttle-model-a", prompt="p"),
+            executor.submit(client.generate_text, model_name="throttle-model-b", prompt="p"),
+        ]
+        results = [future.result(timeout=1) for future in futures]
+
+    assert results == ["ok", "ok"]
+    assert openai_client.completions.max_active_total == 2
+
+
+def test_model_semaphore_releases_after_exception() -> None:
+    client = LLMClient(
+        base_url="http://local",
+        timeout_seconds=30,
+        max_retries=0,
+        max_concurrent_requests_per_model=1,
+    )
+    client._openai_client = _ConcurrentOpenAIClient(fail=True)
+
+    with pytest.raises(RuntimeError, match="LLM generation failed"):
+        client.generate_text(model_name="throttle-exception", prompt="p")
+
+    client._openai_client = _ConcurrentOpenAIClient()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            client.generate_text,
+            model_name="throttle-exception",
+            prompt="p",
+        )
+        assert future.result(timeout=1) == "ok"
 
 
 def test_translate_glossary_candidate_cleans_markdown_bold() -> None:
