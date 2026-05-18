@@ -66,11 +66,17 @@ class EventBus:
 
     def publish(self, event: Event) -> Event:
         if self._should_persist(event):
-            conn = ensure_tracking_db(event.release_id or "")
             try:
-                save_event(conn, event)
-            finally:
-                conn.close()
+                conn = ensure_tracking_db(event.release_id or "")
+                try:
+                    save_event(conn, event)
+                finally:
+                    conn.close()
+            except Exception:
+                logger.opt(exception=True).debug(
+                    "Event persistence failed for {}; continuing live delivery",
+                    event.event_type,
+                )
 
         callbacks = [
             *self._subscribers.get(event.event_type, []),

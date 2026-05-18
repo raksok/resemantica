@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Optional
 
+from loguru import logger
+
 from .models import Event, RunState
+
+_SQLITE_TIMEOUT_SECONDS = 0.1
+_SQLITE_BUSY_TIMEOUT_MS = 100
+_EVENT_LOCK_RETRY_DELAYS = (0.05, 0.1, 0.2)
+
+
+def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "database is locked" in message or "database table is locked" in message
 
 
 def _init_tracking_schema(conn: sqlite3.Connection) -> None:
@@ -51,8 +63,10 @@ def get_tracking_db_path(release_id: str) -> Path:
 def ensure_tracking_db(release_id: str) -> sqlite3.Connection:
     db_path = get_tracking_db_path(release_id)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=_SQLITE_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
     _init_tracking_schema(conn)
     return conn
 
@@ -104,27 +118,44 @@ def load_run_state(conn: sqlite3.Connection, run_id: str) -> Optional[RunState]:
 
 def save_event(conn: sqlite3.Connection, event: Event) -> None:
     import json
-    with conn:
-        conn.execute("""
-            INSERT INTO events(
-                event_id, event_type, event_time, run_id, release_id,
-                stage_name, chapter_number, block_id, severity, message,
-                payload_json, schema_version
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            event.event_id,
-            event.event_type,
-            event.event_time,
-            event.run_id,
-            event.release_id,
-            event.stage_name,
-            event.chapter_number,
-            event.block_id,
-            event.severity,
-            event.message,
-            json.dumps(event.payload),
-            event.schema_version,
-        ))
+    params = (
+        event.event_id,
+        event.event_type,
+        event.event_time,
+        event.run_id,
+        event.release_id,
+        event.stage_name,
+        event.chapter_number,
+        event.block_id,
+        event.severity,
+        event.message,
+        json.dumps(event.payload),
+        event.schema_version,
+    )
+    for attempt, delay in enumerate((*_EVENT_LOCK_RETRY_DELAYS, None), start=1):
+        try:
+            with conn:
+                conn.execute("""
+                    INSERT INTO events(
+                        event_id, event_type, event_time, run_id, release_id,
+                        stage_name, chapter_number, block_id, severity, message,
+                        payload_json, schema_version
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, params)
+            return
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_lock_error(exc):
+                raise
+            if delay is None:
+                logger.warning(
+                    "Skipping event persistence after SQLite lock retries "
+                    "(event_type={}, release_id={}, attempts={})",
+                    event.event_type,
+                    event.release_id,
+                    attempt,
+                )
+                return
+            time.sleep(delay)
 
 
 def load_events(
