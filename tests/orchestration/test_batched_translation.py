@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from resemantica.orchestration.runner import OrchestrationRunner
-from resemantica.settings import AppConfig, TranslationConfig, derive_paths, load_config
+from resemantica.settings import AppConfig, BatchOrderConfig, TranslationConfig, derive_paths, load_config
 from resemantica.tracking.models import RunState
 from resemantica.tracking.repo import ensure_tracking_db, save_run_state
 
@@ -378,3 +378,103 @@ def test_config_default_batched_translate_range_runs_model_order(
         ("pass3", 1),
         ("pass3", 2),
     ]
+
+
+def test_chunked_batched_translate_range_runs_model_order_per_chunk(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "batched-chunked"
+    for n in range(1, 26):
+        _write_chapter(release_id, n)
+    calls: list[tuple[str, int]] = []
+    pass1, pass2, pass3 = _make_mock_passes(calls)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass1", pass1)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass3", pass3)
+
+    config = AppConfig(
+        translation=TranslationConfig(batched_model_order=True),
+        batch_order=BatchOrderConfig(enabled=True, translation_chunk_size=10),
+    )
+    result = OrchestrationRunner(release_id, "run", config=config).run_stage(
+        "translate-range",
+        chapter_start=1,
+        chapter_end=25,
+    )
+
+    assert result.success is True
+    assert calls == (
+        [("pass1", n) for n in range(1, 11)]
+        + [("pass2", n) for n in range(1, 11)]
+        + [("pass3", n) for n in range(1, 11)]
+        + [("pass1", n) for n in range(11, 21)]
+        + [("pass2", n) for n in range(11, 21)]
+        + [("pass3", n) for n in range(11, 21)]
+        + [("pass1", n) for n in range(21, 26)]
+        + [("pass2", n) for n in range(21, 26)]
+        + [("pass3", n) for n in range(21, 26)]
+    )
+
+
+def test_chunked_batched_resume_skips_completed_chunk_and_resumes_partial_pass(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "batched-chunked-resume"
+    run_id = "r01"
+    for n in range(1, 16):
+        _write_chapter(release_id, n)
+    calls: list[tuple[str, int]] = []
+    pass1, pass2, pass3 = _make_mock_passes(calls)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass1", pass1)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass3", pass3)
+    _seed_run_state(
+        release_id,
+        run_id,
+        {
+            "pass1_completed": list(range(1, 13)),
+            "pass2_completed": list(range(1, 11)),
+            "pass3_completed": list(range(1, 11)),
+            "failures": {},
+            "completed_chunk_index": 0,
+        },
+    )
+    from resemantica.db.sqlite import open_connection
+    from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    try:
+        save_chunk_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name="translate-range",
+            chunk_index=0,
+            chapter_start=1,
+            chapter_end=10,
+            status="completed",
+        )
+    finally:
+        conn.close()
+
+    config = AppConfig(
+        translation=TranslationConfig(batched_model_order=True),
+        batch_order=BatchOrderConfig(enabled=True, translation_chunk_size=10),
+    )
+    result = OrchestrationRunner(release_id, run_id, config=config).run_stage(
+        "translate-range",
+        chapter_start=1,
+        chapter_end=15,
+    )
+
+    assert result.success is True
+    assert calls == (
+        [("pass1", n) for n in range(13, 16)]
+        + [("pass2", n) for n in range(11, 16)]
+        + [("pass3", n) for n in range(11, 16)]
+    )

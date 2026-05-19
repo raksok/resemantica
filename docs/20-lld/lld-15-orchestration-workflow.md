@@ -63,6 +63,8 @@ If the saved checkpoint contains `chapter_start` or `chapter_end`, those bounds 
 
 Internal stage resume is enabled by default. When production reaches summaries, glossary, idioms, graph, packets, or translation, the stage also skips its own completed durable units. Operators use `--force` on production or an individual command to rebuild the requested scope.
 
+For chunked batch-order stages, `chunk_checkpoints` add a cleanup boundary without replacing normal stage checkpoints. `preprocess-summaries` still resumes from `summary_checkpoints` inside an incomplete chunk. Batched `translate-range` still resumes from `pass1_completed`, `pass2_completed`, and `pass3_completed` inside an incomplete chunk.
+
 ## Failed Unit Retry
 
 `run retry-failed` is an operator recovery command, not a force rebuild. It inspects durable state and tracking events, reports retryable units and review-required blockers, and then delegates to existing stage runners with the smallest chapter scope it can infer.
@@ -99,6 +101,8 @@ Summary rows with `validation_status = "failed"` are audit evidence only. Produc
 - iterate inclusively in numeric order
 - continue or stop according to an explicit policy; the default should stop on hard structural failures
 - return aggregate success/failure metadata
+
+When batched model order and chunking are active, `translate-range` runs pass1, pass2, and pass3 for one chunk before advancing to the next chunk. The stage checkpoint metadata includes chunk progress so production resume and cleanup can identify the last completed chunk.
 
 ## Event Contract
 
@@ -183,6 +187,11 @@ Use `--force` when the operator needs to rebuild:
 `run production --force` starts again at `preprocess-summaries` and forwards
 `force=True` to each stage. `run resume --force` keeps the resume start point
 but tells each resumed stage to bypass its internal checkpoints.
+
+After a crash in chunked summary or batched translation work, operators can preview and apply cleanup back to the last completed chunk:
+
+    rsem run cleanup-plan -r p1 -R 001 --scope last-good-chunk --stage preprocess-summaries
+    rsem run cleanup-apply -r p1 -R 001 --scope last-good-chunk --stage translate-range
 
 ## Tests
 

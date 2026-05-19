@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,8 +11,26 @@ from resemantica.settings import derive_paths, load_config
 
 from .events import emit_event
 
-CLEANUP_SCOPES = ("run", "translation", "preprocess", "cache", "keep-extracted", "all", "factory")
-CleanupScope = Literal["run", "translation", "preprocess", "cache", "keep-extracted", "all", "factory"]
+CLEANUP_SCOPES = (
+    "run",
+    "translation",
+    "preprocess",
+    "cache",
+    "keep-extracted",
+    "last-good-chunk",
+    "all",
+    "factory",
+)
+CleanupScope = Literal[
+    "run",
+    "translation",
+    "preprocess",
+    "cache",
+    "keep-extracted",
+    "last-good-chunk",
+    "all",
+    "factory",
+]
 SUPPORTED_CLEANUP_PLAN_SCHEMA = "1.1"
 
 _PROTECTED_RELEASE_ARTIFACTS = {
@@ -29,13 +48,17 @@ def _sqlite_target(
     column: str,
     *,
     release_column: str | None = "release_id",
+    stage_name: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    target = {
         "database": database,
         "table": table,
         "column": column,
         "release_column": release_column,
     }
+    if stage_name is not None:
+        target["stage_name"] = stage_name
+    return target
 
 
 _TRACKING_SQLITE_TARGETS = (
@@ -46,6 +69,7 @@ _TRACKING_SQLITE_TARGETS = (
 _RELEASE_SQLITE_TARGETS = {
     "translation": (
         _sqlite_target("resemantica.db", "translation_checkpoints", "run_id"),
+        _sqlite_target("resemantica.db", "chunk_checkpoints", "run_id", stage_name="translate-range"),
     ),
     "extraction": (
         _sqlite_target("resemantica.db", "extracted_blocks", "run_id"),
@@ -53,6 +77,7 @@ _RELEASE_SQLITE_TARGETS = {
     ),
     "preprocess_downstream": (
         _sqlite_target("resemantica.db", "summary_checkpoints", "run_id"),
+        _sqlite_target("resemantica.db", "chunk_checkpoints", "run_id", stage_name="preprocess-summaries"),
         _sqlite_target("resemantica.db", "summary_drafts", "run_id"),
         _sqlite_target("resemantica.db", "validated_summaries_zh", "run_id"),
         _sqlite_target("resemantica.db", "derived_summaries_en", "run_id"),
@@ -175,6 +200,148 @@ def _collect_scope_artifacts(
     return deletable, preserved
 
 
+def _resolve_cleanup_stage(release_id: str, run_id: str, stage: str | None) -> str:
+    if stage is not None:
+        if stage not in {"preprocess-summaries", "translate-range"}:
+            raise ValueError("--stage must be preprocess-summaries or translate-range")
+        return stage
+    from resemantica.tracking.repo import ensure_tracking_db, load_run_state
+
+    conn = ensure_tracking_db(release_id)
+    try:
+        state = load_run_state(conn, run_id)
+    finally:
+        conn.close()
+    if state is None or state.stage_name not in {"preprocess-summaries", "translate-range"}:
+        raise ValueError(
+            "last-good-chunk cleanup requires a current failed/running "
+            "preprocess-summaries or translate-range run state, or --stage"
+        )
+    return state.stage_name
+
+
+def _last_good_chunk_boundary(
+    release_id: str,
+    run_id: str,
+    stage: str,
+) -> tuple[int, int]:
+    from resemantica.db.sqlite import open_connection
+    from resemantica.orchestration.chunk_checkpoints import last_completed_chunk
+
+    cfg = load_config()
+    paths = derive_paths(cfg, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    try:
+        checkpoint = last_completed_chunk(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name=stage,
+        )
+    finally:
+        conn.close()
+    if checkpoint is None:
+        return -1, 0
+    return checkpoint.chunk_index, checkpoint.chapter_end
+
+
+def _chapter_number_from_summary_artifact(path: Path) -> int | None:
+    match = re.match(r"chapter-(\d+)-(?:zh|en)\.json$", path.name)
+    return int(match.group(1)) if match else None
+
+
+def _chapter_number_from_translation_dir(path: Path) -> int | None:
+    match = re.match(r"chapter-(\d+)(?:$|-)", path.name)
+    return int(match.group(1)) if match else None
+
+
+def _collect_last_good_chunk_plan(
+    release_id: str,
+    run_id: str,
+    stage: str | None,
+) -> dict[str, Any]:
+    resolved_stage = _resolve_cleanup_stage(release_id, run_id, stage)
+    completed_chunk_index, last_good_chapter = _last_good_chunk_boundary(
+        release_id,
+        run_id,
+        resolved_stage,
+    )
+    cfg = load_config()
+    paths = derive_paths(cfg, release_id=release_id)
+    deletable: list[Path] = []
+    preserved: list[Path] = []
+    sqlite_chapter_rows: list[dict[str, Any]] = []
+    sqlite_chunk_rows = [{
+        "database": "resemantica.db",
+        "table": "chunk_checkpoints",
+        "stage_name": resolved_stage,
+        "completed_chunk_index": completed_chunk_index,
+    }]
+    checkpoint_rewinds: list[dict[str, Any]] = []
+
+    if resolved_stage == "preprocess-summaries":
+        if paths.summaries_dir.exists():
+            for artifact in paths.summaries_dir.glob("chapter-*-*.json"):
+                chapter_number = _chapter_number_from_summary_artifact(artifact)
+                if chapter_number is not None and chapter_number > last_good_chapter:
+                    deletable.append(artifact)
+                else:
+                    preserved.append(artifact)
+        if paths.packets_dir.exists():
+            for artifact in paths.packets_dir.glob("chapter-*"):
+                chapter_number = _chapter_number_from_translation_dir(artifact)
+                if chapter_number is not None and chapter_number > last_good_chapter:
+                    deletable.append(artifact)
+        sqlite_chapter_rows.extend([
+            {"database": "resemantica.db", "table": "summary_drafts", "chapter_column": "chapter_number"},
+            {"database": "resemantica.db", "table": "validated_summaries_zh", "chapter_column": "chapter_number"},
+            {"database": "resemantica.db", "table": "derived_summaries_en", "chapter_column": "chapter_number"},
+            {"database": "resemantica.db", "table": "packet_metadata", "chapter_column": "chapter_number"},
+        ])
+        checkpoint_rewinds.append({
+            "database": "resemantica.db",
+            "table": "summary_checkpoints",
+            "last_good_chapter": last_good_chapter,
+        })
+    else:
+        translation_root = paths.release_root / "runs" / run_id / "translation"
+        if translation_root.exists():
+            for artifact in translation_root.iterdir():
+                chapter_number = _chapter_number_from_translation_dir(artifact)
+                if chapter_number is not None and chapter_number > last_good_chapter:
+                    deletable.append(artifact)
+                else:
+                    preserved.append(artifact)
+        sqlite_chapter_rows.append({
+            "database": "resemantica.db",
+            "table": "translation_checkpoints",
+            "chapter_column": "chapter_number",
+        })
+        checkpoint_rewinds.append({
+            "database": "tracking.db",
+            "table": "run_state",
+            "last_good_chapter": last_good_chapter,
+        })
+
+    for target in sqlite_chapter_rows:
+        target["release_id"] = release_id
+        target["run_id"] = run_id
+        target["last_good_chapter"] = last_good_chapter
+    for target in sqlite_chunk_rows:
+        target["release_id"] = release_id
+        target["run_id"] = run_id
+    return {
+        "cleanup_stage": resolved_stage,
+        "last_good_chapter": last_good_chapter,
+        "completed_chunk_index": completed_chunk_index,
+        "deletable_artifacts": deletable,
+        "preserved_artifacts": preserved,
+        "sqlite_chapter_rows": sqlite_chapter_rows,
+        "sqlite_chunk_rows": sqlite_chunk_rows,
+        "checkpoint_rewinds": checkpoint_rewinds,
+    }
+
+
 def _estimate_size(paths: list[Path]) -> int:
     total = 0
     for p in paths:
@@ -227,11 +394,18 @@ def plan_cleanup(
     *,
     scope: str = "run",
     dry_run: bool = True,
+    stage: str | None = None,
 ) -> dict[str, Any]:
     _validate_scope(scope)
     plan_path = _get_cleanup_plan_path(release_id, scope=scope)
 
-    deletable, preserved = _collect_scope_artifacts(release_id, run_id, scope)
+    last_good_plan: dict[str, Any] = {}
+    if scope == "last-good-chunk":
+        last_good_plan = _collect_last_good_chunk_plan(release_id, run_id, stage)
+        deletable = list(last_good_plan["deletable_artifacts"])
+        preserved = list(last_good_plan["preserved_artifacts"])
+    else:
+        deletable, preserved = _collect_scope_artifacts(release_id, run_id, scope)
     expected_root = _expected_cleanup_root(release_id, scope)
     sqlite_rows = _sqlite_targets_for_scope(scope)
     for target in sqlite_rows:
@@ -251,6 +425,15 @@ def plan_cleanup(
         "created_at": datetime.now(UTC).isoformat(),
         "schema_version": SUPPORTED_CLEANUP_PLAN_SCHEMA,
     }
+    if last_good_plan:
+        plan.update({
+            "cleanup_stage": last_good_plan["cleanup_stage"],
+            "last_good_chapter": last_good_plan["last_good_chapter"],
+            "completed_chunk_index": last_good_plan["completed_chunk_index"],
+            "sqlite_chapter_rows": last_good_plan["sqlite_chapter_rows"],
+            "sqlite_chunk_rows": last_good_plan["sqlite_chunk_rows"],
+            "checkpoint_rewinds": last_good_plan["checkpoint_rewinds"],
+        })
 
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     with open(plan_path, "w") as f:
@@ -357,7 +540,12 @@ def _delete_sqlite_targets(
             raise ValueError(f"Unsupported SQLite cleanup target: {database}.{table}.{column}")
         if not _table_exists(conn, table):
             continue
-        if release_column:
+        if table == "chunk_checkpoints" and target.get("stage_name"):
+            cursor = conn.execute(
+                f"DELETE FROM {table} WHERE {release_column} = ? AND {column} = ? AND stage_name = ?",
+                (release_id, run_id, str(target["stage_name"])),
+            )
+        elif release_column:
             cursor = conn.execute(
                 f"DELETE FROM {table} WHERE {release_column} = ? AND {column} = ?",
                 (release_id, run_id),
@@ -370,6 +558,118 @@ def _delete_sqlite_targets(
         deleted += max(cursor.rowcount, 0)
     conn.commit()
     return deleted
+
+
+_ALLOWED_CHAPTER_DELETE_TABLES = {
+    "summary_drafts",
+    "validated_summaries_zh",
+    "derived_summaries_en",
+    "packet_metadata",
+    "translation_checkpoints",
+}
+
+
+def _delete_chapter_rows(conn: Any, rows: list[dict[str, Any]], release_id: str, run_id: str) -> int:
+    deleted = 0
+    for row in rows:
+        if row.get("database") != "resemantica.db":
+            continue
+        table = str(row.get("table", ""))
+        chapter_column = str(row.get("chapter_column", "chapter_number"))
+        if table not in _ALLOWED_CHAPTER_DELETE_TABLES or chapter_column != "chapter_number":
+            raise ValueError(f"Unsupported chapter cleanup target: {table}.{chapter_column}")
+        if not _table_exists(conn, table):
+            continue
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE release_id = ? AND run_id = ? AND {chapter_column} > ?",
+            (release_id, run_id, int(row.get("last_good_chapter", 0))),
+        )
+        deleted += max(cursor.rowcount, 0)
+    conn.commit()
+    return deleted
+
+
+def _delete_later_chunk_rows(conn: Any, rows: list[dict[str, Any]], release_id: str, run_id: str) -> int:
+    deleted = 0
+    for row in rows:
+        if row.get("database") != "resemantica.db":
+            continue
+        if str(row.get("table", "")) != "chunk_checkpoints":
+            raise ValueError("Unsupported chunk cleanup target")
+        if not _table_exists(conn, "chunk_checkpoints"):
+            continue
+        cursor = conn.execute(
+            """
+            DELETE FROM chunk_checkpoints
+            WHERE release_id = ?
+              AND run_id = ?
+              AND stage_name = ?
+              AND chunk_index > ?
+            """,
+            (
+                release_id,
+                run_id,
+                str(row.get("stage_name", "")),
+                int(row.get("completed_chunk_index", -1)),
+            ),
+        )
+        deleted += max(cursor.rowcount, 0)
+    conn.commit()
+    return deleted
+
+
+def _rewind_summary_checkpoints(conn: Any, plan: dict[str, Any], release_id: str, run_id: str) -> None:
+    rewinds = [
+        row for row in plan.get("checkpoint_rewinds", [])
+        if row.get("database") == "resemantica.db" and row.get("table") == "summary_checkpoints"
+    ]
+    if not rewinds or not _table_exists(conn, "summary_checkpoints"):
+        return
+    last_good_chapter = int(rewinds[0].get("last_good_chapter", 0))
+    conn.execute(
+        """
+        UPDATE summary_checkpoints
+        SET zh_last_chapter = MIN(zh_last_chapter, ?),
+            story_last_chapter = MIN(story_last_chapter, ?),
+            en_last_chapter = MIN(en_last_chapter, ?),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE release_id = ? AND run_id = ?
+        """,
+        (last_good_chapter, last_good_chapter, last_good_chapter, release_id, run_id),
+    )
+    conn.commit()
+
+
+def _rewind_tracking_checkpoint(plan: dict[str, Any], release_id: str, run_id: str) -> None:
+    rewinds = [
+        row for row in plan.get("checkpoint_rewinds", [])
+        if row.get("database") == "tracking.db" and row.get("table") == "run_state"
+    ]
+    if not rewinds:
+        return
+    from resemantica.tracking.repo import ensure_tracking_db, load_run_state, save_run_state
+
+    last_good_chapter = int(rewinds[0].get("last_good_chapter", 0))
+    conn = ensure_tracking_db(release_id)
+    try:
+        state = load_run_state(conn, run_id)
+        if state is None:
+            return
+        checkpoint = dict(state.checkpoint)
+        for key in ("pass1_completed", "pass2_completed", "pass3_completed", "completed_chapters"):
+            values = checkpoint.get(key)
+            if isinstance(values, list):
+                checkpoint[key] = [int(value) for value in values if int(value) <= last_good_chapter]
+        failures = checkpoint.get("failures")
+        if isinstance(failures, dict):
+            checkpoint["failures"] = {
+                key: value for key, value in failures.items() if int(key) <= last_good_chapter
+            }
+        checkpoint["last_good_chapter"] = last_good_chapter
+        state.checkpoint = checkpoint
+        save_run_state(conn, state)
+    finally:
+        conn.close()
 
 
 def _plan_sqlite_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -392,6 +692,7 @@ def apply_cleanup(
     *,
     scope: str = "run",
     force: bool = False,
+    stage: str | None = None,
 ) -> dict[str, Any]:
     _validate_scope(scope)
     plan_path = _get_cleanup_plan_path(release_id, scope=scope)
@@ -458,6 +759,8 @@ def apply_cleanup(
                 )
             finally:
                 conn.close()
+            if scope == "last-good-chunk":
+                _rewind_tracking_checkpoint(plan, release_id, run_id)
         except Exception as exc:
             report["errors"].append(f"Tracking SQLite cleanup error: {exc}")
 
@@ -473,6 +776,20 @@ def apply_cleanup(
                     release_id=release_id,
                     run_id=run_id,
                 )
+                if scope == "last-good-chunk":
+                    report["sqlite_rows_deleted"] += _delete_chapter_rows(
+                        conn,
+                        list(plan.get("sqlite_chapter_rows", [])),
+                        release_id,
+                        run_id,
+                    )
+                    report["sqlite_rows_deleted"] += _delete_later_chunk_rows(
+                        conn,
+                        list(plan.get("sqlite_chunk_rows", [])),
+                        release_id,
+                        run_id,
+                    )
+                    _rewind_summary_checkpoints(conn, plan, release_id, run_id)
             finally:
                 conn.close()
         except Exception as exc:

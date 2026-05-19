@@ -736,7 +736,8 @@ translate-range, all.""",
         help="Plan cleanup by enumerating deletable artifacts.",
         description="""\
 Dry-run inspection of deletable artifacts for a given scope. No files
-removed. Scopes: run, translation, preprocess, cache, keep-extracted, all, factory.""",
+removed. Scopes: run, translation, preprocess, cache, keep-extracted,
+last-good-chunk, all, factory.""",
     )
     _add_common_release_args(run_cleanup_plan, default_run="cleanup-plan")
     run_cleanup_plan.add_argument(
@@ -747,13 +748,19 @@ removed. Scopes: run, translation, preprocess, cache, keep-extracted, all, facto
         choices=CLEANUP_SCOPES,
         help="Cleanup scope (default: run).",
     )
+    run_cleanup_plan.add_argument(
+        "--stage",
+        choices=("preprocess-summaries", "translate-range"),
+        help="Stage override for --scope last-good-chunk.",
+    )
 
     run_cleanup_apply = run_subparsers.add_parser(
         "cleanup-apply", aliases=["cln-apply"],
         help="Apply a previously planned cleanup.",
         description="""\
 Deletes artifacts matching the given scope. Use cleanup-plan first to
-preview. Scopes: run, translation, preprocess, cache, keep-extracted, all, factory.""",
+preview. Scopes: run, translation, preprocess, cache, keep-extracted,
+last-good-chunk, all, factory.""",
     )
     _add_common_release_args(run_cleanup_apply, default_run="cleanup-apply")
     run_cleanup_apply.add_argument(
@@ -768,6 +775,11 @@ preview. Scopes: run, translation, preprocess, cache, keep-extracted, all, facto
         "-f", "--force",
         action="store_true",
         help="Skip scope-mismatch safety check (use with caution).",
+    )
+    run_cleanup_apply.add_argument(
+        "--stage",
+        choices=("preprocess-summaries", "translate-range"),
+        help="Stage override for --scope last-good-chunk.",
     )
 
     return parser
@@ -1222,7 +1234,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.run_command == "cleanup-plan":
             plan = plan_cleanup(
-                args.release, args.run, scope=args.scope, dry_run=True
+                args.release, args.run, scope=args.scope, dry_run=True, stage=args.stage
             )
             print(f"\nCleanup Plan (scope: {plan['scope']})")
             print(f"Release: {plan['release_id']}, Run: {plan['run_id']}")
@@ -1238,7 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.run_command == "cleanup-apply":
             cleanup_result = apply_cleanup(
-                args.release, args.run, scope=args.scope, force=args.force
+                args.release, args.run, scope=args.scope, force=args.force, stage=args.stage
             )
             print(f"\nCleanup Report (scope: {cleanup_result.get('scope', args.scope)})")
             print(

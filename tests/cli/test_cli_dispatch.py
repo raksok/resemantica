@@ -347,6 +347,26 @@ class TestCliDispatch:
         assert args.run_command == "cleanup-apply"
         assert args.scope == "factory"
 
+    def test_run_cleanup_plan_last_good_chunk_stage(self):
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run", "cleanup-plan", "--release", "r1",
+            "--scope", "last-good-chunk", "--stage", "preprocess-summaries",
+        ])
+        assert args.run_command == "cleanup-plan"
+        assert args.scope == "last-good-chunk"
+        assert args.stage == "preprocess-summaries"
+
+    def test_run_cleanup_apply_last_good_chunk_stage(self):
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run", "cleanup-apply", "--release", "r1",
+            "--scope", "last-good-chunk", "--stage", "translate-range",
+        ])
+        assert args.run_command == "cleanup-apply"
+        assert args.scope == "last-good-chunk"
+        assert args.stage == "translate-range"
+
     def test_epub_roundtrip(self):
         parser = _build_parser()
         args = parser.parse_args([

@@ -22,6 +22,18 @@ for chapter in range: pass3 analyst
 
 This path must reuse existing `translate_chapter_pass1/2/3` functions and checkpoints. It changes orchestration order only, not pass internals.
 
+When `[batch_order].enabled` is true and the selected range is larger than `batch_order.translation_chunk_size`, batched translation runs the same pass order per chunk:
+
+```text
+for chapter in chunk 1: pass1 translator
+for chapter in chunk 1: pass2 analyst
+for chapter in chunk 1: pass3 analyst
+for chapter in chunk 2: pass1 translator
+...
+```
+
+The chunk checkpoint is marked completed only after pass3 finishes for the chunk.
+
 Configuration/CLI decision:
 
 - Add a conservative option such as `--batched-model-order` for `translate-range` and production range execution, unless implementation chooses config-only control.
@@ -49,6 +61,7 @@ Cache may be represented as JSON artifacts plus SQLite metadata. Cached payloads
 
 - If pass1 succeeds for all chapters and pass2 fails at one chapter, previously generated pass1 artifacts remain valid checkpoints.
 - Batched mode records per-pass progress in run state.
+- Chunked batched mode also records `chunk_checkpoints` for cleanup boundaries.
 - Cache corruption or parse failure is treated as cache miss, not as successful reuse.
 
 ## Resume After Stop
@@ -62,9 +75,12 @@ Cache may be represented as JSON artifacts plus SQLite metadata. Cached payloads
 
 This avoids re-iterating completed chapters through the per-pass checkpoint lookup, and makes the progress bar reflect only unprocessed work.
 
+For chunked batched mode, completed chunks are skipped on resume. Incomplete chunks continue to use `pass1_completed`, `pass2_completed`, and `pass3_completed` from run state.
+
 ## Tests
 
 - Batched mode calls pass1 for all chapters before any pass2 call.
+- Chunked batched mode calls pass1/pass2/pass3 for one chunk before starting the next chunk.
 - Existing `translate-chapter` remains pass1 -> pass2 -> pass3 for one chapter.
 - Cache hit avoids model call.
 - Cache miss calls model and records cache metadata.

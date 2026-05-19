@@ -16,8 +16,32 @@ def test_ensure_schema_creates_absorbed_columns_on_fresh_db() -> None:
         ensure_schema(conn, "translation")
 
         assert "packet_version_hash" in _columns(conn, "translation_checkpoints")
+        assert {
+            "release_id",
+            "run_id",
+            "stage_name",
+            "chunk_index",
+            "chapter_start",
+            "chapter_end",
+            "status",
+            "metadata_json",
+        } <= _columns(conn, "chunk_checkpoints")
         assert {"pos_tags", "llm_confidence"} <= _columns(conn, "glossary_candidates")
         assert {"dictionary_match", "existing_policy_id"} <= _columns(conn, "idiom_candidates")
+    finally:
+        conn.close()
+
+
+def test_ensure_schema_is_idempotent_for_chunk_checkpoints() -> None:
+    conn = open_connection(":memory:")
+    try:
+        ensure_schema(conn, "translation")
+        ensure_schema(conn, "translation")
+
+        assert "chunk_checkpoints" in {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
     finally:
         conn.close()
 

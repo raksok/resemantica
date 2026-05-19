@@ -1024,3 +1024,158 @@ class TestM11CleanupScopes:
         assert not releases_dir.exists()
         assert not global_db.exists()
         assert not global_graph_db.exists()
+
+    def test_last_good_chunk_summary_cleanup_rewinds_boundary(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "cleanup-summary-chunk"
+        run_id = "production"
+        from resemantica.db.sqlite import ensure_full_schema, open_connection
+        from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        paths.summaries_dir.mkdir(parents=True, exist_ok=True)
+        (paths.summaries_dir / "chapter-10-zh.json").write_text("{}")
+        (paths.summaries_dir / "chapter-11-zh.json").write_text("{}")
+        conn = open_connection(paths.db_path)
+        try:
+            ensure_full_schema(conn)
+            save_chunk_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="preprocess-summaries",
+                chunk_index=0,
+                chapter_start=1,
+                chapter_end=10,
+                status="completed",
+            )
+            conn.execute(
+                """
+                INSERT INTO summary_checkpoints(
+                    release_id, run_id, zh_last_chapter, story_last_chapter, en_last_chapter
+                ) VALUES (?, ?, 12, 12, 11)
+                """,
+                (release_id, run_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO derived_summaries_en(
+                    summary_id, release_id, chapter_number, summary_type, content_en,
+                    source_summary_id, source_summary_hash, glossary_version_hash,
+                    model_name, prompt_version, run_id
+                ) VALUES ('sum-11', ?, 11, 'story_so_far_en', 'en', 'src', 'hash',
+                          'gloss', 'model', 'prompt', ?)
+                """,
+                (release_id, run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        plan = plan_cleanup(
+            release_id,
+            run_id,
+            scope="last-good-chunk",
+            stage="preprocess-summaries",
+        )
+        assert plan["last_good_chapter"] == 10
+        assert str(paths.summaries_dir / "chapter-11-zh.json") in plan["deletable_artifacts"]
+        assert str(paths.summaries_dir / "chapter-10-zh.json") in plan["preserved_artifacts"]
+
+        result = apply_cleanup(
+            release_id,
+            run_id,
+            scope="last-good-chunk",
+            stage="preprocess-summaries",
+        )
+        assert result["success"] is True
+        assert not (paths.summaries_dir / "chapter-11-zh.json").exists()
+        assert (paths.summaries_dir / "chapter-10-zh.json").exists()
+
+        conn = open_connection(paths.db_path)
+        try:
+            cp = conn.execute(
+                "SELECT zh_last_chapter, story_last_chapter, en_last_chapter "
+                "FROM summary_checkpoints WHERE release_id = ? AND run_id = ?",
+                (release_id, run_id),
+            ).fetchone()
+            rows_after_boundary = conn.execute(
+                "SELECT COUNT(*) AS count FROM derived_summaries_en "
+                "WHERE release_id = ? AND run_id = ? AND chapter_number > 10",
+                (release_id, run_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert tuple(cp) == (10, 10, 10)
+        assert int(rows_after_boundary["count"]) == 0
+
+    def test_last_good_chunk_translation_cleanup_removes_later_artifacts(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "cleanup-translation-chunk"
+        run_id = "production"
+        from resemantica.db.sqlite import ensure_full_schema, open_connection
+        from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        translation_root = paths.release_root / "runs" / run_id / "translation"
+        (translation_root / "chapter-10").mkdir(parents=True, exist_ok=True)
+        (translation_root / "chapter-10" / "pass3.json").write_text("{}")
+        (translation_root / "chapter-11").mkdir(parents=True, exist_ok=True)
+        (translation_root / "chapter-11" / "pass1.json").write_text("{}")
+        conn = open_connection(paths.db_path)
+        try:
+            ensure_full_schema(conn)
+            save_chunk_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="translate-range",
+                chunk_index=0,
+                chapter_start=1,
+                chapter_end=10,
+                status="completed",
+            )
+            conn.execute(
+                """
+                INSERT INTO translation_checkpoints(
+                    release_id, run_id, chapter_number, pass_name, source_hash,
+                    prompt_version, status, artifact_path
+                ) VALUES (?, ?, 11, 'pass1', 'src', 'prompt', 'success', 'artifact')
+                """,
+                (release_id, run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        plan = plan_cleanup(
+            release_id,
+            run_id,
+            scope="last-good-chunk",
+            stage="translate-range",
+        )
+        assert str(translation_root / "chapter-11") in plan["deletable_artifacts"]
+        assert str(translation_root / "chapter-10") in plan["preserved_artifacts"]
+
+        result = apply_cleanup(
+            release_id,
+            run_id,
+            scope="last-good-chunk",
+            stage="translate-range",
+        )
+        assert result["success"] is True
+        assert not (translation_root / "chapter-11").exists()
+        assert (translation_root / "chapter-10").exists()
+
+        conn = open_connection(paths.db_path)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM translation_checkpoints "
+                "WHERE release_id = ? AND run_id = ?",
+                (release_id, run_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert int(row["count"]) == 0

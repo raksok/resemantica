@@ -36,6 +36,11 @@ risk_threshold_high = 0.7
 batched_model_order = true
 pass2_concurrency = 3
 
+[batch_order]
+enabled = true
+summary_chunk_multiplier = 10
+translation_chunk_size = 10
+
 [summaries]
 exclude_chapter_patterns = ["titlepage", "nav\\.xhtml", "toc", "book.?2", "front.?matter", "ver-page", "Introdution", "cover", "copyright"]
 chapter_concurrency = 1

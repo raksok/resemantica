@@ -75,3 +75,4 @@ Always follow the milestone sequence below.
 | M55 | task-55 | M54 | Analyst Anti-Restart Prompting |
 | M56 | task-56 | M55, M6, M8, M15 | Graph-Grounded Continuity Refresh |
 | M57 | task-57 | M56 | Summary Validation Gates For Translation Safety |
+| M58 | task-58 | M57 | Batch-Order Chunk Checkpoints |

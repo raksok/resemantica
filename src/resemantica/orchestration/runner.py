@@ -572,7 +572,17 @@ class OrchestrationRunner:
                 if summary_success
                 else "Summaries preprocess failed"
             )
-            return StageResult(summary_success, stage_name, message, metadata=summary_result)
+            checkpoint = summary_result.get("checkpoint")
+            checkpoint_dict: dict[str, object] = (
+                dict(checkpoint) if isinstance(checkpoint, dict) else {}
+            )
+            return StageResult(
+                summary_success,
+                stage_name,
+                message,
+                checkpoint=checkpoint_dict,
+                metadata=summary_result,
+            )
 
         if stage_name == "preprocess-idioms":
             from resemantica.idioms.pipeline import preprocess_idioms
@@ -910,6 +920,13 @@ class OrchestrationRunner:
         force: bool = False,
         stop_token: StopToken | None = None,
     ) -> StageResult:
+        from resemantica.db.sqlite import open_connection
+        from resemantica.orchestration.chunk_checkpoints import (
+            last_completed_chunk,
+            load_chunk_checkpoint,
+            save_chunk_checkpoint,
+        )
+        from resemantica.settings import derive_paths
         from resemantica.translation.pipeline import (
             translate_chapter_pass1,
             translate_chapter_pass2,
@@ -921,6 +938,31 @@ class OrchestrationRunner:
         pass2_completed: list[int] = list(checkpoint.get("pass2_completed", [])) if checkpoint and not force else []
         pass3_completed: list[int] = list(checkpoint.get("pass3_completed", [])) if checkpoint and not force else []
         failures: dict[int, str] = {}
+        chunk_size = self.config.batch_order.translation_chunk_size
+        chunked = self.config.batch_order.enabled and len(chapters) > chunk_size
+        chunks = [
+            chapters[index:index + chunk_size]
+            for index in range(0, len(chapters), chunk_size)
+        ] if chunked else [chapters]
+        completed_chunk_index = -1
+        paths = derive_paths(self.config, release_id=self.release_id)
+
+        if chunked and checkpoint and not force:
+            completed_chunk_index = int(checkpoint.get("completed_chunk_index", -1))
+        if chunked and not force:
+            conn = open_connection(paths.db_path)
+            try:
+                completed = last_completed_chunk(
+                    conn,
+                    release_id=self.release_id,
+                    run_id=self.run_id,
+                    stage_name="translate-range",
+                )
+                if completed is not None:
+                    completed_chunk_index = max(completed_chunk_index, completed.chunk_index)
+            finally:
+                conn.close()
+
         client = LLMClient(
             base_url=self.config.llm.base_url,
             timeout_seconds=self.config.llm.timeout_seconds,
@@ -933,230 +975,311 @@ class OrchestrationRunner:
             for chapter_number in chapters
         }
 
-        for chapter_number in chapters:
-            if chapter_number in pass1_completed:
-                continue
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={
+        def checkpoint_payload() -> dict[str, object]:
+            payload: dict[str, object] = {
                     "batched_model_order": True,
+                    "chunked": chunked,
+                    "chunk_size": chunk_size if chunked else None,
+                    "completed_chunk_index": completed_chunk_index,
                     "pass1_completed": pass1_completed,
                     "pass2_completed": pass2_completed,
                     "pass3_completed": pass3_completed,
                     "failures": failures,
-                },
-                message="Batched translation stopped before next pass1 chapter",
-            )
-            emit_event(
-                self.run_id,
-                self.release_id,
-                "translate-chapter.chapter_started",
-                "translate-chapter",
-                chapter_number=chapter_number,
-                message=f"Chapter {chapter_number} translation started",
-            )
-            try:
-                result = translate_chapter_pass1(
-                    release_id=self.release_id,
-                    chapter_number=chapter_number,
-                    run_id=self.run_id,
-                    config=self.config,
-                    llm_client=client,
-                    force=force,
-                )
-                pass1_completed.append(chapter_number)
+            }
+            return payload
+
+        def chunk_payload(chunk_index: int, chunk: list[int]) -> dict[str, object]:
+            return {
+                "chunk_index": chunk_index,
+                "chunk_count": len(chunks),
+                "chapter_start": chunk[0],
+                "chapter_end": chunk[-1],
+                "chunk_size": chunk_size,
+                "last_good_chapter": max(pass3_completed, default=chapter_start - 1),
+            }
+
+        for chunk_index, chunk in enumerate(chunks):
+            if chunked and not force:
+                conn = open_connection(paths.db_path)
+                try:
+                    chunk_checkpoint = load_chunk_checkpoint(
+                        conn,
+                        release_id=self.release_id,
+                        run_id=self.run_id,
+                        stage_name="translate-range",
+                        chunk_index=chunk_index,
+                    )
+                finally:
+                    conn.close()
+                if chunk_checkpoint is not None and chunk_checkpoint.status == "completed":
+                    continue
+
+            if chunked:
+                started_payload = chunk_payload(chunk_index, chunk)
                 emit_event(
                     self.run_id,
                     self.release_id,
-                    "translate-chapter.artifact_written",
-                    "translate-chapter",
-                    chapter_number=chapter_number,
-                    message="Pass1 artifact written",
-                    payload={"artifact_path": result.get("pass1_artifact"), "pass_name": "pass1"},
+                    "translate-range.chunk_started",
+                    "translate-range",
+                    message=f"Translation chunk {chunk_index + 1}/{len(chunks)} started",
+                    payload=started_payload,
                 )
-            except Exception as exc:
-                logger.opt(exception=True).error(
-                    "Batched pass1 failed (release={}, run={}, chapter={})",
-                    self.release_id,
-                    self.run_id,
-                    chapter_number,
-                )
-                failures[chapter_number] = str(exc)
-                break
-            self._update_run_state(
-                "translate-range",
-                "running",
-                {
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-            )
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-                message=f"Batched translation stopped after pass1 chapter {chapter_number}",
-            )
+                conn = open_connection(paths.db_path)
+                try:
+                    save_chunk_checkpoint(
+                        conn,
+                        release_id=self.release_id,
+                        run_id=self.run_id,
+                        stage_name="translate-range",
+                        chunk_index=chunk_index,
+                        chapter_start=chunk[0],
+                        chapter_end=chunk[-1],
+                        status="running",
+                        metadata=started_payload,
+                    )
+                finally:
+                    conn.close()
 
-        for chapter_number in pass1_completed:
-            if chapter_number in pass2_completed:
-                continue
-            if failures:
-                break
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-                message="Batched translation stopped before next pass2 chapter",
-            )
             try:
-                result = translate_chapter_pass2(
-                    release_id=self.release_id,
-                    chapter_number=chapter_number,
-                    run_id=self.run_id,
-                    config=self.config,
-                    llm_client=client,
-                    force=force,
-                )
-                pass2_completed.append(chapter_number)
-                emit_event(
-                    self.run_id,
-                    self.release_id,
-                    "translate-chapter.artifact_written",
-                    "translate-chapter",
-                    chapter_number=chapter_number,
-                    message="Pass2 artifact written",
-                    payload={"artifact_path": result.get("pass2_artifact"), "pass_name": "pass2"},
-                )
-            except Exception as exc:
-                logger.opt(exception=True).error(
-                    "Batched pass2 failed (release={}, run={}, chapter={})",
-                    self.release_id,
-                    self.run_id,
-                    chapter_number,
-                )
-                failures[chapter_number] = str(exc)
-                break
-            self._update_run_state(
-                "translate-range",
-                "running",
-                {
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-            )
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-                message=f"Batched translation stopped after pass2 chapter {chapter_number}",
-            )
-
-        for chapter_number in pass2_completed:
-            if chapter_number in pass3_completed:
-                continue
-            if failures:
-                break
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-                message="Batched translation stopped before next pass3 chapter",
-            )
-            try:
-                result = translate_chapter_pass3(
-                    release_id=self.release_id,
-                    chapter_number=chapter_number,
-                    run_id=self.run_id,
-                    config=self.config,
-                    llm_client=client,
-                    force=force,
-                )
-                pass3_completed.append(chapter_number)
-                if result.get("pass3_artifact"):
+                for chapter_number in chunk:
+                    if chapter_number in pass1_completed:
+                        continue
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint=checkpoint_payload(),
+                        message="Batched translation stopped before next pass1 chapter",
+                    )
                     emit_event(
                         self.run_id,
                         self.release_id,
-                        "translate-chapter.artifact_written",
+                        "translate-chapter.chapter_started",
                         "translate-chapter",
                         chapter_number=chapter_number,
-                        message="Pass3 artifact written",
-                        payload={"artifact_path": result.get("pass3_artifact"), "pass_name": "pass3"},
+                        message=f"Chapter {chapter_number} translation started",
                     )
-                emit_event(
-                    self.run_id,
-                    self.release_id,
-                    "translate-chapter.chapter_completed",
-                    "translate-chapter",
-                    chapter_number=chapter_number,
-                    message=f"Chapter {chapter_number} batched translation completed",
-                    payload=usage_payload_delta(client, chapter_usage_before[chapter_number]),
-                )
-            except Exception as exc:
-                logger.opt(exception=True).error(
-                    "Batched pass3 failed (release={}, run={}, chapter={})",
-                    self.release_id,
-                    self.run_id,
-                    chapter_number,
-                )
-                failures[chapter_number] = str(exc)
-                break
-            self._update_run_state(
-                "translate-range",
-                "running",
-                {
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-            )
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={
-                    "batched_model_order": True,
-                    "pass1_completed": pass1_completed,
-                    "pass2_completed": pass2_completed,
-                    "pass3_completed": pass3_completed,
-                    "failures": failures,
-                },
-                message=f"Batched translation stopped after pass3 chapter {chapter_number}",
-            )
+                    try:
+                        result = translate_chapter_pass1(
+                            release_id=self.release_id,
+                            chapter_number=chapter_number,
+                            run_id=self.run_id,
+                            config=self.config,
+                            llm_client=client,
+                            force=force,
+                        )
+                        pass1_completed.append(chapter_number)
+                        if chapter_number in failures:
+                            del failures[chapter_number]
+                        emit_event(
+                            self.run_id,
+                            self.release_id,
+                            "translate-chapter.artifact_written",
+                            "translate-chapter",
+                            chapter_number=chapter_number,
+                            message="Pass1 artifact written",
+                            payload={"artifact_path": result.get("pass1_artifact"), "pass_name": "pass1"},
+                        )
+                    except Exception as exc:
+                        logger.opt(exception=True).error(
+                            "Batched pass1 failed (release={}, run={}, chapter={})",
+                            self.release_id,
+                            self.run_id,
+                            chapter_number,
+                        )
+                        failures[chapter_number] = str(exc)
+                        break
+                    self._update_run_state("translate-range", "running", checkpoint_payload())
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint=checkpoint_payload(),
+                        message=f"Batched translation stopped after pass1 chapter {chapter_number}",
+                    )
 
-        checkpoint = {
-            "batched_model_order": True,
-            "pass1_completed": pass1_completed,
-            "pass2_completed": pass2_completed,
-            "pass3_completed": pass3_completed,
-            "failures": failures,
-        }
+                for chapter_number in [number for number in pass1_completed if number in chunk]:
+                    if chapter_number in pass2_completed:
+                        continue
+                    if failures:
+                        break
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint=checkpoint_payload(),
+                        message="Batched translation stopped before next pass2 chapter",
+                    )
+                    try:
+                        result = translate_chapter_pass2(
+                            release_id=self.release_id,
+                            chapter_number=chapter_number,
+                            run_id=self.run_id,
+                            config=self.config,
+                            llm_client=client,
+                            force=force,
+                        )
+                        pass2_completed.append(chapter_number)
+                        emit_event(
+                            self.run_id,
+                            self.release_id,
+                            "translate-chapter.artifact_written",
+                            "translate-chapter",
+                            chapter_number=chapter_number,
+                            message="Pass2 artifact written",
+                            payload={"artifact_path": result.get("pass2_artifact"), "pass_name": "pass2"},
+                        )
+                    except Exception as exc:
+                        logger.opt(exception=True).error(
+                            "Batched pass2 failed (release={}, run={}, chapter={})",
+                            self.release_id,
+                            self.run_id,
+                            chapter_number,
+                        )
+                        failures[chapter_number] = str(exc)
+                        break
+                    self._update_run_state("translate-range", "running", checkpoint_payload())
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint=checkpoint_payload(),
+                        message=f"Batched translation stopped after pass2 chapter {chapter_number}",
+                    )
+
+                for chapter_number in [number for number in pass2_completed if number in chunk]:
+                    if chapter_number in pass3_completed:
+                        continue
+                    if failures:
+                        break
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint=checkpoint_payload(),
+                        message="Batched translation stopped before next pass3 chapter",
+                    )
+                    try:
+                        result = translate_chapter_pass3(
+                            release_id=self.release_id,
+                            chapter_number=chapter_number,
+                            run_id=self.run_id,
+                            config=self.config,
+                            llm_client=client,
+                            force=force,
+                        )
+                        pass3_completed.append(chapter_number)
+                        if result.get("pass3_artifact"):
+                            emit_event(
+                                self.run_id,
+                                self.release_id,
+                                "translate-chapter.artifact_written",
+                                "translate-chapter",
+                                chapter_number=chapter_number,
+                                message="Pass3 artifact written",
+                                payload={"artifact_path": result.get("pass3_artifact"), "pass_name": "pass3"},
+                            )
+                        emit_event(
+                            self.run_id,
+                            self.release_id,
+                            "translate-chapter.chapter_completed",
+                            "translate-chapter",
+                            chapter_number=chapter_number,
+                            message=f"Chapter {chapter_number} batched translation completed",
+                            payload=usage_payload_delta(client, chapter_usage_before[chapter_number]),
+                        )
+                    except Exception as exc:
+                        logger.opt(exception=True).error(
+                            "Batched pass3 failed (release={}, run={}, chapter={})",
+                            self.release_id,
+                            self.run_id,
+                            chapter_number,
+                        )
+                        failures[chapter_number] = str(exc)
+                        break
+                    self._update_run_state("translate-range", "running", checkpoint_payload())
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint=checkpoint_payload(),
+                        message=f"Batched translation stopped after pass3 chapter {chapter_number}",
+                    )
+
+                if failures:
+                    if chunked:
+                        failed_payload = chunk_payload(chunk_index, chunk)
+                        emit_event(
+                            self.run_id,
+                            self.release_id,
+                            "translate-range.chunk_failed",
+                            "translate-range",
+                            severity="error",
+                            message=f"Translation chunk {chunk_index + 1}/{len(chunks)} failed",
+                            payload={**failed_payload, "failures": failures},
+                        )
+                        conn = open_connection(paths.db_path)
+                        try:
+                            save_chunk_checkpoint(
+                                conn,
+                                release_id=self.release_id,
+                                run_id=self.run_id,
+                                stage_name="translate-range",
+                                chunk_index=chunk_index,
+                                chapter_start=chunk[0],
+                                chapter_end=chunk[-1],
+                                status="failed",
+                                metadata={**failed_payload, "failures": failures},
+                            )
+                        finally:
+                            conn.close()
+                    break
+
+                if chunked:
+                    completed_chunk_index = chunk_index
+                    completed_payload = chunk_payload(chunk_index, chunk)
+                    emit_event(
+                        self.run_id,
+                        self.release_id,
+                        "translate-range.chunk_completed",
+                        "translate-range",
+                        message=f"Translation chunk {chunk_index + 1}/{len(chunks)} completed",
+                        payload=completed_payload,
+                    )
+                    conn = open_connection(paths.db_path)
+                    try:
+                        save_chunk_checkpoint(
+                            conn,
+                            release_id=self.release_id,
+                            run_id=self.run_id,
+                            stage_name="translate-range",
+                            chunk_index=chunk_index,
+                            chapter_start=chunk[0],
+                            chapter_end=chunk[-1],
+                            status="completed",
+                            metadata=completed_payload,
+                        )
+                    finally:
+                        conn.close()
+            except Exception as exc:
+                if chunked:
+                    failed_payload = chunk_payload(chunk_index, chunk)
+                    emit_event(
+                        self.run_id,
+                        self.release_id,
+                        "translate-range.chunk_failed",
+                        "translate-range",
+                        severity="error",
+                        message=f"Translation chunk {chunk_index + 1}/{len(chunks)} failed: {exc}",
+                        payload={**failed_payload, "reason": str(exc)},
+                    )
+                    conn = open_connection(paths.db_path)
+                    try:
+                        save_chunk_checkpoint(
+                            conn,
+                            release_id=self.release_id,
+                            run_id=self.run_id,
+                            stage_name="translate-range",
+                            chunk_index=chunk_index,
+                            chapter_start=chunk[0],
+                            chapter_end=chunk[-1],
+                            status="failed",
+                            metadata={**failed_payload, "reason": str(exc)},
+                        )
+                    finally:
+                        conn.close()
+                raise
+
+        checkpoint_result = checkpoint_payload()
+        checkpoint_result["failures"] = failures
         usage_payload = usage_payload_delta(client, usage_before)
         return StageResult(
             success=not failures,
@@ -1166,8 +1289,8 @@ class OrchestrationRunner:
                 f"pass2={len(pass2_completed)}, pass3={len(pass3_completed)}, "
                 f"failures={len(failures)}"
             ),
-            checkpoint=checkpoint,
-            metadata={**checkpoint, **usage_payload},
+            checkpoint=checkpoint_result,
+            metadata={**checkpoint_result, **usage_payload},
         )
 
 

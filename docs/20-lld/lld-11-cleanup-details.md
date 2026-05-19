@@ -8,8 +8,8 @@ Implement the explicit, scoped, and previewable cleanup/reset workflow to allow 
 
 CLI:
 
-- `uv run python -m resemantica.cli run cleanup-plan --scope <run|translation|preprocess|cache|keep-extracted|all|factory> [--run-id <id>]`
-- `uv run python -m resemantica.cli run cleanup-apply --scope <run|translation|preprocess|cache|keep-extracted|all|factory> [--run-id <id>]`
+- `uv run python -m resemantica.cli run cleanup-plan --scope <run|translation|preprocess|cache|keep-extracted|last-good-chunk|all|factory> [--run-id <id>]`
+- `uv run python -m resemantica.cli run cleanup-apply --scope <run|translation|preprocess|cache|keep-extracted|last-good-chunk|all|factory> [--run-id <id>]`
 
 Python modules:
 
@@ -30,6 +30,7 @@ Artifacts:
     - `preprocess`: release-level `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, and `packets/`.
     - `cache`: release-level `.cache/`.
     - `keep-extracted`: downstream artifacts and selected run translation output while preserving `extracted/`.
+    - `last-good-chunk`: artifacts and rows after the last completed chunk for the failed/current stage.
     - `all`: everything under the release root except release-local stores and cleanup files.
     - `factory`: all release directories plus legacy global stores under artifact root.
 3. Generate a "Cleanup Plan" listing all targets for deletion and all preserved assets.
@@ -47,6 +48,7 @@ Cleanup scopes are defined once in `orchestration.cleanup.CLEANUP_SCOPES` and re
 | `preprocess` | `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/` | extraction metadata plus preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows |
 | `cache` | `.cache/` | none |
 | `keep-extracted` | `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/`, `.cache/`, selected run `translation/` | tracking rows, translation checkpoints, downstream preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows; preserves `extracted_chapters` and `extracted_blocks` |
+| `last-good-chunk` | summary or translation artifacts after the last completed chunk | stage-specific rows after the chunk boundary; summary checkpoints or translation run-state lists are rewound to `last_good_chapter` |
 | `all` | all direct release-root children except protected stores and cleanup files | same run-scoped rows as `run` |
 | `factory` | artifact-root `releases/`, legacy global `resemantica.db`, legacy global `graph.ladybug` | none |
 
@@ -59,6 +61,7 @@ Protected release-local files are `tracking.db`, `resemantica.db`, `graph.ladybu
 - plans must be generated and persisted before execution
 - apply validates plan schema, release/run identity, scope, expected root, and target containment
 - `--force` may bypass scope mismatch only; it must not bypass release/run mismatch or path safety
+- `last-good-chunk` resolves the stage from run state, or accepts `--stage preprocess-summaries|translate-range`; other stages are rejected
 
 ## Resume And Rerun
 

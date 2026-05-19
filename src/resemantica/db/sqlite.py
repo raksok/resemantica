@@ -60,6 +60,22 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (release_id, run_id, chapter_number, pass_name)
         );
 
+        CREATE TABLE IF NOT EXISTS chunk_checkpoints (
+            release_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            chapter_start INTEGER NOT NULL,
+            chapter_end INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (release_id, run_id, stage_name, chunk_index)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chunk_checkpoints_lookup
+            ON chunk_checkpoints (release_id, run_id, stage_name, status, chunk_index);
+
         CREATE TABLE IF NOT EXISTS glossary_candidates (
             candidate_id TEXT PRIMARY KEY,
             release_id TEXT NOT NULL,

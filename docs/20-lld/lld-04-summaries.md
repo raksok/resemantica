@@ -56,6 +56,8 @@ Structured Chinese summary schema:
 8. Phase 2 runs in chapter order. It derives full `story_so_far_zh`, compacts previous `story_so_far_zh_compact` plus current `chapter_summary_zh_short` into `story_so_far_zh_compact`, writes both continuity rows, and writes `chapter-*-zh.json`.
 9. Phase 3 runs English derivation with `summaries.chapter_concurrency` workers. It derives `chapter_summary_en_short` from `chapter_summary_zh_short` and derives `story_so_far_en` from `story_so_far_zh_compact`.
 
+For large ranges, `[batch_order]` chunking changes the outer loop only. Each chunk completes Phase 1, Phase 2, and Phase 3 before the next chunk begins. Effective summary chunk size is `batch_order.summary_chunk_multiplier * summaries.chapter_concurrency`, and chunking activates only when the selected chapter count is larger than that size.
+
 `story_so_far_zh` remains the full audited cumulative Chinese continuity for compatibility and inspection. `story_so_far_zh_compact` is the initial bounded operational continuity source produced before graph extraction and used for English story-so-far derivation during `preprocess-summaries`. Compaction uses the analyst model and `summary_story_compact.txt`; failure to generate compact continuity fails `preprocess-summaries` for that story chapter.
 
 After `preprocess-graph`, `preprocess-continuity` may refresh long-horizon continuity into `story_so_far_zh_graph_compact` using previous graph compact continuity, recent validated chapter summaries, and confirmed chapter-safe graph anchors. This row is preferred by packet build, while `story_so_far_zh_compact` and `story_so_far_zh` remain fallbacks and inspection records.
@@ -98,7 +100,11 @@ Summary preprocessing is a primary local-inference bottleneck. The analyst promp
 - any change to locked glossary or validated Chinese summary invalidates dependent English summaries and packet inputs
 - `story_so_far_zh` is rebuilt deterministically from validated predecessors, never from English output
 - summary checkpoints track `zh_last_chapter`, `story_last_chapter`, and `en_last_chapter`
+- `zh_last_chapter` advances as soon as completed Chinese results are contiguous from the prior checkpoint, even before the full Chinese worker pool drains
+- `en_last_chapter` advances as soon as completed English results are contiguous from the prior checkpoint, even before the full English worker pool drains
+- `story_last_chapter` advances during ordered story assembly
 - resume skips the three internal phases independently when their checkpoint is complete
+- chunked resume skips completed `preprocess-summaries` chunks using `chunk_checkpoints`; incomplete chunks still resume from summary phase checkpoints
 - `preprocess summaries` and orchestration enable resume by default for the same release/run
 - `--force` ignores summary checkpoints for the requested chapter scope and rebuilds all three phases
 - `run retry-failed --stage preprocess-summaries` finds failed or missing required summary rows, rewinds summary checkpoints to before the earliest affected chapter, and reruns from that chapter through the requested end without forcing unrelated cache hits.

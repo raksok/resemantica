@@ -314,6 +314,73 @@ db_filename = "test.db"
 
         assert config.translation.batched_model_order is True
 
+    def test_batch_order_defaults(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.batch_order.enabled is True
+        assert config.batch_order.summary_chunk_multiplier == 10
+        assert config.batch_order.translation_chunk_size == 10
+
+    def test_accepts_batch_order_config(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[batch_order]
+enabled = false
+summary_chunk_multiplier = 3
+translation_chunk_size = 7
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.batch_order.enabled is False
+        assert config.batch_order.summary_chunk_multiplier == 3
+        assert config.batch_order.translation_chunk_size == 7
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("summary_chunk_multiplier", 0), ("translation_chunk_size", 0)],
+    )
+    def test_rejects_invalid_batch_order_sizes(self, tmp_path, field: str, value: int) -> None:
+        toml_content = f"""
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[batch_order]
+{field} = {value}
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match=f"batch_order.{field}"):
+            load_config(config_path)
+
     def test_accepts_missing_per_model_fields(self, tmp_path) -> None:
         toml_content = """
 [models]

@@ -59,6 +59,19 @@ Validator `warnings` from `summary_zh_validate.txt` do not emit warning events. 
 
 When content-validation retries exhaust, `preprocess-summaries.chapter_failed` is emitted with severity `error`, `reason = "llm_content_validation_failed"`, and the final `llm_validation_flags` payload.
 
+## Chunk Events
+
+Long batch-order stages emit chunk lifecycle events:
+
+- `preprocess-summaries.chunk_started`
+- `preprocess-summaries.chunk_completed`
+- `preprocess-summaries.chunk_failed`
+- `translate-range.chunk_started`
+- `translate-range.chunk_completed`
+- `translate-range.chunk_failed`
+
+Payloads include `chunk_index`, `chunk_count`, `chapter_start`, `chapter_end`, `chunk_size`, and `last_good_chapter`. Failure events also include the failure reason or failed chapter data when available.
+
 ## Validation Ownership
 
 - orchestration validates legal stage transitions
@@ -73,6 +86,7 @@ When content-validation retries exhaust, `preprocess-summaries.chapter_failed` i
 - `--allow-rewind` only permits a stage-order transition; it does not disable internal resume
 - resume is driven by persisted SQLite checkpoints or authoritative metadata, not inferred from filesystem guesses
 - stage checkpoints advance only after the corresponding durable unit has been safely written
+- chunk checkpoints advance only after the corresponding chunk has completed every phase/pass in that stage
 - cleanup never deletes authority state outside its declared scope
 
 ## Tests

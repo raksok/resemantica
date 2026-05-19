@@ -87,6 +87,13 @@ class TranslationConfig:
 
 
 @dataclass(slots=True)
+class BatchOrderConfig:
+    enabled: bool = True
+    summary_chunk_multiplier: int = 10
+    translation_chunk_size: int = 10
+
+
+@dataclass(slots=True)
 class SummariesConfig:
     exclude_chapter_patterns: list[str] = field(default_factory=list)
     chapter_concurrency: int = 1
@@ -123,6 +130,7 @@ class AppConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)
+    batch_order: BatchOrderConfig = field(default_factory=BatchOrderConfig)
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
     events: EventsConfig = field(default_factory=EventsConfig)
     glossary: GlossaryConfig = field(default_factory=GlossaryConfig)
@@ -234,6 +242,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     paths = _table(raw, "paths")
     budget = _table(raw, "budget")
     translation = _table(raw, "translation")
+    batch_order = _table(raw, "batch_order")
     summaries = _table(raw, "summaries")
     events = _table(raw, "events")
     glossary = _table(raw, "glossary")
@@ -362,6 +371,26 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 "translation.pass2_concurrency",
             ),
         ),
+        batch_order=BatchOrderConfig(
+            enabled=_as_bool(
+                batch_order.get("enabled", BatchOrderConfig().enabled),
+                "batch_order.enabled",
+            ),
+            summary_chunk_multiplier=_as_int(
+                batch_order.get(
+                    "summary_chunk_multiplier",
+                    BatchOrderConfig().summary_chunk_multiplier,
+                ),
+                "batch_order.summary_chunk_multiplier",
+            ),
+            translation_chunk_size=_as_int(
+                batch_order.get(
+                    "translation_chunk_size",
+                    BatchOrderConfig().translation_chunk_size,
+                ),
+                "batch_order.translation_chunk_size",
+            ),
+        ),
         summaries=SummariesConfig(
             exclude_chapter_patterns=_as_str_list(
                 summaries.get(
@@ -471,6 +500,10 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
     if config.translation.pass2_concurrency < 1:
         raise ValueError("translation.pass2_concurrency must be >= 1.")
+    if config.batch_order.summary_chunk_multiplier <= 0:
+        raise ValueError("batch_order.summary_chunk_multiplier must be > 0.")
+    if config.batch_order.translation_chunk_size <= 0:
+        raise ValueError("batch_order.translation_chunk_size must be > 0.")
     if config.summaries.chapter_concurrency < 1 or config.summaries.chapter_concurrency > 5:
         raise ValueError("summaries.chapter_concurrency must be in [1, 5].")
     if config.summaries.story_compact_max_tokens <= 0:

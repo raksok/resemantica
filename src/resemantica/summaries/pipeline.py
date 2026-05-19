@@ -31,6 +31,11 @@ from resemantica.llm.client import (
     usage_payload_delta,
 )
 from resemantica.llm.prompts import PromptTemplate, load_prompt
+from resemantica.orchestration.chunk_checkpoints import (
+    last_completed_chunk,
+    load_chunk_checkpoint,
+    save_chunk_checkpoint,
+)
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
@@ -183,6 +188,46 @@ def _advance_chinese_checkpoint(
             break
         advanced = number
     return advanced
+
+
+def _advance_english_checkpoint(
+    *,
+    completed: dict[int, _EnglishPhaseResult],
+    current: int,
+    ordered_numbers: list[int],
+) -> int:
+    advanced = current
+    for number in ordered_numbers:
+        if number <= advanced:
+            continue
+        if number not in completed:
+            break
+        advanced = number
+    return advanced
+
+
+def _chunk_refs(chapter_refs: list[ChapterRef], chunk_size: int) -> list[list[ChapterRef]]:
+    if chunk_size <= 0:
+        return [chapter_refs]
+    return [chapter_refs[index:index + chunk_size] for index in range(0, len(chapter_refs), chunk_size)]
+
+
+def _chunk_event_payload(
+    *,
+    chunk_index: int,
+    chunk_count: int,
+    refs: list[ChapterRef],
+    chunk_size: int,
+    last_good_chapter: int,
+) -> dict[str, object]:
+    return {
+        "chunk_index": chunk_index,
+        "chunk_count": chunk_count,
+        "chapter_start": refs[0].chapter_number,
+        "chapter_end": refs[-1].chapter_number,
+        "chunk_size": chunk_size,
+        "last_good_chapter": last_good_chapter,
+    }
 
 
 def _load_validated_artifact_notes(path: Path) -> tuple[list[str], list[str], list[str]]:
@@ -742,172 +787,436 @@ def preprocess_summaries(
             )
     conn.close()
 
-    results_by_chapter: dict[int, dict[str, Any]] = {}
-    chinese_results: dict[int, _ChinesePhaseResult] = {}
     ordered_numbers = [ref.chapter_number for ref in chapter_refs]
+    effective_chunk_size = (
+        config_obj.batch_order.summary_chunk_multiplier
+        * config_obj.summaries.chapter_concurrency
+    )
+    chunked = config_obj.batch_order.enabled and len(chapter_refs) > effective_chunk_size
+    chunks = _chunk_refs(chapter_refs, effective_chunk_size) if chunked else [chapter_refs]
+    results_by_chapter: dict[int, dict[str, Any]] = {}
+    completed_chunk_index = -1
 
-    phase1_refs = [ref for ref in chapter_refs if ref.chapter_number > zh_skip_until]
-    with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
-        chinese_futures = []
-        for ref in phase1_refs:
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={"chapter_artifacts": list(results_by_chapter.values())},
-                message="Summaries preprocess stopped before next chapter",
-            )
-            chinese_futures.append(
-                executor.submit(
-                    _run_chinese_phase,
-                    ref=ref,
-                    db_path=paths.db_path,
-                    release_id=release_id,
-                    run_id=run_id,
-                    config=config_obj,
-                    llm_client=client,
-                    prompt_structured=prompt_structured,
-                    prompt_validate=prompt_validate,
-                    cache_root=paths.release_root / "cache" / "llm",
-                    exclude_patterns=exclude_patterns,
-                )
-            )
-        for chinese_future in as_completed(chinese_futures):
-            chinese_result = chinese_future.result()
-            chinese_results[chinese_result.chapter_number] = chinese_result
-            entry: dict[str, Any] = {
-                "chapter_number": chinese_result.chapter_number,
-                "chapter_source_hash": chinese_result.chapter_source_hash,
-            }
-            if chinese_result.status == "skipped":
-                entry["status"] = "skipped"
-                if chinese_result.reason is not None:
-                    entry["reason"] = chinese_result.reason
-            elif chinese_result.status == "failed":
-                entry["status"] = "failed"
-                if chinese_result.reason is not None:
-                    entry["reason"] = chinese_result.reason
-            if chinese_result.warnings:
-                entry["warnings"] = chinese_result.warnings
-            if chinese_result.llm_validation_flags:
-                entry["llm_validation_flags"] = chinese_result.llm_validation_flags
-            if chinese_result.llm_validation_warnings:
-                entry["llm_validation_warnings"] = chinese_result.llm_validation_warnings
-            results_by_chapter[chinese_result.chapter_number] = entry
-
-    if phase1_refs:
+    if resume and not force and chunked:
         conn = open_connection(paths.db_path)
         ensure_schema(conn, "summaries")
         try:
-            new_zh_checkpoint = _advance_chinese_checkpoint(
-                completed=chinese_results,
-                current=zh_skip_until,
-                ordered_numbers=ordered_numbers,
+            completed = last_completed_chunk(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name=_STAGE_NAME,
             )
-            if new_zh_checkpoint > zh_skip_until:
-                set_summary_checkpoint(
-                    conn,
-                    release_id=release_id,
-                    run_id=run_id,
-                    zh_last_chapter=new_zh_checkpoint,
-                )
-                zh_skip_until = new_zh_checkpoint
+            if completed is not None:
+                completed_chunk_index = completed.chunk_index
         finally:
             conn.close()
 
-    failed_chinese = [
-        result
-        for result in chinese_results.values()
-        if result.status == "failed"
-    ]
-    if failed_chinese:
-        failed_chinese.sort(key=lambda result: result.chapter_number)
-        failed_chapters = [result.chapter_number for result in failed_chinese]
-        failure_reasons = {
-            str(result.chapter_number): result.reason or "generation_failed"
-            for result in failed_chinese
-        }
-        chapter_results = [
-            results_by_chapter[number]
-            for number in ordered_numbers
-            if number in results_by_chapter
-        ]
-        message = (
-            "Summary generation failed for chapter(s): "
-            + ", ".join(str(chapter) for chapter in failed_chapters)
-        )
-        _emit(
-            run_id,
-            release_id,
-            f"{_STAGE_NAME}.failed",
-            severity="error",
-            message=message,
-            failed=len(failed_chapters),
-            failed_chapters=failed_chapters,
-            failure_reasons=failure_reasons,
-            **capture_usage_snapshot(client).to_payload(),
-        )
-        return {
-            "status": "failed",
-            "release_id": release_id,
-            "run_id": run_id,
-            "chapters_processed": sum(
-                1 for result in chapter_results if result.get("status") not in {"skipped", "failed"}
-            ),
-            "chapters_failed": len(failed_chapters),
-            "failed_chapters": failed_chapters,
-            "failure_reasons": failure_reasons,
-            "chapter_artifacts": chapter_results,
-            **capture_usage_snapshot(client).to_payload(),
-        }
-
-    english_jobs: list[_EnglishPhaseJob] = []
-    conn = open_connection(paths.db_path)
-    ensure_schema(conn, "glossary")
-    ensure_schema(conn, "summaries")
-    try:
-        prior_full = list_validated_summaries(
-            conn,
-            release_id=release_id,
-            summary_type="story_so_far_zh",
-            max_chapter_number=story_skip_until,
-        )
-        previous_story_text = prior_full[-1].content_zh if prior_full else ""
-        prior_compact = list_validated_summaries(
-            conn,
-            release_id=release_id,
-            summary_type="story_so_far_zh_compact",
-            max_chapter_number=story_skip_until,
-        )
-        previous_compact_text = prior_compact[-1].content_zh if prior_compact else ""
-
-        for ref in chapter_refs:
-            chapter_number = ref.chapter_number
-            if chapter_number <= story_skip_until:
+    for chunk_index, chunk_refs in enumerate(chunks):
+        if chunked and resume and not force:
+            conn = open_connection(paths.db_path)
+            ensure_schema(conn, "summaries")
+            try:
+                chunk_checkpoint = load_chunk_checkpoint(
+                    conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    stage_name=_STAGE_NAME,
+                    chunk_index=chunk_index,
+                )
+            finally:
+                conn.close()
+            if chunk_checkpoint is not None and chunk_checkpoint.status == "completed":
                 continue
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={"chapter_artifacts": list(results_by_chapter.values())},
-                message="Summaries preprocess stopped before story assembly",
+
+        if chunked:
+            payload = _chunk_event_payload(
+                chunk_index=chunk_index,
+                chunk_count=len(chunks),
+                refs=chunk_refs,
+                chunk_size=effective_chunk_size,
+                last_good_chapter=en_skip_until,
             )
-            existing_result = chinese_results.get(chapter_number)
-            is_checkpointable_skip = (
-                _is_excluded(ref, exclude_patterns)
-                or is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number)
-            )
-            if existing_result is not None and existing_result.status == "skipped":
-                is_checkpointable_skip = _checkpoint_can_advance(existing_result)
-            if is_checkpointable_skip or (existing_result is not None and existing_result.status == "skipped"):
-                if chapter_number not in results_by_chapter:
-                    results_by_chapter[chapter_number] = {
-                        "chapter_number": chapter_number,
-                        "chapter_source_hash": ref.chapter_source_hash or "",
-                        "status": "skipped",
-                        "reason": (
-                            existing_result.reason
-                            if existing_result is not None
-                            else "non_story_chapter"
-                        ),
+            _emit(run_id, release_id, f"{_STAGE_NAME}.chunk_started", **payload)
+            conn = open_connection(paths.db_path)
+            ensure_schema(conn, "summaries")
+            try:
+                save_chunk_checkpoint(
+                    conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    stage_name=_STAGE_NAME,
+                    chunk_index=chunk_index,
+                    chapter_start=chunk_refs[0].chapter_number,
+                    chapter_end=chunk_refs[-1].chapter_number,
+                    status="running",
+                    metadata=payload,
+                )
+            finally:
+                conn.close()
+
+        chinese_results: dict[int, _ChinesePhaseResult] = {}
+        phase1_refs = [ref for ref in chunk_refs if ref.chapter_number > zh_skip_until]
+        try:
+            with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
+                chinese_futures = []
+                for ref in phase1_refs:
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint={"chapter_artifacts": list(results_by_chapter.values())},
+                        message="Summaries preprocess stopped before next chapter",
+                    )
+                    chinese_futures.append(
+                        executor.submit(
+                            _run_chinese_phase,
+                            ref=ref,
+                            db_path=paths.db_path,
+                            release_id=release_id,
+                            run_id=run_id,
+                            config=config_obj,
+                            llm_client=client,
+                            prompt_structured=prompt_structured,
+                            prompt_validate=prompt_validate,
+                            cache_root=paths.release_root / "cache" / "llm",
+                            exclude_patterns=exclude_patterns,
+                        )
+                    )
+                for chinese_future in as_completed(chinese_futures):
+                    chinese_result = chinese_future.result()
+                    chinese_results[chinese_result.chapter_number] = chinese_result
+                    entry: dict[str, Any] = {
+                        "chapter_number": chinese_result.chapter_number,
+                        "chapter_source_hash": chinese_result.chapter_source_hash,
                     }
-                if is_checkpointable_skip:
+                    if chinese_result.status == "skipped":
+                        entry["status"] = "skipped"
+                        if chinese_result.reason is not None:
+                            entry["reason"] = chinese_result.reason
+                    elif chinese_result.status == "failed":
+                        entry["status"] = "failed"
+                        if chinese_result.reason is not None:
+                            entry["reason"] = chinese_result.reason
+                    if chinese_result.warnings:
+                        entry["warnings"] = chinese_result.warnings
+                    if chinese_result.llm_validation_flags:
+                        entry["llm_validation_flags"] = chinese_result.llm_validation_flags
+                    if chinese_result.llm_validation_warnings:
+                        entry["llm_validation_warnings"] = chinese_result.llm_validation_warnings
+                    results_by_chapter[chinese_result.chapter_number] = entry
+
+                    conn = open_connection(paths.db_path)
+                    ensure_schema(conn, "summaries")
+                    try:
+                        new_zh_checkpoint = _advance_chinese_checkpoint(
+                            completed=chinese_results,
+                            current=zh_skip_until,
+                            ordered_numbers=ordered_numbers,
+                        )
+                        if new_zh_checkpoint > zh_skip_until:
+                            set_summary_checkpoint(
+                                conn,
+                                release_id=release_id,
+                                run_id=run_id,
+                                zh_last_chapter=new_zh_checkpoint,
+                            )
+                            zh_skip_until = new_zh_checkpoint
+                    finally:
+                        conn.close()
+
+            failed_chinese = [
+                result
+                for result in chinese_results.values()
+                if result.status == "failed"
+            ]
+            if failed_chinese:
+                failed_chinese.sort(key=lambda result: result.chapter_number)
+                failed_chapters = [result.chapter_number for result in failed_chinese]
+                failure_reasons = {
+                    str(result.chapter_number): result.reason or "generation_failed"
+                    for result in failed_chinese
+                }
+                chapter_results = [
+                    results_by_chapter[number]
+                    for number in ordered_numbers
+                    if number in results_by_chapter
+                ]
+                message = (
+                    "Summary generation failed for chapter(s): "
+                    + ", ".join(str(chapter) for chapter in failed_chapters)
+                )
+                if chunked:
+                    payload = _chunk_event_payload(
+                        chunk_index=chunk_index,
+                        chunk_count=len(chunks),
+                        refs=chunk_refs,
+                        chunk_size=effective_chunk_size,
+                        last_good_chapter=en_skip_until,
+                    )
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chunk_failed",
+                        severity="error",
+                        message=message,
+                        failed_chapters=failed_chapters,
+                        **payload,
+                    )
+                    conn = open_connection(paths.db_path)
+                    ensure_schema(conn, "summaries")
+                    try:
+                        save_chunk_checkpoint(
+                            conn,
+                            release_id=release_id,
+                            run_id=run_id,
+                            stage_name=_STAGE_NAME,
+                            chunk_index=chunk_index,
+                            chapter_start=chunk_refs[0].chapter_number,
+                            chapter_end=chunk_refs[-1].chapter_number,
+                            status="failed",
+                            metadata={**payload, "failed_chapters": failed_chapters},
+                        )
+                    finally:
+                        conn.close()
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.failed",
+                    severity="error",
+                    message=message,
+                    failed=len(failed_chapters),
+                    failed_chapters=failed_chapters,
+                    failure_reasons=failure_reasons,
+                    **capture_usage_snapshot(client).to_payload(),
+                )
+                return {
+                    "status": "failed",
+                    "release_id": release_id,
+                    "run_id": run_id,
+                    "chapters_processed": sum(
+                        1 for result in chapter_results if result.get("status") not in {"skipped", "failed"}
+                    ),
+                    "chapters_failed": len(failed_chapters),
+                    "failed_chapters": failed_chapters,
+                    "failure_reasons": failure_reasons,
+                    "chapter_artifacts": chapter_results,
+                    "checkpoint": {
+                        "chunked": chunked,
+                        "completed_chunk_index": completed_chunk_index,
+                        "last_good_chapter": en_skip_until,
+                    },
+                    **capture_usage_snapshot(client).to_payload(),
+                }
+
+            english_jobs: list[_EnglishPhaseJob] = []
+            conn = open_connection(paths.db_path)
+            ensure_schema(conn, "glossary")
+            ensure_schema(conn, "summaries")
+            try:
+                prior_full = list_validated_summaries(
+                    conn,
+                    release_id=release_id,
+                    summary_type="story_so_far_zh",
+                    max_chapter_number=story_skip_until,
+                )
+                previous_story_text = prior_full[-1].content_zh if prior_full else ""
+                prior_compact = list_validated_summaries(
+                    conn,
+                    release_id=release_id,
+                    summary_type="story_so_far_zh_compact",
+                    max_chapter_number=story_skip_until,
+                )
+                previous_compact_text = prior_compact[-1].content_zh if prior_compact else ""
+
+                for ref in chunk_refs:
+                    chapter_number = ref.chapter_number
+                    if chapter_number <= story_skip_until:
+                        continue
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint={"chapter_artifacts": list(results_by_chapter.values())},
+                        message="Summaries preprocess stopped before story assembly",
+                    )
+                    existing_result = chinese_results.get(chapter_number)
+                    is_checkpointable_skip = (
+                        _is_excluded(ref, exclude_patterns)
+                        or is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number)
+                    )
+                    if existing_result is not None and existing_result.status == "skipped":
+                        is_checkpointable_skip = _checkpoint_can_advance(existing_result)
+                    if is_checkpointable_skip or (existing_result is not None and existing_result.status == "skipped"):
+                        if chapter_number not in results_by_chapter:
+                            results_by_chapter[chapter_number] = {
+                                "chapter_number": chapter_number,
+                                "chapter_source_hash": ref.chapter_source_hash or "",
+                                "status": "skipped",
+                                "reason": (
+                                    existing_result.reason
+                                    if existing_result is not None
+                                    else "non_story_chapter"
+                                ),
+                            }
+                        if is_checkpointable_skip:
+                            set_summary_checkpoint(
+                                conn,
+                                release_id=release_id,
+                                run_id=run_id,
+                                story_last_chapter=chapter_number,
+                                en_last_chapter=chapter_number,
+                            )
+                            story_skip_until = chapter_number
+                            en_skip_until = chapter_number
+                        continue
+
+                    short_record = (
+                        existing_result.short_record
+                        if existing_result is not None and existing_result.short_record is not None
+                        else get_validated_summary(
+                            conn,
+                            release_id=release_id,
+                            chapter_number=chapter_number,
+                            summary_type="chapter_summary_zh_short",
+                        )
+                    )
+                    structured_record = (
+                        existing_result.structured_record
+                        if existing_result is not None and existing_result.structured_record is not None
+                        else get_validated_summary(
+                            conn,
+                            release_id=release_id,
+                            chapter_number=chapter_number,
+                            summary_type="chapter_summary_zh_structured",
+                        )
+                    )
+                    if short_record is None or structured_record is None:
+                        if existing_result is not None and existing_result.status == "skipped":
+                            continue
+                        raise RuntimeError(
+                            "missing_chinese_summary_for_story_phase: "
+                            f"release={release_id}, chapter={chapter_number}"
+                        )
+
+                    short_summaries = list_validated_summaries(
+                        conn,
+                        release_id=release_id,
+                        summary_type="chapter_summary_zh_short",
+                        max_chapter_number=chapter_number,
+                    )
+                    composite_hash = _composite_chapter_hash(
+                        short_summaries,
+                        ref.chapter_source_hash or short_record.derived_from_chapter_hash,
+                    )
+                    if previous_story_text.strip():
+                        story_text = (
+                            previous_story_text.rstrip("\n")
+                            + "\n"
+                            + f"第{chapter_number}章：{short_record.content_zh.strip()}"
+                        )
+                    else:
+                        story_text = build_story_so_far(short_summaries=short_summaries)
+                    story_record = save_validated_summary(
+                        conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh",
+                        content_zh=story_text,
+                        derived_from_chapter_hash=composite_hash,
+                        run_id=run_id,
+                        validation_status="approved",
+                    )
+                    compact_text, compact_source_hash = compact_story_so_far(
+                        llm_client=client,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        model_name=config_obj.models.analyst_name,
+                        prompt_template=prompt_compact.template,
+                        prompt_version=prompt_compact.version,
+                        previous_story_so_far_zh_compact=previous_compact_text,
+                        chapter_summary_zh_short=short_record.content_zh,
+                        max_tokens=config_obj.summaries.story_compact_max_tokens,
+                        cache_root=paths.release_root / "cache" / "llm",
+                    )
+                    compact_record = save_validated_summary(
+                        conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh_compact",
+                        content_zh=compact_text,
+                        derived_from_chapter_hash=compact_source_hash,
+                        run_id=run_id,
+                        validation_status="approved",
+                    )
+
+                    zh_artifact = paths.summaries_dir / f"chapter-{chapter_number}-zh.json"
+                    en_artifact = paths.summaries_dir / f"chapter-{chapter_number}-en.json"
+                    artifact_flags, artifact_llm_warnings, artifact_warnings = _load_validated_artifact_notes(
+                        zh_artifact
+                    )
+                    llm_validation_flags = (
+                        existing_result.llm_validation_flags
+                        if existing_result is not None and existing_result.llm_validation_flags is not None
+                        else artifact_flags
+                    )
+                    llm_validation_warnings = (
+                        existing_result.llm_validation_warnings
+                        if existing_result is not None and existing_result.llm_validation_warnings is not None
+                        else artifact_llm_warnings
+                    )
+                    warnings = (
+                        existing_result.warnings
+                        if existing_result is not None and existing_result.warnings is not None
+                        else artifact_warnings
+                    )
+                    _write_json(
+                        zh_artifact,
+                        {
+                            "release_id": release_id,
+                            "run_id": run_id,
+                            "chapter_number": chapter_number,
+                            "schema_version": 1,
+                            "validated": {
+                                "chapter_summary_zh_structured": structured_record.to_json_dict(),
+                                "chapter_summary_zh_short": short_record.to_json_dict(),
+                                "story_so_far_zh": story_record.to_json_dict(),
+                                "story_so_far_zh_compact": compact_record.to_json_dict(),
+                            },
+                            "llm_validation_flags": llm_validation_flags or [],
+                            "llm_validation_warnings": llm_validation_warnings or [],
+                            "warnings": warnings or [],
+                        },
+                    )
+                    previous_story_text = story_text
+                    previous_compact_text = compact_text
+                    zh_usage_payload = (
+                        existing_result.zh_usage_payload
+                        if existing_result is not None and existing_result.zh_usage_payload is not None
+                        else {field: 0 for field in LLM_USAGE_PAYLOAD_FIELDS}
+                    )
+                    result_entry = results_by_chapter.setdefault(
+                        chapter_number,
+                        {
+                            "chapter_number": chapter_number,
+                            "chapter_source_hash": ref.chapter_source_hash or "",
+                        },
+                    )
+                    result_entry.update(
+                        {
+                            "zh_artifact": str(zh_artifact),
+                            "en_artifact": str(en_artifact),
+                            "warnings": warnings or [],
+                        }
+                    )
+                    locked_glossary = list_locked_entries(conn, release_id=release_id)
+                    english_jobs.append(
+                        _EnglishPhaseJob(
+                            chapter_number=chapter_number,
+                            locked_glossary=locked_glossary,
+                            glossary_version_hash=hash_locked_glossary(locked_glossary),
+                            short_record=short_record,
+                            compact_story_record=compact_record,
+                            en_artifact=en_artifact,
+                            zh_usage_payload=zh_usage_payload,
+                        )
+                    )
                     set_summary_checkpoint(
                         conn,
                         release_id=release_id,
@@ -915,234 +1224,143 @@ def preprocess_summaries(
                         story_last_chapter=chapter_number,
                     )
                     story_skip_until = chapter_number
-                continue
+            finally:
+                conn.close()
 
-            short_record = (
-                existing_result.short_record
-                if existing_result is not None and existing_result.short_record is not None
-                else get_validated_summary(
-                    conn,
-                    release_id=release_id,
-                    chapter_number=chapter_number,
-                    summary_type="chapter_summary_zh_short",
-                )
-            )
-            structured_record = (
-                existing_result.structured_record
-                if existing_result is not None and existing_result.structured_record is not None
-                else get_validated_summary(
-                    conn,
-                    release_id=release_id,
-                    chapter_number=chapter_number,
-                    summary_type="chapter_summary_zh_structured",
-                )
-            )
-            if short_record is None or structured_record is None:
-                if existing_result is not None and existing_result.status == "skipped":
-                    continue
-                raise RuntimeError(
-                    "missing_chinese_summary_for_story_phase: "
-                    f"release={release_id}, chapter={chapter_number}"
-                )
-
-            short_summaries = list_validated_summaries(
-                conn,
-                release_id=release_id,
-                summary_type="chapter_summary_zh_short",
-                max_chapter_number=chapter_number,
-            )
-            composite_hash = _composite_chapter_hash(
-                short_summaries,
-                ref.chapter_source_hash or short_record.derived_from_chapter_hash,
-            )
-            if previous_story_text.strip():
-                story_text = (
-                    previous_story_text.rstrip("\n")
-                    + "\n"
-                    + f"第{chapter_number}章：{short_record.content_zh.strip()}"
-                )
-            else:
-                story_text = build_story_so_far(short_summaries=short_summaries)
-            story_record = save_validated_summary(
-                conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                summary_type="story_so_far_zh",
-                content_zh=story_text,
-                derived_from_chapter_hash=composite_hash,
-                run_id=run_id,
-                validation_status="approved",
-            )
-            compact_text, compact_source_hash = compact_story_so_far(
-                llm_client=client,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                model_name=config_obj.models.analyst_name,
-                prompt_template=prompt_compact.template,
-                prompt_version=prompt_compact.version,
-                previous_story_so_far_zh_compact=previous_compact_text,
-                chapter_summary_zh_short=short_record.content_zh,
-                max_tokens=config_obj.summaries.story_compact_max_tokens,
-                cache_root=paths.release_root / "cache" / "llm",
-            )
-            compact_record = save_validated_summary(
-                conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                summary_type="story_so_far_zh_compact",
-                content_zh=compact_text,
-                derived_from_chapter_hash=compact_source_hash,
-                run_id=run_id,
-                validation_status="approved",
-            )
-
-            zh_artifact = paths.summaries_dir / f"chapter-{chapter_number}-zh.json"
-            en_artifact = paths.summaries_dir / f"chapter-{chapter_number}-en.json"
-            artifact_flags, artifact_llm_warnings, artifact_warnings = _load_validated_artifact_notes(
-                zh_artifact
-            )
-            llm_validation_flags = (
-                existing_result.llm_validation_flags
-                if existing_result is not None and existing_result.llm_validation_flags is not None
-                else artifact_flags
-            )
-            llm_validation_warnings = (
-                existing_result.llm_validation_warnings
-                if existing_result is not None and existing_result.llm_validation_warnings is not None
-                else artifact_llm_warnings
-            )
-            warnings = (
-                existing_result.warnings
-                if existing_result is not None and existing_result.warnings is not None
-                else artifact_warnings
-            )
-            _write_json(
-                zh_artifact,
-                {
-                    "release_id": release_id,
-                    "run_id": run_id,
-                    "chapter_number": chapter_number,
-                    "schema_version": 1,
-                    "validated": {
-                        "chapter_summary_zh_structured": structured_record.to_json_dict(),
-                        "chapter_summary_zh_short": short_record.to_json_dict(),
-                        "story_so_far_zh": story_record.to_json_dict(),
-                        "story_so_far_zh_compact": compact_record.to_json_dict(),
-                    },
-                    "llm_validation_flags": llm_validation_flags or [],
-                    "llm_validation_warnings": llm_validation_warnings or [],
-                    "warnings": warnings or [],
-                },
-            )
-            previous_story_text = story_text
-            previous_compact_text = compact_text
-            zh_usage_payload = (
-                existing_result.zh_usage_payload
-                if existing_result is not None and existing_result.zh_usage_payload is not None
-                else {field: 0 for field in LLM_USAGE_PAYLOAD_FIELDS}
-            )
-            result_entry = results_by_chapter.setdefault(
-                chapter_number,
-                {
-                    "chapter_number": chapter_number,
-                    "chapter_source_hash": ref.chapter_source_hash or "",
-                },
-            )
-            result_entry.update(
-                {
-                    "zh_artifact": str(zh_artifact),
-                    "en_artifact": str(en_artifact),
-                    "warnings": warnings or [],
+            phase3_jobs = [job for job in english_jobs if job.chapter_number > en_skip_until]
+            completed_english: dict[int, _EnglishPhaseResult] = {}
+            with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
+                english_futures = {
+                    executor.submit(
+                        _run_english_phase,
+                        job=job,
+                        db_path=paths.db_path,
+                        release_id=release_id,
+                        run_id=run_id,
+                        config=config_obj,
+                        llm_client=client,
+                        prompt_en=prompt_en,
+                    ): job
+                    for job in phase3_jobs
                 }
-            )
-            locked_glossary = list_locked_entries(conn, release_id=release_id)
-            english_jobs.append(
-                _EnglishPhaseJob(
-                    chapter_number=chapter_number,
-                    locked_glossary=locked_glossary,
-                    glossary_version_hash=hash_locked_glossary(locked_glossary),
-                    short_record=short_record,
-                    compact_story_record=compact_record,
-                    en_artifact=en_artifact,
-                    zh_usage_payload=zh_usage_payload,
+                for english_future in as_completed(english_futures):
+                    job = english_futures[english_future]
+                    english_result = english_future.result()
+                    completed_english[english_result.chapter_number] = english_result
+                    _write_json(
+                        english_result.en_artifact,
+                        {
+                            "release_id": release_id,
+                            "run_id": run_id,
+                            "chapter_number": english_result.chapter_number,
+                            "schema_version": 1,
+                            "derived": {
+                                "chapter_summary_en_short": english_result.chapter_record,
+                                "story_so_far_en": english_result.story_record,
+                            },
+                        },
+                    )
+                    results_by_chapter[english_result.chapter_number]["en_artifact"] = str(
+                        english_result.en_artifact
+                    )
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.english_derivation_completed",
+                        chapter_number=english_result.chapter_number,
+                        message=f"English summary derivation completed for chapter {english_result.chapter_number}",
+                        model_name=config_obj.models.translator_name,
+                        summary_count=2,
+                        **english_result.en_usage_payload,
+                    )
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_completed",
+                        chapter_number=english_result.chapter_number,
+                        summary_count=5,
+                        **_sum_usage_payloads(job.zh_usage_payload, english_result.en_usage_payload),
+                    )
+                    conn = open_connection(paths.db_path)
+                    ensure_schema(conn, "summaries")
+                    try:
+                        new_en_checkpoint = _advance_english_checkpoint(
+                            completed=completed_english,
+                            current=en_skip_until,
+                            ordered_numbers=ordered_numbers,
+                        )
+                        if new_en_checkpoint > en_skip_until:
+                            set_summary_checkpoint(
+                                conn,
+                                release_id=release_id,
+                                run_id=run_id,
+                                en_last_chapter=new_en_checkpoint,
+                            )
+                            en_skip_until = new_en_checkpoint
+                    finally:
+                        conn.close()
+
+            if chunked:
+                completed_chunk_index = chunk_index
+                payload = _chunk_event_payload(
+                    chunk_index=chunk_index,
+                    chunk_count=len(chunks),
+                    refs=chunk_refs,
+                    chunk_size=effective_chunk_size,
+                    last_good_chapter=en_skip_until,
                 )
-            )
-            set_summary_checkpoint(
-                conn,
-                release_id=release_id,
-                run_id=run_id,
-                story_last_chapter=chapter_number,
-            )
-            story_skip_until = chapter_number
-    finally:
-        conn.close()
-
-    phase3_jobs = [job for job in english_jobs if job.chapter_number > en_skip_until]
-    completed_english: dict[int, _EnglishPhaseResult] = {}
-    with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
-        english_futures = {
-            executor.submit(
-                _run_english_phase,
-                job=job,
-                db_path=paths.db_path,
-                release_id=release_id,
-                run_id=run_id,
-                config=config_obj,
-                llm_client=client,
-                prompt_en=prompt_en,
-            ): job
-            for job in phase3_jobs
-        }
-        for english_future in as_completed(english_futures):
-            job = english_futures[english_future]
-            english_result = english_future.result()
-            completed_english[english_result.chapter_number] = english_result
-            _write_json(
-                english_result.en_artifact,
-                {
-                    "release_id": release_id,
-                    "run_id": run_id,
-                    "chapter_number": english_result.chapter_number,
-                    "schema_version": 1,
-                    "derived": {
-                        "chapter_summary_en_short": english_result.chapter_record,
-                        "story_so_far_en": english_result.story_record,
-                    },
-                },
-            )
-            results_by_chapter[english_result.chapter_number]["en_artifact"] = str(english_result.en_artifact)
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.english_derivation_completed",
-                chapter_number=english_result.chapter_number,
-                message=f"English summary derivation completed for chapter {english_result.chapter_number}",
-                model_name=config_obj.models.translator_name,
-                summary_count=2,
-                **english_result.en_usage_payload,
-            )
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.chapter_completed",
-                chapter_number=english_result.chapter_number,
-                summary_count=5,
-                **_sum_usage_payloads(job.zh_usage_payload, english_result.en_usage_payload),
-            )
-
-    if completed_english:
-        max_completed_en = max(completed_english)
-        conn = open_connection(paths.db_path)
-        ensure_schema(conn, "summaries")
-        try:
-            set_summary_checkpoint(
-                conn,
-                release_id=release_id,
-                run_id=run_id,
-                en_last_chapter=max_completed_en,
-            )
-        finally:
-            conn.close()
+                _emit(run_id, release_id, f"{_STAGE_NAME}.chunk_completed", **payload)
+                conn = open_connection(paths.db_path)
+                ensure_schema(conn, "summaries")
+                try:
+                    save_chunk_checkpoint(
+                        conn,
+                        release_id=release_id,
+                        run_id=run_id,
+                        stage_name=_STAGE_NAME,
+                        chunk_index=chunk_index,
+                        chapter_start=chunk_refs[0].chapter_number,
+                        chapter_end=chunk_refs[-1].chapter_number,
+                        status="completed",
+                        metadata=payload,
+                    )
+                finally:
+                    conn.close()
+        except Exception as exc:
+            if chunked:
+                payload = _chunk_event_payload(
+                    chunk_index=chunk_index,
+                    chunk_count=len(chunks),
+                    refs=chunk_refs,
+                    chunk_size=effective_chunk_size,
+                    last_good_chapter=en_skip_until,
+                )
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chunk_failed",
+                    severity="error",
+                    message=f"Summary chunk {chunk_index} failed: {exc}",
+                    reason=str(exc),
+                    **payload,
+                )
+                conn = open_connection(paths.db_path)
+                ensure_schema(conn, "summaries")
+                try:
+                    save_chunk_checkpoint(
+                        conn,
+                        release_id=release_id,
+                        run_id=run_id,
+                        stage_name=_STAGE_NAME,
+                        chunk_index=chunk_index,
+                        chapter_start=chunk_refs[0].chapter_number,
+                        chapter_end=chunk_refs[-1].chapter_number,
+                        status="failed",
+                        metadata={**payload, "reason": str(exc)},
+                    )
+                finally:
+                    conn.close()
+            raise
 
     chapter_results = [
         results_by_chapter[number]
@@ -1168,5 +1386,11 @@ def preprocess_summaries(
         "run_id": run_id,
         "chapters_processed": processed_count,
         "chapter_artifacts": chapter_results,
+        "checkpoint": {
+            "chunked": chunked,
+            "chunk_size": effective_chunk_size,
+            "completed_chunk_index": completed_chunk_index,
+            "last_good_chapter": en_skip_until,
+        },
         **capture_usage_snapshot(client).to_payload(),
     }
