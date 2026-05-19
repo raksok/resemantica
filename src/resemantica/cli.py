@@ -534,6 +534,18 @@ with chapter-safe spoiler filters. Outputs graph.ladybug and snapshot.json.""",
     _add_force_arg(graph)
     _add_allow_rewind_arg(graph)
 
+    continuity = preprocess_subparsers.add_parser(
+        "continuity",
+        help="Refresh graph-grounded compact continuity after graph preprocessing.",
+        description="""\
+Rebuilds compact story continuity from previous graph-grounded continuity,
+recent validated chapter summaries, and chapter-safe graph anchors.""",
+    )
+    _add_common_release_args(continuity, default_run="continuity")
+    _add_chapter_scope_args(continuity)
+    _add_force_arg(continuity)
+    _add_allow_rewind_arg(continuity)
+
     packets = subparsers.add_parser(
         "packets", aliases=["pac"],
         help="Build immutable chapter packets and paragraph bundles.",
@@ -652,9 +664,9 @@ and cleanup of intermediate artifacts.""",
         help="Run full production workflow from preprocess through EPUB rebuild.",
         description="""\
 Executes all pipeline stages in canonical order: preprocess-summaries,
-preprocess-glossary, preprocess-idioms, preprocess-graph, packets-build,
-translate-range, epub-rebuild. With --dry-run, prints the ordered stage
-list without executing.""",
+preprocess-glossary, preprocess-idioms, preprocess-graph,
+preprocess-continuity, packets-build, translate-range, epub-rebuild. With
+--dry-run, prints the ordered stage list without executing.""",
     )
     _add_common_release_args(run_production, default_run="production")
     run_production.add_argument(
@@ -692,7 +704,8 @@ point to a specific stage.""",
         description="""\
 Inspect durable failed units and retry only the affected stage scopes.
 Supported stages: preprocess-summaries, preprocess-glossary,
-preprocess-idioms, preprocess-graph, packets-build, translate-range, all.""",
+preprocess-idioms, preprocess-graph, preprocess-continuity, packets-build,
+translate-range, all.""",
     )
     _add_common_release_args(run_retry_failed, default_run="production")
     run_retry_failed.add_argument(
@@ -704,6 +717,7 @@ preprocess-idioms, preprocess-graph, packets-build, translate-range, all.""",
             "preprocess-glossary",
             "preprocess-idioms",
             "preprocess-graph",
+            "preprocess-continuity",
             "packets-build",
             "translate-range",
             "all",
@@ -1048,6 +1062,24 @@ def main(argv: list[str] | None = None) -> int:
             stage_result = _with_cli_progress(
                 lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
                     "preprocess-graph",
+                    chapter_start=args.start,
+                    chapter_end=args.end,
+                    force=bool(getattr(args, "force", False)),
+                    allow_rewind=getattr(args, "allow_rewind", False),
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if stage_result is _INTERRUPTED_STOP:
+                return 130
+            _print_stage_result(stage_result)
+            return _exit_code(stage_result)
+
+        if args.preprocess_command == "continuity":
+            stage_result = _with_cli_progress(
+                lambda: OrchestrationRunner(args.release, args.run, config=config).run_stage(
+                    "preprocess-continuity",
                     chapter_start=args.start,
                     chapter_end=args.end,
                     force=bool(getattr(args, "force", False)),

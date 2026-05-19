@@ -60,6 +60,7 @@ class OrchestrationRunner:
                 "preprocess-summaries",
                 "preprocess-idioms",
                 "preprocess-graph",
+                "preprocess-continuity",
                 "packets-build",
                 "translate-range",
                 "epub-rebuild",
@@ -602,6 +603,25 @@ class OrchestrationRunner:
                 stop_token=stop_token,
             )
             return StageResult(True, stage_name, "Graph preprocess completed", metadata=graph_result)
+
+        if stage_name == "preprocess-continuity":
+            from resemantica.summaries.continuity import preprocess_continuity
+
+            continuity_result = preprocess_continuity(
+                release_id=self.release_id,
+                run_id=self.run_id,
+                config=self.config,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+                force=force,
+                stop_token=stop_token,
+            )
+            return StageResult(
+                True,
+                stage_name,
+                "Graph-grounded continuity refresh completed",
+                metadata=continuity_result,
+            )
 
         if stage_name == "packets-build":
             from resemantica.packets.builder import build_packets

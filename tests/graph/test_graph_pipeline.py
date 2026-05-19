@@ -346,10 +346,16 @@ def test_ladybug_chapter_safe_subgraph_excludes_future_state(tmp_path: Path) -> 
             GraphRelationship("rel_future", "rel", "ALLY_OF", "ent_a", "ent_b", 4, 4, None, 4, 1.0, "confirmed"),
         ]
     )
+    client.upsert_aliases(
+        aliases=[
+            GraphAlias("alias_future", "rel", "ent_a", "A Hidden Name", "en", 4, 5, 4, 1.0, True, "confirmed"),
+        ]
+    )
 
     chapter_3 = client.get_chapter_safe_subgraph(chapter_number=3)
 
     assert [entity.entity_id for entity in chapter_3["entities"]] == ["ent_a"]
+    assert chapter_3["aliases"] == []
     assert chapter_3["relationships"] == []
 
 

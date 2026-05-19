@@ -25,6 +25,7 @@ _STAGE_LABELS: dict[str, str] = {
     "preprocess-summaries": "Summaries preprocessing",
     "preprocess-idioms": "Idiom preprocessing",
     "preprocess-graph": "Graph extraction",
+    "preprocess-continuity": "Continuity refresh",
     "translate-range": "Translation range",
     "translate-chapter": "Chapter translation",
     "production": "Production run",
@@ -38,6 +39,7 @@ _CHAPTER_ACTIONS: dict[str, str] = {
     "preprocess-summaries": "Generating summaries for chapter",
     "preprocess-idioms": "Extracting idioms in chapter",
     "preprocess-graph": "Extracting graph entities in chapter",
+    "preprocess-continuity": "Refreshing graph-grounded continuity for chapter",
     "translate-chapter": "Translating chapter",
 }
 

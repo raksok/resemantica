@@ -515,7 +515,13 @@ def build_chapter_packet(
             chapter_number=chapter_number,
             summary_type="story_so_far_zh_compact",
         )
-        story_so_far = compact_story_so_far or full_story_so_far
+        graph_compact_story_so_far = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="story_so_far_zh_graph_compact",
+        )
+        story_so_far = graph_compact_story_so_far or compact_story_so_far or full_story_so_far
         if story_so_far is None:
             _emit(
                 run_id,

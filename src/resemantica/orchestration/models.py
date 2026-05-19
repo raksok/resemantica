@@ -8,6 +8,7 @@ STAGE_ORDER = [
     "preprocess-glossary",
     "preprocess-idioms",
     "preprocess-graph",
+    "preprocess-continuity",
     "packets-build",
     "translate-range",
     "epub-rebuild",

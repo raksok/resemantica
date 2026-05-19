@@ -70,6 +70,7 @@ def check_stage_gate(
     if stage_name in {
         "preprocess-idioms",
         "preprocess-graph",
+        "preprocess-continuity",
         "packets-build",
         "translate-range",
         "epub-rebuild",
@@ -77,7 +78,14 @@ def check_stage_gate(
         _check_unresolved_preprocess_votes(report, db_path=paths.db_path, release_id=release_id)
 
     story_chapters: list[int] = selected
-    if stage_name in {"preprocess-idioms", "preprocess-graph", "packets-build", "translate-range", "epub-rebuild"}:
+    if stage_name in {
+        "preprocess-idioms",
+        "preprocess-graph",
+        "preprocess-continuity",
+        "packets-build",
+        "translate-range",
+        "epub-rebuild",
+    }:
         story_chapters = _check_summary_inputs(
             report,
             db_path=paths.db_path,
@@ -87,7 +95,7 @@ def check_stage_gate(
         )
         report.metadata["story_chapter_numbers"] = story_chapters
 
-    if stage_name in {"packets-build", "translate-range", "epub-rebuild"}:
+    if stage_name in {"preprocess-continuity", "packets-build", "translate-range", "epub-rebuild"}:
         _check_graph_inputs(
             report,
             db_path=paths.db_path,

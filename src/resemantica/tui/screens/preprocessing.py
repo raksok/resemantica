@@ -18,6 +18,7 @@ PREPRO_STAGE_KEYS = [
     "preprocess-glossary",
     "preprocess-idioms",
     "preprocess-graph",
+    "preprocess-continuity",
     "packets-build",
 ]
 
@@ -181,6 +182,7 @@ class PreprocessingScreen(BaseScreen):
             ("Glossary", "preprocess-glossary"),
             ("Idioms", "preprocess-idioms"),
             ("Graph MVP", "preprocess-graph"),
+            ("Continuity", "preprocess-continuity"),
             ("Packets", "packets-build"),
         ]
         current_stage = state["stage_name"] if state else None
@@ -189,6 +191,7 @@ class PreprocessingScreen(BaseScreen):
             "preprocess-glossary",
             "preprocess-idioms",
             "preprocess-graph",
+            "preprocess-continuity",
             "packets-build",
         ]
         lines: list[str] = ["[bold]Pipeline[/bold]"]

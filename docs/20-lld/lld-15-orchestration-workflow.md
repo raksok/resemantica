@@ -33,6 +33,7 @@ The production plan is explicit and inspectable. It should include:
 - `preprocess-glossary`
 - `preprocess-idioms`
 - `preprocess-graph`
+- `preprocess-continuity`
 - `packets-build`
 - `translate-range`
 - `epub-rebuild`
@@ -72,6 +73,7 @@ Supported retry stages are:
 - `preprocess-glossary`
 - `preprocess-idioms`
 - `preprocess-graph`
+- `preprocess-continuity`
 - `packets-build`
 - `translate-range`
 - `all`

@@ -1,0 +1,81 @@
+# LLD 56: Graph-Grounded Continuity Refresh
+
+## Summary
+
+`preprocess-continuity` runs after `preprocess-graph` and before packet build. It refreshes bounded Chinese story continuity from previous graph-grounded continuity, recent validated chapter summaries, and confirmed chapter-safe graph anchors.
+
+The stage does not replace `preprocess-summaries`. Chapter-local summaries, full story-so-far, and initial compact continuity remain owned by the summary pipeline. The refresh stage closes long-run drift after graph validation has produced confirmed state.
+
+## Public Interfaces
+
+CLI:
+
+- `uv run python -m resemantica.cli preprocess continuity --release <release_id> --run <run_id>`
+
+Python:
+
+- `summaries.continuity.preprocess_continuity(...)`
+- `summaries.continuity.build_graph_continuity_anchors(...)`
+
+Prompt:
+
+- `summary_graph_continuity_update.txt`, version `1.0`
+
+Config:
+
+```toml
+[summaries]
+graph_continuity_rebase_interval = 50
+```
+
+## Data Flow
+
+1. Require a graph snapshot row from `preprocess-graph`.
+2. For each story chapter with `chapter_summary_zh_short`, read confirmed chapter-safe graph state through `GraphClient.get_chapter_safe_subgraph()`.
+3. Build compact deterministic anchors:
+   - entities whose `revealed_chapter <= chapter`
+   - aliases whose reveal and first-seen chapters are safe
+   - appearances at or before the chapter
+   - relationships whose endpoints and reveal/start/end intervals are safe
+   - revealed lore only when attached to visible relationships
+4. Render `summary_graph_continuity_update.txt` with:
+   - previous graph compact continuity
+   - recent chapter summaries
+   - current chapter number
+   - graph anchors
+5. Save Chinese output as `story_so_far_zh_graph_compact`.
+6. Derive English inspection text as `story_so_far_en_graph_compact`.
+7. Write a per-chapter graph continuity artifact containing the summary row and anchor audit metadata.
+
+## Rebase Behavior
+
+Normal chapters update from the previous graph compact row plus the last three chapter summaries and current graph anchors.
+
+Every `summaries.graph_continuity_rebase_interval` chapters, the stage rebases from the previous milestone compact row and all chapter summaries since that milestone. This keeps drift bounded without rebuilding the graph or replaying the full story from chapter one on every refresh.
+
+## Packet Interaction
+
+Packets select continuity in this order:
+
+1. `story_so_far_zh_graph_compact`
+2. `story_so_far_zh_compact`
+3. `story_so_far_zh`
+
+The selected summary row participates in `summary_version_hash`, so packet metadata becomes stale when refreshed continuity changes.
+
+## Failure Policy
+
+- Missing graph snapshot fails `preprocess-continuity`.
+- Missing chapter short summary skips that chapter.
+- Empty or non-JSON model output fails the chapter.
+- Output exceeding `summaries.story_compact_max_tokens` fails clearly.
+
+## Tests
+
+- graph anchor future-state exclusion
+- refreshed row persistence and English derivation
+- rebase interval source selection
+- token budget failure
+- missing snapshot failure
+- packet preference and invalidation
+- prompt JSON-only and anti-restart regression checks

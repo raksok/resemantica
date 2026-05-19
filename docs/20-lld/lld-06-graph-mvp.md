@@ -41,6 +41,7 @@ SQLite datasets:
 5. Validate references, intervals, and reveal metadata.
 6. Promote confirmed graph state.
 7. Export snapshot metadata for packet reproducibility.
+8. Feed `preprocess-continuity` as the long-horizon continuity authority after graph validation. The graph remains the source of chapter-safe anchors; no separate memory ledger is introduced.
 
 ## Analyst Prompt Optimization
 
@@ -80,6 +81,7 @@ Alias `alias_language` is detected from content rather than hardcoded:
 ## Resume And Rerun
 
 - graph exports used by packets must be identifiable by snapshot hash or version
+- graph snapshots are required before `preprocess-continuity` can refresh `story_so_far_zh_graph_compact`
 - provisional graph state may be rerun without mutating confirmed graph state
 - extraction drafts are persisted per release, run, chapter, chapter source hash, and graph prompt version
 - resume skips chapter extraction when a matching draft row exists, merges requested drafts in chapter order, validates, and writes confirmed graph state plus a new snapshot

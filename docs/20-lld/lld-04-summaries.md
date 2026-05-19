@@ -55,7 +55,9 @@ Structured Chinese summary schema:
 7. Phase 2 runs in chapter order. It derives full `story_so_far_zh`, compacts previous `story_so_far_zh_compact` plus current `chapter_summary_zh_short` into `story_so_far_zh_compact`, writes both continuity rows, and writes `chapter-*-zh.json`.
 8. Phase 3 runs English derivation with `summaries.chapter_concurrency` workers. It derives `chapter_summary_en_short` from `chapter_summary_zh_short` and derives `story_so_far_en` from `story_so_far_zh_compact`.
 
-`story_so_far_zh` remains the full audited cumulative Chinese continuity for compatibility and inspection. `story_so_far_zh_compact` is the bounded operational continuity source for downstream packets and English story-so-far derivation. Compaction uses the analyst model and `summary_story_compact.txt`; failure to generate compact continuity fails `preprocess-summaries` for that story chapter.
+`story_so_far_zh` remains the full audited cumulative Chinese continuity for compatibility and inspection. `story_so_far_zh_compact` is the initial bounded operational continuity source produced before graph extraction and used for English story-so-far derivation during `preprocess-summaries`. Compaction uses the analyst model and `summary_story_compact.txt`; failure to generate compact continuity fails `preprocess-summaries` for that story chapter.
+
+After `preprocess-graph`, `preprocess-continuity` may refresh long-horizon continuity into `story_so_far_zh_graph_compact` using previous graph compact continuity, recent validated chapter summaries, and confirmed chapter-safe graph anchors. This row is preferred by packet build, while `story_so_far_zh_compact` and `story_so_far_zh` remain fallbacks and inspection records.
 
 If all structured-summary attempts fail, the final failed draft is persisted in `summary_drafts` with `validation_status = "failed"`, and `preprocess-summaries` returns a failed stage result. Non-story chapters and configured exclude-pattern chapters remain checkpointable skips. Failed story chapters are not skips: `zh_last_chapter`, `story_last_chapter`, and `en_last_chapter` must not advance past them, and downstream story/English assembly stops before a continuity hole can be created.
 
@@ -65,6 +67,7 @@ Summary config:
 [summaries]
 chapter_concurrency = 1        # valid range: 1..5
 story_compact_max_tokens = 2048 # valid: > 0
+graph_continuity_rebase_interval = 50 # valid: > 0
 ```
 
 ## Analyst Prompt Optimization

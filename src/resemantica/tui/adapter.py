@@ -74,6 +74,7 @@ class TUIAdapter:
                 "preprocess-glossary",
                 "preprocess-idioms",
                 "preprocess-graph",
+                "preprocess-continuity",
                 "packets-build",
             ):
                 if stop_token is None:

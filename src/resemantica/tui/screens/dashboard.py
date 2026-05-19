@@ -326,6 +326,7 @@ class DashboardScreen(BaseScreen):
             "preprocess-glossary",
             "preprocess-idioms",
             "preprocess-graph",
+            "preprocess-continuity",
             "packets-build",
             "translate-chapter",
             "translate-pass3",

@@ -19,6 +19,7 @@ RetryStage = Literal[
     "preprocess-glossary",
     "preprocess-idioms",
     "preprocess-graph",
+    "preprocess-continuity",
     "packets-build",
     "translate-range",
 ]
@@ -28,6 +29,7 @@ SUPPORTED_RETRY_STAGES: tuple[RetryStage, ...] = (
     "preprocess-glossary",
     "preprocess-idioms",
     "preprocess-graph",
+    "preprocess-continuity",
     "packets-build",
     "translate-range",
 )
@@ -433,6 +435,53 @@ def _plan_packets(
     ], []
 
 
+def _plan_continuity(
+    *,
+    conn: sqlite3.Connection,
+    release_id: str,
+    run_id: str,
+    config: AppConfig,
+    start: int | None,
+    end: int | None,
+) -> tuple[list[RetryUnit], list[RetryUnit]]:
+    chapters = _list_extracted_chapter_numbers(
+        config=config,
+        release_id=release_id,
+        start=start,
+        end=end,
+    )
+    missing = []
+    for chapter_number in chapters:
+        try:
+            row = conn.execute(
+                """
+                SELECT 1 FROM validated_summaries_zh
+                WHERE release_id = ?
+                  AND chapter_number = ?
+                  AND summary_type = 'story_so_far_zh_graph_compact'
+                LIMIT 1
+                """,
+                (release_id, chapter_number),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            row = None
+        if row is None:
+            missing.append(chapter_number)
+    failed = _failed_event_chapters(release_id, run_id, "preprocess-continuity", start, end)
+    affected = _scoped_numbers([*missing, *failed], start, end)
+    if not affected:
+        return [], []
+    return [
+        _unit(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-continuity",
+            chapters=affected,
+            reason="missing_graph_continuity_summary_or_failed_event",
+        )
+    ], []
+
+
 def _plan_translation(
     *,
     conn: sqlite3.Connection,
@@ -547,6 +596,15 @@ def plan_retry_failed(
                 )
             elif selected_stage == "preprocess-graph":
                 retryable, non_retryable = _plan_graph(
+                    conn=conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    config=config_obj,
+                    start=start,
+                    end=end,
+                )
+            elif selected_stage == "preprocess-continuity":
+                retryable, non_retryable = _plan_continuity(
                     conn=conn,
                     release_id=release_id,
                     run_id=run_id,

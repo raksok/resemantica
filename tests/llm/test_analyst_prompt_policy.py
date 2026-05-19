@@ -14,6 +14,7 @@ ANTI_RESTART_PHRASES = [
 JSON_PROMPTS = [
     "summary_zh_structured.txt",
     "summary_zh_validate.txt",
+    "summary_graph_continuity_update.txt",
     "glossary_evaluate.txt",
     "idiom_evaluate.txt",
     "graph_extract.txt",
@@ -27,6 +28,7 @@ JSON_PROMPTS = [
         "summary_zh_structured.txt",
         "summary_zh_validate.txt",
         "summary_story_compact.txt",
+        "summary_graph_continuity_update.txt",
         "glossary_evaluate.txt",
         "idiom_evaluate.txt",
         "graph_extract.txt",
@@ -64,6 +66,15 @@ def test_validation_prompt_keeps_flags_schema() -> None:
 
     assert 'two keys: "flags" and "warnings"' in prompt.template
     assert '{{"flags": [], "warnings": []}}' in prompt.template
+
+
+def test_graph_continuity_prompt_keeps_anchor_audit_schema() -> None:
+    prompt = load_prompt("summary_graph_continuity_update.txt")
+
+    assert '"continuity_zh"' in prompt.template
+    assert '"anchor_audit"' in prompt.template
+    assert "uncertain_anchor_ids" in prompt.template
+    assert "Never resolve ambiguity with outside knowledge" in prompt.template
 
 
 def test_evaluator_prompts_keep_array_schema() -> None:

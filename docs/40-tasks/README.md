@@ -73,3 +73,4 @@ Always follow the milestone sequence below.
 | M53 | task-53 | M52 | LLM Throttle And Event DB Locks |
 | M54 | task-54 | M53 | Summary Schema Recovery |
 | M55 | task-55 | M54 | Analyst Anti-Restart Prompting |
+| M56 | task-56 | M55, M6, M8, M15 | Graph-Grounded Continuity Refresh |

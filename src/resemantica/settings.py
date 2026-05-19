@@ -91,6 +91,7 @@ class SummariesConfig:
     exclude_chapter_patterns: list[str] = field(default_factory=list)
     chapter_concurrency: int = 1
     story_compact_max_tokens: int = 2048
+    graph_continuity_rebase_interval: int = 50
 
 
 @dataclass(slots=True)
@@ -383,6 +384,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 ),
                 "summaries.story_compact_max_tokens",
             ),
+            graph_continuity_rebase_interval=_as_int(
+                summaries.get(
+                    "graph_continuity_rebase_interval",
+                    SummariesConfig().graph_continuity_rebase_interval,
+                ),
+                "summaries.graph_continuity_rebase_interval",
+            ),
         ),
         events=EventsConfig(
             persistence_mode=_as_str(
@@ -467,6 +475,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("summaries.chapter_concurrency must be in [1, 5].")
     if config.summaries.story_compact_max_tokens <= 0:
         raise ValueError("summaries.story_compact_max_tokens must be > 0.")
+    if config.summaries.graph_continuity_rebase_interval <= 0:
+        raise ValueError("summaries.graph_continuity_rebase_interval must be > 0.")
     if config.models.pruning_threshold < 0 or config.models.pruning_threshold > 1:
         raise ValueError("models.pruning_threshold must be in [0.0, 1.0].")
     if config.events.progress_sample_every <= 0:

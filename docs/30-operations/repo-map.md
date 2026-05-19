@@ -41,9 +41,10 @@ Implemented package layout (M4 slice):
 
 - `src/resemantica/summaries/`: chapter summary generation, deterministic validation, and summary derivation pipeline
 - `src/resemantica/db/summary_repo.py`: SQLite repository for summary drafts, validated Chinese summaries, and derived English summaries
-- `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_en_derive.txt`: M4 summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
+- `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_en_derive.txt`, `summary_graph_continuity_update.txt`: summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
 - `tests/summaries/`: continuity conflict, glossary conflict, future-leak, and deterministic story rebuild tests
 - Summary schema recovery is scoped to `src/resemantica/summaries/generator.py`: after one targeted retry, known recoverable structured-summary drift can be defaulted or dropped with warning codes that are written to summary artifacts under `warnings`.
+- `src/resemantica/summaries/continuity.py`: post-graph graph-grounded compact continuity refresh and deterministic chapter-safe graph anchor formatting
 
 Implemented package layout (M5 slice):
 
@@ -54,7 +55,7 @@ Implemented package layout (M5 slice):
 
 Implemented package layout (M6 slice):
 
-- `src/resemantica/graph/`: graph models, Ladybug client wrapper, deterministic extraction, validation, filtering, and preprocessing pipeline
+- `src/resemantica/graph/`: graph models, Ladybug client wrapper, deterministic extraction, validation, filtering, and preprocessing pipeline; confirmed graph state feeds the post-graph continuity refresh
 - `src/resemantica/db/graph_repo.py`: SQLite repository for deferred entities, graph extraction drafts, and graph snapshot metadata
 - `tests/graph/`: alias reveal gating, relationship chapter eligibility, validation, deferred lifecycle, and snapshot metadata tests
 
@@ -68,7 +69,7 @@ Implemented package layout (M7 slice):
 
 Implemented package layout (M8 slice):
 
-- `src/resemantica/packets/`: chapter packet schemas, graph-enriched packet builder, paragraph bundle derivation, and stale detection
+- `src/resemantica/packets/`: chapter packet schemas, graph-enriched packet builder, graph-grounded continuity preference, paragraph bundle derivation, and stale detection
 - `src/resemantica/db/packet_repo.py`: SQLite packet metadata repository for reproducibility and stale checks
 - `src/resemantica/llm/tokens.py`: cl100k token counting utility for packet/bundle budgeting with 5% safety-buffer enforcement
 - `src/resemantica/cli.py`: `packets build` command wiring
@@ -86,7 +87,7 @@ Implemented package layout (M9 slice):
 Implemented package layout (M10 slice):
 
 - `src/resemantica/orchestration/`: centralized run control, stage ordering, retries, resume behavior, cleanup planning, and structured events
-- `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER`
+- `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER` including `preprocess-continuity` between graph and packet build
 - `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production, stage execution, transition validation, gate handling, and auto review artifact generation for unresolved votes
 - `src/resemantica/orchestration/retry_failed.py`: durable failed-unit planner and executor for `run retry-failed`
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume

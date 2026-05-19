@@ -578,6 +578,13 @@ class TestCliDispatch:
                 3,
             ),
             (
+                ["preprocess", "continuity", "--release", "r1", "--run", "run-1", "--start", "2", "--end", "4"],
+                "preprocess-continuity",
+                None,
+                2,
+                4,
+            ),
+            (
                 ["packets", "build", "--release", "r1", "--run", "run-1", "--start", "2", "--end", "4"],
                 "packets-build",
                 None,
