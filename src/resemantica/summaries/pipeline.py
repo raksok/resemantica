@@ -41,7 +41,10 @@ from resemantica.summaries.derivation import (
     hash_validated_summary,
 )
 from resemantica.summaries.generator import GeneratedChapterSummary, generate_chapter_summary
-from resemantica.summaries.validators import validate_chinese_summary_content
+from resemantica.summaries.validators import (
+    SummaryContentValidationResult,
+    validate_chinese_summary_content,
+)
 from resemantica.utils import _build_llm_client, _read_json, _write_json
 from resemantica.utils import _emit as _emit_shared
 
@@ -126,7 +129,7 @@ def _latest_summary_draft_failure(
     *,
     release_id: str,
     chapter_number: int,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], list[str], list[str]]:
     row = conn.execute(
         """
         SELECT validation_status, content_json
@@ -139,14 +142,21 @@ def _latest_summary_draft_failure(
         (release_id, chapter_number),
     ).fetchone()
     if row is None or str(row["validation_status"]) not in _FAILED_DRAFT_STATUSES:
-        return "generation_failed", []
+        return "generation_failed", [], [], []
     try:
         content = _read_json_from_text(str(row["content_json"]))
     except ValueError:
-        return "generation_failed", []
+        return "generation_failed", [], [], []
     category = str(content.get("failure_category") or "generation_failed")
     errors = content.get("validation_errors", [])
-    return category, [str(error) for error in errors] if isinstance(errors, list) else []
+    flags = content.get("llm_validation_flags", [])
+    warnings = content.get("llm_validation_warnings", [])
+    return (
+        category,
+        [str(error) for error in errors] if isinstance(errors, list) else [],
+        [str(flag) for flag in flags] if isinstance(flags, list) else [],
+        [str(warning) for warning in warnings] if isinstance(warnings, list) else [],
+    )
 
 
 def _read_json_from_text(text: str) -> dict[str, Any]:
@@ -266,6 +276,82 @@ def _run_chinese_phase(
             message=f"Chinese summary generation started for chapter {chapter_number}",
             model_name=config.models.analyst_name,
         )
+
+        def content_validator(
+            *,
+            structured_summary: dict[str, object],
+            chapter_identity_warnings: list[str],
+            attempt_number: int,
+        ) -> SummaryContentValidationResult:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.llm_validation_started",
+                chapter_number=chapter_number,
+                message=f"LLM summary validation started for chapter {chapter_number}",
+                model_name=config.models.analyst_name,
+                attempt_number=attempt_number,
+            )
+            try:
+                return validate_chinese_summary_content(
+                    llm_client=llm_client,
+                    model_name=config.models.analyst_name,
+                    prompt_template=prompt_validate.template,
+                    source_text_zh=source_text_zh,
+                    structured_summary=structured_summary,
+                    locked_glossary=locked_glossary,
+                    chapter_identity_warnings=chapter_identity_warnings,
+                    config=config,
+                )
+            except PromptBudgetError:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.llm_validation_failed",
+                    chapter_number=chapter_number,
+                    severity="warning",
+                    message=(
+                        f"LLM summary validation skipped for chapter {chapter_number}: "
+                        "prompt budget exceeded"
+                    ),
+                    model_name=config.models.analyst_name,
+                    reason="prompt_budget_exceeded",
+                    attempt_number=attempt_number,
+                    **usage_payload_delta(llm_client, usage_before),
+                )
+                raise
+            except Exception as exc:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.llm_validation_failed",
+                    chapter_number=chapter_number,
+                    severity="error",
+                    message=f"LLM summary validation failed for chapter {chapter_number}: {exc}",
+                    model_name=config.models.analyst_name,
+                    reason=str(exc),
+                    attempt_number=attempt_number,
+                    **usage_payload_delta(llm_client, usage_before),
+                )
+                raise
+
+        def content_validation_event_handler(
+            *,
+            result: SummaryContentValidationResult,
+            attempt_number: int,
+            action: str,
+        ) -> None:
+            _emit_llm_validation_events(
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                model_name=config.models.analyst_name,
+                flags=result.flags,
+                warnings=result.warnings,
+                attempt_number=attempt_number,
+                action=action,
+            )
+
         try:
             generated = generate_chapter_summary(
                 conn=conn,
@@ -282,6 +368,24 @@ def _run_chinese_phase(
                 prompt_version=prompt_structured.version,
                 config=config,
                 cache_root=cache_root,
+                content_validator=content_validator,
+                content_validation_event_handler=content_validation_event_handler,
+            )
+        except PromptBudgetError:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.chapter_skipped",
+                chapter_number=chapter_number,
+                reason="prompt_budget_exceeded",
+                **usage_payload_delta(llm_client, usage_before),
+            )
+            return _ChinesePhaseResult(
+                chapter_number=chapter_number,
+                chapter_source_hash=chapter_source_hash,
+                status="skipped",
+                reason="prompt_budget_exceeded",
+                zh_usage_payload=usage_payload_delta(llm_client, usage_before),
             )
         except Exception as exc:
             _emit(
@@ -316,82 +420,13 @@ def _run_chinese_phase(
             generated=generated,
             model_name=config.models.analyst_name,
         )
-
-        try:
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.llm_validation_started",
-                chapter_number=chapter_number,
-                message=f"LLM summary validation started for chapter {chapter_number}",
-                model_name=config.models.analyst_name,
-            )
-            llm_validation = validate_chinese_summary_content(
-                llm_client=llm_client,
-                model_name=config.models.analyst_name,
-                prompt_template=prompt_validate.template,
-                source_text_zh=source_text_zh,
-                structured_summary=generated.structured_summary,
-                locked_glossary=locked_glossary,
-                chapter_identity_warnings=generated.identity_warnings,
-                config=config,
-            )
-        except PromptBudgetError:
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.llm_validation_failed",
-                chapter_number=chapter_number,
-                severity="warning",
-                message=f"LLM summary validation skipped for chapter {chapter_number}: prompt budget exceeded",
-                model_name=config.models.analyst_name,
-                reason="prompt_budget_exceeded",
-                **usage_payload_delta(llm_client, usage_before),
-            )
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.chapter_skipped",
-                chapter_number=chapter_number,
-                reason="prompt_budget_exceeded",
-                **usage_payload_delta(llm_client, usage_before),
-            )
-            return _ChinesePhaseResult(
-                chapter_number=chapter_number,
-                chapter_source_hash=chapter_source_hash,
-                status="skipped",
-                reason="prompt_budget_exceeded",
-                zh_usage_payload=usage_payload_delta(llm_client, usage_before),
-            )
-        except Exception as exc:
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.llm_validation_failed",
-                chapter_number=chapter_number,
-                severity="error",
-                message=f"LLM summary validation failed for chapter {chapter_number}: {exc}",
-                model_name=config.models.analyst_name,
-                reason=str(exc),
-                **usage_payload_delta(llm_client, usage_before),
-            )
-            raise
-
-        _emit_llm_validation_events(
-            release_id=release_id,
-            run_id=run_id,
-            chapter_number=chapter_number,
-            model_name=config.models.analyst_name,
-            flags=llm_validation.flags,
-            warnings=llm_validation.warnings,
-        )
         return _ChinesePhaseResult(
             chapter_number=chapter_number,
             chapter_source_hash=chapter_source_hash,
             status="completed",
             warnings=generated.warnings,
-            llm_validation_flags=llm_validation.flags,
-            llm_validation_warnings=llm_validation.warnings,
+            llm_validation_flags=generated.llm_validation_flags,
+            llm_validation_warnings=generated.llm_validation_warnings,
             structured_record=generated.structured_record,
             short_record=generated.short_record,
             zh_usage_payload=usage_payload_delta(llm_client, usage_before),
@@ -411,6 +446,8 @@ def _handle_empty_generation(
     usage_before: Any,
     model_name: str,
 ) -> _ChinesePhaseResult:
+    llm_validation_flags: list[str] = []
+    llm_validation_warnings: list[str] = []
     if is_non_story_chapter(conn, release_id=release_id, chapter_number=chapter_number):
         message = f"Chapter {chapter_number} skipped: non-story chapter flagged"
         logger.info(message)
@@ -418,7 +455,7 @@ def _handle_empty_generation(
         severity = None
         status = "skipped"
     else:
-        failure_category, errors = _latest_summary_draft_failure(
+        failure_category, errors, llm_validation_flags, llm_validation_warnings = _latest_summary_draft_failure(
             conn,
             release_id=release_id,
             chapter_number=chapter_number,
@@ -437,6 +474,7 @@ def _handle_empty_generation(
             model_name=model_name,
             reason=reason,
             errors=errors,
+            llm_validation_flags=llm_validation_flags,
             **usage_payload_delta(llm_client, usage_before),
         )
         _emit(
@@ -448,6 +486,7 @@ def _handle_empty_generation(
             message=message,
             reason=reason,
             errors=errors,
+            llm_validation_flags=llm_validation_flags,
             **usage_payload_delta(llm_client, usage_before),
         )
         status = "failed"
@@ -466,6 +505,8 @@ def _handle_empty_generation(
         chapter_source_hash=chapter_source_hash,
         status=status,
         reason=reason,
+        llm_validation_flags=llm_validation_flags if status == "failed" else None,
+        llm_validation_warnings=llm_validation_warnings if status == "failed" else None,
         zh_usage_payload=usage_payload_delta(llm_client, usage_before),
     )
 
@@ -519,6 +560,8 @@ def _emit_llm_validation_events(
     model_name: str,
     flags: list[str],
     warnings: list[str],
+    attempt_number: int,
+    action: str,
 ) -> None:
     _emit(
         run_id,
@@ -529,16 +572,24 @@ def _emit_llm_validation_events(
         model_name=model_name,
         flag_count=len(flags),
         warning_count=len(warnings),
+        attempt_number=attempt_number,
+        action=action,
     )
-    for flag in flags:
+    if flags:
         _emit(
             run_id,
             release_id,
             f"{_STAGE_NAME}.llm_validation_warning",
             chapter_number=chapter_number,
             severity="warning",
-            message=f"LLM summary validation warning for chapter {chapter_number}: {flag}",
-            flag=str(flag),
+            message=(
+                f"LLM summary validation flagged chapter {chapter_number}: "
+                + ", ".join(str(flag) for flag in flags)
+            ),
+            flags=[str(flag) for flag in flags],
+            flag_count=len(flags),
+            attempt_number=attempt_number,
+            action=action,
         )
 
 
@@ -736,6 +787,10 @@ def preprocess_summaries(
                     entry["reason"] = chinese_result.reason
             if chinese_result.warnings:
                 entry["warnings"] = chinese_result.warnings
+            if chinese_result.llm_validation_flags:
+                entry["llm_validation_flags"] = chinese_result.llm_validation_flags
+            if chinese_result.llm_validation_warnings:
+                entry["llm_validation_warnings"] = chinese_result.llm_validation_warnings
             results_by_chapter[chinese_result.chapter_number] = entry
 
     if phase1_refs:

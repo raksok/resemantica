@@ -322,6 +322,51 @@ def test_dry_run_includes_gate_preview(tmp_path: Path, monkeypatch) -> None:
     assert first_stage["gate"]["success"] is False
 
 
+def test_gate_ignores_failed_summary_audit_rows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m57-gate-failed-summary"
+    _write_extracted_chapter(release_id)
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        save_summary_draft(
+            conn,
+            release_id=release_id,
+            chapter_number=1,
+            summary_type="chapter_summary_zh_structured",
+            content={"is_story_chapter": True},
+            chapter_source_hash="hash-1",
+            model_name="analyst",
+            prompt_version="v1",
+            run_id="summaries",
+            validation_status="failed",
+            is_story_chapter=1,
+        )
+        save_chapter_structured_and_short(
+            conn,
+            release_id=release_id,
+            chapter_number=1,
+            structured_summary={"is_story_chapter": True},
+            narrative_progression="失败摘要。",
+            derived_from_chapter_hash="hash-1",
+            run_id="summaries",
+            validation_status="failed",
+        )
+    finally:
+        conn.close()
+
+    report = check_stage_gate(
+        stage_name="packets-build",
+        release_id=release_id,
+        run_id="run",
+        config=load_config(),
+    )
+
+    assert report.success is False
+    assert "Missing validated summary rows" in report.message()
+
+
 def test_production_gate_failure_persists_event_before_execution(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     calls: list[str] = []

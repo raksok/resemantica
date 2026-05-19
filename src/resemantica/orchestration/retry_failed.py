@@ -188,6 +188,42 @@ def _query_ints(conn: sqlite3.Connection, query: str, params: tuple[object, ...]
     return [int(row[0]) for row in rows if row[0] is not None]
 
 
+def _failed_summary_categories(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    chapters: list[int],
+) -> set[str]:
+    if not chapters:
+        return set()
+    placeholders = ",".join("?" for _ in chapters)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT content_json
+            FROM summary_drafts
+            WHERE release_id = ?
+              AND summary_type = 'chapter_summary_zh_structured'
+              AND validation_status = 'failed'
+              AND chapter_number IN ({placeholders})
+            """,
+            (release_id, *chapters),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    categories: set[str] = set()
+    for row in rows:
+        try:
+            payload = json.loads(str(row["content_json"]))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(payload, dict):
+            category = payload.get("failure_category")
+            if isinstance(category, str) and category.strip():
+                categories.add(category)
+    return categories
+
+
 def _plan_summaries(
     *,
     conn: sqlite3.Connection,
@@ -236,6 +272,7 @@ def _plan_summaries(
             WHERE release_id = ?
               AND chapter_number = ?
               AND summary_type = 'chapter_summary_zh_structured'
+              AND validation_status = 'approved'
             LIMIT 1
             """,
             (release_id, number),
@@ -247,6 +284,7 @@ def _plan_summaries(
             WHERE release_id = ?
               AND chapter_number = ?
               AND summary_type = 'chapter_summary_zh_short'
+              AND validation_status = 'approved'
             LIMIT 1
             """,
             (release_id, number),
@@ -257,13 +295,20 @@ def _plan_summaries(
     if not affected:
         return [], []
     retry_end = end if end is not None else (max(extracted) if extracted else max(affected))
+    categories = _failed_summary_categories(conn, release_id=release_id, chapters=affected)
+    missing_without_failed = set(missing) - set(failed)
+    reason = (
+        "llm_content_validation_failed"
+        if categories == {"llm_content_validation_failed"} and not missing_without_failed
+        else "failed_or_missing_summary_rows"
+    )
     return [
         _unit(
             release_id=release_id,
             run_id=run_id,
             stage="preprocess-summaries",
             chapters=affected,
-            reason="failed_or_missing_summary_rows",
+            reason=reason,
             start=min(affected),
             end=retry_end,
         )
@@ -459,6 +504,7 @@ def _plan_continuity(
                 WHERE release_id = ?
                   AND chapter_number = ?
                   AND summary_type = 'story_so_far_zh_graph_compact'
+                  AND validation_status = 'approved'
                 LIMIT 1
                 """,
                 (release_id, chapter_number),

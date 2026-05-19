@@ -46,6 +46,19 @@ Event model minimum fields:
 6. Cleanup runs as a two-step workflow: plan first, apply second.
 7. CLI, TUI, and tracking consume the same event stream and run metadata.
 
+## Summary Validation Events
+
+`preprocess-summaries.llm_validation_warning` is emitted at most once per flagged LLM validation attempt and chapter. Its payload includes:
+
+- `flags`: all fatal validator flags from that attempt
+- `flag_count`
+- `attempt_number`
+- `action`: `retry` while retry budget remains, or `fail` on the exhausted attempt
+
+Validator `warnings` from `summary_zh_validate.txt` do not emit warning events. They are written to summary artifacts as review notes.
+
+When content-validation retries exhaust, `preprocess-summaries.chapter_failed` is emitted with severity `error`, `reason = "llm_content_validation_failed"`, and the final `llm_validation_flags` payload.
+
 ## Validation Ownership
 
 - orchestration validates legal stage transitions

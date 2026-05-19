@@ -184,6 +184,41 @@ def _seed_summaries(
         conn.close()
 
 
+def _seed_failed_summary_audit_rows(
+    *,
+    release_id: str,
+    chapter_number: int,
+    chapter_hash: str,
+) -> None:
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        save_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="chapter_summary_zh_short",
+            content_zh="失败的摘要。",
+            derived_from_chapter_hash=chapter_hash,
+            run_id="seed-summaries",
+            validation_status="failed",
+        )
+        save_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="story_so_far_zh",
+            content_zh="失败的故事进度。",
+            derived_from_chapter_hash=chapter_hash,
+            run_id="seed-summaries",
+            validation_status="failed",
+        )
+    finally:
+        conn.close()
+
+
 def _seed_idioms(*, release_id: str, rows: list[tuple[str, str, str]]) -> None:
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
@@ -348,6 +383,35 @@ def _read_json(path: Path) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("Invalid JSON payload")
     return payload
+
+
+def test_packet_builder_ignores_failed_summary_audit_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m57-packet-failed-summaries"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三加入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    _seed_failed_summary_audit_rows(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+    )
+
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        graph_client=GraphClient(backend=InMemoryGraphBackend()),
+    )
+
+    assert result.status == "skipped"
+    assert result.stale_reasons == ["missing_story_so_far_summary"]
 
 
 def test_packet_schema_and_provenance_hashes(

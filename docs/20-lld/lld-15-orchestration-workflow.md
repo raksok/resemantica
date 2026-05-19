@@ -78,7 +78,9 @@ Supported retry stages are:
 - `translate-range`
 - `all`
 
-`--dry-run` performs read-only discovery and prints the retry plan. `--chapter`, `--start`, and `--end` constrain discovery and execution. Summaries rewind `summary_checkpoints` to before the earliest affected chapter before execution; glossary and idiom conflicts are reported as review-required and are not retried automatically. EPUB rebuild/extract are intentionally excluded because they do not expose finer durable failed units.
+`--dry-run` performs read-only discovery and prints the retry plan. `--chapter`, `--start`, and `--end` constrain discovery and execution. Summaries rewind `summary_checkpoints` to before the earliest affected chapter before execution; `llm_content_validation_failed` summary drafts are retryable and rerun summary generation with fresh correction feedback. Glossary and idiom conflicts are reported as review-required and are not retried automatically. EPUB rebuild/extract are intentionally excluded because they do not expose finer durable failed units.
+
+Summary rows with `validation_status = "failed"` are audit evidence only. Production gates for packets and translation require approved summary rows, so flagged summaries fail and retry before packet assembly or translation pass 1 can consume them.
 
 ## Translation Stage Behavior
 

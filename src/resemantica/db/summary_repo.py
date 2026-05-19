@@ -321,18 +321,24 @@ def get_validated_summary(
     release_id: str,
     chapter_number: int,
     summary_type: str,
+    validation_status: str | None = "approved",
 ) -> ValidatedSummaryZhRecord | None:
+    status_filter = "" if validation_status is None else " AND validation_status = ?"
+    params: list[Any] = [release_id, chapter_number, summary_type]
+    if validation_status is not None:
+        params.append(validation_status)
     row = conn.execute(
-        """
+        f"""
         SELECT summary_id, release_id, chapter_number, summary_type, content_zh,
                derived_from_chapter_hash, validation_status, run_id, schema_version
         FROM validated_summaries_zh
         WHERE release_id = ?
           AND chapter_number = ?
           AND summary_type = ?
+          {status_filter}
         LIMIT 1
         """,
-        (release_id, chapter_number, summary_type),
+        tuple(params),
     ).fetchone()
     if row is None:
         return None
@@ -345,6 +351,7 @@ def list_validated_summaries(
     release_id: str,
     summary_type: str | None = None,
     max_chapter_number: int | None = None,
+    validation_status: str | None = "approved",
 ) -> list[ValidatedSummaryZhRecord]:
     query = """
         SELECT summary_id, release_id, chapter_number, summary_type, content_zh,
@@ -359,6 +366,9 @@ def list_validated_summaries(
     if max_chapter_number is not None:
         query += " AND chapter_number <= ?"
         params.append(max_chapter_number)
+    if validation_status is not None:
+        query += " AND validation_status = ?"
+        params.append(validation_status)
     query += " ORDER BY chapter_number, summary_type"
 
     rows = conn.execute(query, tuple(params)).fetchall()

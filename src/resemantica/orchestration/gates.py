@@ -341,6 +341,7 @@ def _check_summary_inputs(
                     WHERE release_id = ?
                       AND chapter_number = ?
                       AND summary_type = ?
+                      AND validation_status = 'approved'
                     LIMIT 1
                     """,
                     (release_id, number, summary_type),

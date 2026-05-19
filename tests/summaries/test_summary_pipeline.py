@@ -1413,41 +1413,43 @@ def test_chapter_exclusion_patterns(tmp_path: Path, monkeypatch) -> None:
 def test_llm_validation_flags_in_artifact(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "m4-flags"
-    for i in [1, 2]:
-        _write_extracted_chapter(
-            release_id=release_id,
-            chapter_number=i,
-            source_text=f"第{i}章内容。",
-            chapter_source_hash=f"hash-ch{i}",
-        )
-
-    llm = ScriptedSummaryLLM(
-        {
-            1: {
-                "chapter_number": 1,
-                "characters_mentioned": ["甲"],
-                "key_events": ["甲出场"],
-                "new_terms": [],
-                "relationships_changed": [],
-                "setting": "山镇",
-                "tone": "quiet",
-                "narrative_progression": "甲在山镇出现。",
-                "is_story_chapter": True,
-            },
-            2: {
-                "chapter_number": 2,
-                "characters_mentioned": ["甲"],
-                "key_events": ["甲离开"],
-                "new_terms": [],
-                "relationships_changed": [],
-                "setting": "山路",
-                "tone": "urgent",
-                "narrative_progression": "甲踏上路程。",
-                "is_story_chapter": True,
-            },
-        },
-        validation_flags={1: ["unsupported_claim"]},
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="第1章内容。",
+        chapter_source_hash="hash-ch1",
     )
+
+    class OneFlagThenCleanLLM(SequencedSummaryLLM):
+        def __init__(self) -> None:
+            super().__init__(
+                [
+                    _structured_summary_payload(
+                        chapter_number=1,
+                        key_events=["甲出场并看见未证实的事件"],
+                        narrative_progression="甲在山镇出现，并看见未证实的事件。",
+                    ),
+                    _structured_summary_payload(
+                        chapter_number=1,
+                        key_events=["甲出场"],
+                        narrative_progression="甲在山镇出现。",
+                    ),
+                ]
+            )
+            self.validation_calls = 0
+
+        def generate_text(self, *, model_name: str, prompt: str) -> str:
+            if "SUMMARY_ZH_VALIDATE" in prompt:
+                self.validation_calls += 1
+                if self.validation_calls == 1:
+                    return json.dumps(
+                        {"flags": ["unsupported_claim"], "warnings": ["review note"]},
+                        ensure_ascii=False,
+                    )
+                return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
+            return super().generate_text(model_name=model_name, prompt=prompt)
+
+    llm = OneFlagThenCleanLLM()
 
     result = preprocess_summaries(
         release_id=release_id,
@@ -1455,7 +1457,8 @@ def test_llm_validation_flags_in_artifact(tmp_path: Path, monkeypatch) -> None:
         llm_client=llm,
     )
     assert result["status"] == "success"
-    assert result["chapters_processed"] == 2
+    assert result["chapters_processed"] == 1
+    assert len(llm.prompts) == 2
 
     config = load_config()
     paths = derive_paths(config, release_id=release_id)
@@ -1463,7 +1466,135 @@ def test_llm_validation_flags_in_artifact(tmp_path: Path, monkeypatch) -> None:
     assert zh_artifact.exists()
     data = json.loads(zh_artifact.read_text(encoding="utf-8"))
     assert "llm_validation_flags" in data
-    assert data["llm_validation_flags"] == ["unsupported_claim"]
+    assert data["llm_validation_flags"] == []
+
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        rows = conn.execute(
+            """
+            SELECT validation_status
+            FROM validated_summaries_zh
+            WHERE release_id = ? AND chapter_number = 1
+            ORDER BY summary_type
+            """,
+            (release_id,),
+        ).fetchall()
+        assert {row["validation_status"] for row in rows} == {"approved"}
+    finally:
+        conn.close()
+
+    tracking = ensure_tracking_db(release_id)
+    try:
+        events = load_events(tracking, run_id="summaries-001", release_id=release_id, limit=100)
+    finally:
+        tracking.close()
+    warnings = [
+        event.payload
+        for event in events
+        if event.event_type == "preprocess-summaries.llm_validation_warning"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0]["flags"] == ["unsupported_claim"]
+    assert warnings[0]["flag_count"] == 1
+    assert warnings[0]["attempt_number"] == 1
+    assert warnings[0]["action"] == "retry"
+
+
+def test_llm_validation_flags_exhaust_retries_and_persist_failed_audit_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m57-flags-exhausted"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三只是在山中修炼。",
+        chapter_source_hash="hash-ch1",
+    )
+    llm = ScriptedSummaryLLM(
+        {1: _structured_summary_payload(chapter_number=1, key_events=["张三已经成为宗主"])},
+        validation_flags={1: ["unsupported_claim", "premature_reveal"]},
+    )
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id="summaries-001",
+        llm_client=llm,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failed_chapters"] == [1]
+    assert result["failure_reasons"] == {"1": "llm_content_validation_failed"}
+    assert result["chapter_artifacts"][0]["llm_validation_flags"] == [
+        "unsupported_claim",
+        "premature_reveal",
+    ]
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        cp = get_summary_checkpoint(conn, release_id=release_id, run_id="summaries-001")
+        assert cp is None or cp[0] == 0
+        draft = conn.execute(
+            """
+            SELECT validation_status, content_json
+            FROM summary_drafts
+            WHERE release_id = ? AND chapter_number = 1
+            """,
+            (release_id,),
+        ).fetchone()
+        assert draft is not None
+        assert draft["validation_status"] == "failed"
+        draft_content = json.loads(draft["content_json"])
+        assert draft_content["failure_category"] == "llm_content_validation_failed"
+        assert draft_content["llm_validation_flags"] == [
+            "unsupported_claim",
+            "premature_reveal",
+        ]
+        assert get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=1,
+            summary_type="chapter_summary_zh_short",
+        ) is None
+        audit_short = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=1,
+            summary_type="chapter_summary_zh_short",
+            validation_status=None,
+        )
+        assert audit_short is not None
+        assert audit_short.validation_status == "failed"
+        story_row = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=1,
+            summary_type="story_so_far_zh",
+            validation_status=None,
+        )
+        assert story_row is None
+    finally:
+        conn.close()
+
+    tracking = ensure_tracking_db(release_id)
+    try:
+        events = load_events(tracking, run_id="summaries-001", release_id=release_id, limit=100)
+    finally:
+        tracking.close()
+    warnings = [
+        event.payload
+        for event in events
+        if event.event_type == "preprocess-summaries.llm_validation_warning"
+    ]
+    assert len(warnings) == 4
+    final_warning = max(warnings, key=lambda payload: int(payload["attempt_number"]))
+    assert final_warning["flags"] == ["unsupported_claim", "premature_reveal"]
+    assert final_warning["attempt_number"] == 4
+    assert final_warning["action"] == "fail"
 
 
 def test_non_story_chapter_validator_flagged() -> None:

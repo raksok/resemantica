@@ -570,6 +570,65 @@ class TestRetryFailed:
         assert unit.reason == "failed_or_missing_summary_rows"
         assert not manifest_path.exists()
 
+    def test_retry_failed_reports_llm_content_validation_summary_failure(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-summary-llm-validation"
+        run_id = "production"
+        self._write_extracted_chapter(release_id, 1)
+
+        from resemantica.db.sqlite import open_connection
+        from resemantica.db.summary_repo import (
+            ensure_summary_schema,
+            save_chapter_structured_and_short,
+            save_summary_draft,
+        )
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        ensure_summary_schema(conn)
+        try:
+            save_summary_draft(
+                conn,
+                release_id=release_id,
+                chapter_number=1,
+                summary_type="chapter_summary_zh_structured",
+                content={
+                    "failure_category": "llm_content_validation_failed",
+                    "validation_errors": ["llm_validation_flag: unsupported_claim"],
+                    "llm_validation_flags": ["unsupported_claim"],
+                },
+                chapter_source_hash="hash-ch1",
+                model_name="model",
+                prompt_version="1",
+                run_id=run_id,
+                validation_status="failed",
+                is_story_chapter=1,
+            )
+            save_chapter_structured_and_short(
+                conn,
+                release_id=release_id,
+                chapter_number=1,
+                structured_summary={"is_story_chapter": True, "narrative_progression": "失败摘要。"},
+                narrative_progression="失败摘要。",
+                derived_from_chapter_hash="hash-ch1",
+                run_id=run_id,
+                validation_status="failed",
+            )
+        finally:
+            conn.close()
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-summaries",
+        )
+
+        assert len(plan.retryable) == 1
+        assert plan.retryable[0].stage == "preprocess-summaries"
+        assert plan.retryable[0].chapters == [1]
+        assert plan.retryable[0].reason == "llm_content_validation_failed"
+
     def test_retry_failed_reports_glossary_conflict_as_non_retryable(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         release_id = "retry-glossary-conflict"

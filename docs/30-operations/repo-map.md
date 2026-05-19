@@ -39,10 +39,10 @@ Implemented package layout (M3 slice):
 
 Implemented package layout (M4 slice):
 
-- `src/resemantica/summaries/`: chapter summary generation, deterministic validation, and summary derivation pipeline
-- `src/resemantica/db/summary_repo.py`: SQLite repository for summary drafts, validated Chinese summaries, and derived English summaries
-- `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_en_derive.txt`, `summary_graph_continuity_update.txt`: summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
-- `tests/summaries/`: continuity conflict, glossary conflict, future-leak, and deterministic story rebuild tests
+- `src/resemantica/summaries/`: chapter summary generation, deterministic validation, LLM content-validation gates, and summary derivation pipeline
+- `src/resemantica/db/summary_repo.py`: SQLite repository for summary drafts, validated Chinese summaries, and derived English summaries; validated-summary reads are approved-only by default with explicit audit access for failed rows
+- `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_zh_validate.txt`, `summary_en_derive.txt`, `summary_graph_continuity_update.txt`: summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
+- `tests/summaries/`: continuity conflict, glossary conflict, future-leak, deterministic story rebuild, schema recovery, and fatal LLM validation flag tests
 - Summary schema recovery is scoped to `src/resemantica/summaries/generator.py`: after one targeted retry, known recoverable structured-summary drift can be defaulted or dropped with warning codes that are written to summary artifacts under `warnings`.
 - `src/resemantica/summaries/continuity.py`: post-graph graph-grounded compact continuity refresh and deterministic chapter-safe graph anchor formatting
 
@@ -69,7 +69,7 @@ Implemented package layout (M7 slice):
 
 Implemented package layout (M8 slice):
 
-- `src/resemantica/packets/`: chapter packet schemas, graph-enriched packet builder, graph-grounded continuity preference, paragraph bundle derivation, and stale detection
+- `src/resemantica/packets/`: chapter packet schemas, graph-enriched packet builder, graph-grounded continuity preference, approved-only summary consumption, paragraph bundle derivation, and stale detection
 - `src/resemantica/db/packet_repo.py`: SQLite packet metadata repository for reproducibility and stale checks
 - `src/resemantica/llm/tokens.py`: cl100k token counting utility for packet/bundle budgeting with 5% safety-buffer enforcement
 - `src/resemantica/cli.py`: `packets build` command wiring
@@ -89,7 +89,7 @@ Implemented package layout (M10 slice):
 - `src/resemantica/orchestration/`: centralized run control, stage ordering, retries, resume behavior, cleanup planning, and structured events
 - `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER` including `preprocess-continuity` between graph and packet build
 - `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production, stage execution, transition validation, gate handling, and auto review artifact generation for unresolved votes
-- `src/resemantica/orchestration/retry_failed.py`: durable failed-unit planner and executor for `run retry-failed`
+- `src/resemantica/orchestration/retry_failed.py`: durable failed-unit planner and executor for `run retry-failed`, including `llm_content_validation_failed` summary recovery
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
 - `src/resemantica/orchestration/cleanup.py`: shared cleanup scopes plus `plan_cleanup()` and `apply_cleanup()` for validated, two-step cleanup workflow
 - `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission
