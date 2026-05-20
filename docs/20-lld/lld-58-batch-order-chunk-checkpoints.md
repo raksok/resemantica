@@ -36,7 +36,7 @@ For each active summary chunk:
 
 1. Run Chinese structured generation and LLM validation for the chunk.
 2. Advance `zh_last_chapter` as soon as contiguous Chinese results complete.
-3. Assemble ordered Chinese story and compact rows.
+3. Assemble ordered Chinese story and compact rows. If a compact row exceeds `summaries.story_compact_max_tokens`, the summary compaction helper repairs the over-budget draft before the chunk fails; only an under-budget compact result is cached or saved.
 4. Run English derivation for the chunk.
 5. Advance `en_last_chapter` as contiguous English results complete.
 6. Mark the chunk completed only after English artifacts and checkpoints are written.

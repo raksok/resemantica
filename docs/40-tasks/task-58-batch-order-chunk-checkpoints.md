@@ -17,6 +17,7 @@ Make long batch-order summary and translation runs crash-recoverable at chunk bo
 - Add `[batch_order]` config for summary and translation chunk sizing.
 - Add `chunk_checkpoints` storage and repository helpers.
 - Run `preprocess-summaries` in chunk order for large ranges: Chinese generation and validation, ordered story assembly, then English derivation.
+- Preserve compact-summary budget recovery inside ordered story assembly: over-budget compact drafts are repaired before chunk failure and only valid compact rows can complete a chunk.
 - Run batched `translate-range` in chunk order for large ranges: pass1, pass2, pass3 per chunk.
 - Add `last-good-chunk` cleanup planning/apply behavior for summaries and translation.
 - Document resume, cleanup, and event payload behavior.

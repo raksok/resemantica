@@ -45,6 +45,49 @@ def build_story_so_far(*, short_summaries: list[ValidatedSummaryZhRecord]) -> st
     return "\n".join(lines)
 
 
+def _render_story_compact_repair_prompt(
+    *,
+    previous_story_so_far_zh_compact: str,
+    chapter_summary_zh_short: str,
+    over_budget_text: str,
+    token_count: int,
+    max_tokens: int,
+) -> str:
+    return render_named_sections(
+        """SUMMARY_STORY_REPAIR
+
+## ANALYST INSTRUCTION
+Return only the corrected Chinese compact continuity summary.
+
+## PREVIOUS STORY SO FAR ZH COMPACT
+{PREVIOUS_STORY_SO_FAR_ZH_COMPACT}
+
+## CURRENT CHAPTER SUMMARY ZH SHORT
+{CHAPTER_SUMMARY_ZH_SHORT}
+
+## OVER-BUDGET DRAFT
+{OVER_BUDGET_DRAFT}
+
+## TOKEN BUDGET
+current={CURRENT_TOKEN_COUNT}
+maximum={STORY_COMPACT_MAX_TOKENS}
+
+## INSTRUCTIONS
+Rewrite the over-budget draft into dense Chinese prose under the maximum token budget.
+Preserve unresolved plot threads, active character/faction/location state, relationship changes, important terms,
+and active risks.
+Remove resolved detail, repetition, markdown, headings, explanations, analysis, and chain-of-thought.
+""",
+        sections={
+            "PREVIOUS_STORY_SO_FAR_ZH_COMPACT": previous_story_so_far_zh_compact.strip(),
+            "CHAPTER_SUMMARY_ZH_SHORT": chapter_summary_zh_short.strip(),
+            "OVER_BUDGET_DRAFT": over_budget_text.strip(),
+            "CURRENT_TOKEN_COUNT": str(token_count),
+            "STORY_COMPACT_MAX_TOKENS": str(max_tokens),
+        },
+    )
+
+
 def compact_story_so_far(
     *,
     llm_client: LLMClient,
@@ -90,16 +133,30 @@ def compact_story_so_far(
         if cached is not None
         else llm_client.generate_text(model_name=model_name, prompt=prompt).strip()
     )
-    if cache_root is not None and cached is None:
-        save_cached_text(cache_root, identity, compact)
     if not compact.strip():
         raise ValueError("story_so_far_zh_compact generation returned empty text")
-    if count_tokens(compact) > max_tokens:
-        raise ValueError(
-            "story_so_far_zh_compact exceeds configured token budget: "
-            f"{count_tokens(compact)} > {max_tokens}"
+    token_count = count_tokens(compact)
+    for _attempt in range(2):
+        if token_count <= max_tokens:
+            compact = compact.strip()
+            if cache_root is not None and (cached is None or compact != cached):
+                save_cached_text(cache_root, identity, compact)
+            return compact, source_hash
+        repair_prompt = _render_story_compact_repair_prompt(
+            previous_story_so_far_zh_compact=previous_story_so_far_zh_compact,
+            chapter_summary_zh_short=chapter_summary_zh_short,
+            over_budget_text=compact,
+            token_count=token_count,
+            max_tokens=max_tokens,
         )
-    return compact.strip(), source_hash
+        compact = llm_client.generate_text(model_name=model_name, prompt=repair_prompt).strip()
+        if not compact:
+            raise ValueError("story_so_far_zh_compact generation returned empty text")
+        token_count = count_tokens(compact)
+    raise ValueError(
+        "story_so_far_zh_compact exceeds configured token budget after repair: "
+        f"{token_count} > {max_tokens}"
+    )
 
 
 def derive_english_summary(

@@ -20,7 +20,10 @@ from resemantica.db.summary_repo import (
 )
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
+from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
+from resemantica.llm.prompts import render_named_sections
 from resemantica.settings import derive_paths, load_config
+from resemantica.summaries import derivation as summary_derivation
 from resemantica.summaries.pipeline import preprocess_summaries
 from resemantica.tracking.repo import ensure_tracking_db, load_events
 
@@ -1274,6 +1277,131 @@ def test_story_compaction_failure_fails_preprocess_summaries(
             release_id=release_id,
             run_id="summaries-001",
             llm_client=llm,
+        )
+
+
+def test_story_compaction_repairs_over_budget_output(monkeypatch) -> None:
+    monkeypatch.setattr(summary_derivation, "count_tokens", len)
+
+    class RepairingLLM:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            self.prompts.append(prompt)
+            if "SUMMARY_STORY_REPAIR" in prompt:
+                return "短。"
+            return "这是一段明显超过预算的连续性摘要。"
+
+    llm = RepairingLLM()
+    compact, _source_hash = summary_derivation.compact_story_so_far(
+        llm_client=llm,
+        release_id="repair",
+        chapter_number=1,
+        model_name="analyst",
+        prompt_template=(
+            "SUMMARY_STORY_COMPACT\n"
+            "{PREVIOUS_STORY_SO_FAR_ZH_COMPACT}\n"
+            "{CHAPTER_SUMMARY_ZH_SHORT}\n"
+            "{STORY_COMPACT_MAX_TOKENS}"
+        ),
+        prompt_version="test",
+        previous_story_so_far_zh_compact="前情。",
+        chapter_summary_zh_short="本章。",
+        max_tokens=5,
+        cache_root=None,
+    )
+
+    assert compact == "短。"
+    assert [("SUMMARY_STORY_REPAIR" in prompt) for prompt in llm.prompts] == [False, True]
+    assert "SUMMARY_STORY_COMPACT" not in llm.prompts[1]
+
+
+def test_story_compaction_repairs_stale_over_budget_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(summary_derivation, "count_tokens", len)
+    prompt_template = (
+        "SUMMARY_STORY_COMPACT\n"
+        "{PREVIOUS_STORY_SO_FAR_ZH_COMPACT}\n"
+        "{CHAPTER_SUMMARY_ZH_SHORT}\n"
+        "{STORY_COMPACT_MAX_TOKENS}"
+    )
+    previous = "前情。"
+    current = "本章。"
+    max_tokens = 5
+    rendered_prompt = render_named_sections(
+        prompt_template,
+        sections={
+            "PREVIOUS_STORY_SO_FAR_ZH_COMPACT": previous,
+            "CHAPTER_SUMMARY_ZH_SHORT": current,
+            "STORY_COMPACT_MAX_TOKENS": str(max_tokens),
+        },
+    )
+    source_hash = hashlib.sha256(f"{previous}\n{current}".encode("utf-8")).hexdigest()
+    identity = LLMCacheIdentity(
+        release_id="repair-cache",
+        chapter_number=1,
+        source_hash=source_hash,
+        stage_name="preprocess-summaries.story-compact",
+        chunk_index=1,
+        model_name="analyst",
+        prompt_version="test",
+        prompt_hash=hash_prompt(rendered_prompt),
+    )
+    save_cached_text(tmp_path, identity, "这是一段已经缓存的过长连续性摘要。")
+
+    class RepairingLLM:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            self.prompts.append(prompt)
+            return "短。"
+
+    llm = RepairingLLM()
+    compact, _source_hash = summary_derivation.compact_story_so_far(
+        llm_client=llm,
+        release_id="repair-cache",
+        chapter_number=1,
+        model_name="analyst",
+        prompt_template=prompt_template,
+        prompt_version="test",
+        previous_story_so_far_zh_compact=previous,
+        chapter_summary_zh_short=current,
+        max_tokens=max_tokens,
+        cache_root=tmp_path,
+    )
+
+    assert compact == "短。"
+    assert len(llm.prompts) == 1
+    assert "SUMMARY_STORY_REPAIR" in llm.prompts[0]
+    assert "SUMMARY_STORY_COMPACT" not in llm.prompts[0]
+    assert load_cached_text(tmp_path, identity) == "短。"
+
+
+def test_story_compaction_failure_after_repairs_still_fails(monkeypatch) -> None:
+    monkeypatch.setattr(summary_derivation, "count_tokens", len)
+
+    class OverBudgetLLM:
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            return "始终超过预算的连续性摘要。"
+
+    with pytest.raises(ValueError, match="exceeds configured token budget after repair"):
+        summary_derivation.compact_story_so_far(
+            llm_client=OverBudgetLLM(),
+            release_id="repair-fails",
+            chapter_number=1,
+            model_name="analyst",
+            prompt_template=(
+                "SUMMARY_STORY_COMPACT\n"
+                "{PREVIOUS_STORY_SO_FAR_ZH_COMPACT}\n"
+                "{CHAPTER_SUMMARY_ZH_SHORT}\n"
+                "{STORY_COMPACT_MAX_TOKENS}"
+            ),
+            prompt_version="test",
+            previous_story_so_far_zh_compact="前情。",
+            chapter_summary_zh_short="本章。",
+            max_tokens=5,
+            cache_root=None,
         )
 
 

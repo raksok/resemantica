@@ -44,6 +44,7 @@ Implemented package layout (M4 slice):
 - `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_zh_validate.txt`, `summary_en_derive.txt`, `summary_graph_continuity_update.txt`: summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
 - `tests/summaries/`: continuity conflict, glossary conflict, future-leak, deterministic story rebuild, schema recovery, and fatal LLM validation flag tests
 - Summary schema recovery is scoped to `src/resemantica/summaries/generator.py`: after one targeted retry, known recoverable structured-summary drift can be defaulted or dropped with warning codes that are written to summary artifacts under `warnings`.
+- Summary compact continuity recovery is scoped to `src/resemantica/summaries/derivation.py`: over-budget `story_so_far_zh_compact` drafts are repaired before caching, and stale over-budget cache entries are replaced with under-budget repaired text.
 - `src/resemantica/summaries/continuity.py`: post-graph graph-grounded compact continuity refresh and deterministic chapter-safe graph anchor formatting
 
 Implemented package layout (M5 slice):

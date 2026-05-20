@@ -49,8 +49,9 @@ Split `preprocess-summaries` into concurrent chapter-local Chinese work, ordered
 - Config defaults and invalid values.
 - Out-of-order Chinese generation with ordered full and compact story rows.
 - Compact story generation from previous compact plus current short summary.
+- Compact story over-budget drafts are repaired once and only under-budget compact results are cached.
 - English story derivation from compact Chinese continuity.
-- Compaction failure fails `preprocess-summaries`.
+- Empty compaction output, or output still over budget after repair, fails `preprocess-summaries`.
 - Packet compact preference, full fallback, and summary hash invalidation.
 
 ## Done Criteria
