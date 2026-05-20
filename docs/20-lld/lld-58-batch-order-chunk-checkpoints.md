@@ -41,7 +41,7 @@ For each active summary chunk:
 5. Advance `en_last_chapter` as contiguous English results complete.
 6. Mark the chunk completed only after English artifacts and checkpoints are written.
 
-Completed summary chunks are skipped on resume. Incomplete chunks still resume from `summary_checkpoints`.
+Completed summary chunks are skipped on resume only when their stored `chapter_start`/`chapter_end` match the current chunk and their metadata `last_good_chapter` is at least the chunk's `chapter_end`. Incomplete chunks, stale completed chunks whose English checkpoint still lags the chunk end, and completed rows from a different chapter scope resume from `summary_checkpoints`. If `story_last_chapter` is ahead of `en_last_chapter`, the summary pipeline creates English-only backfill jobs from approved Chinese short and compact rows and advances through persisted English rows after the gap is filled.
 
 ## Batched Translation Execution
 
@@ -63,4 +63,4 @@ Existing pass checkpoints and run-state pass lists remain the normal resume auth
 
 ## Events
 
-Chunk events include `chunk_index`, `chunk_count`, `chapter_start`, `chapter_end`, `chunk_size`, and `last_good_chapter`.
+Chunk events include `chunk_index`, `chunk_count`, `chapter_start`, `chapter_end`, `chunk_size`, and `last_good_chapter`. For summary chunks, `last_good_chapter` is the current English phase checkpoint and determines whether a completed chunk can be skipped on resume.

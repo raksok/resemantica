@@ -83,7 +83,7 @@ Long batch-order stages emit chunk lifecycle events:
 - `translate-range.chunk_completed`
 - `translate-range.chunk_failed`
 
-Payloads include `chunk_index`, `chunk_count`, `chapter_start`, `chapter_end`, `chunk_size`, and `last_good_chapter`. Failure events also include the failure reason or failed chapter data when available.
+Payloads include `chunk_index`, `chunk_count`, `chapter_start`, `chapter_end`, `chunk_size`, and `last_good_chapter`. For `preprocess-summaries`, `last_good_chapter` is the current English phase checkpoint; a completed summary chunk is resume-skippable only when the stored chunk range matches the current chunk and that value is at least the chunk's `chapter_end`. Failure events also include the failure reason or failed chapter data when available.
 
 ## Validation Ownership
 
@@ -100,6 +100,7 @@ Payloads include `chunk_index`, `chunk_count`, `chapter_start`, `chapter_end`, `
 - resume is driven by persisted SQLite checkpoints or authoritative metadata, not inferred from filesystem guesses
 - stage checkpoints advance only after the corresponding durable unit has been safely written
 - chunk checkpoints advance only after the corresponding chunk has completed every phase/pass in that stage
+- summary phase checkpoints remain authoritative per phase; summary chunk completion metadata cannot override a lagging `zh_last_chapter`, `story_last_chapter`, or `en_last_chapter`
 - cleanup never deletes authority state outside its declared scope
 
 ## Tests

@@ -105,7 +105,9 @@ Summary preprocessing is a primary local-inference bottleneck. The analyst promp
 - `en_last_chapter` advances as soon as completed English results are contiguous from the prior checkpoint, even before the full English worker pool drains
 - `story_last_chapter` advances during ordered story assembly
 - resume skips the three internal phases independently when their checkpoint is complete
-- chunked resume skips completed `preprocess-summaries` chunks using `chunk_checkpoints`; incomplete chunks still resume from summary phase checkpoints
+- when `story_last_chapter` is ahead of `en_last_chapter`, resume may backfill English-only jobs from approved `chapter_summary_zh_short` and `story_so_far_zh_compact` rows without rebuilding Chinese or story phases
+- English checkpoint advancement consults persisted `derived_summaries_en` rows, so filling an earlier English gap can advance through later already-derived rows
+- chunked resume skips completed `preprocess-summaries` chunks using `chunk_checkpoints` only when the stored chunk range matches the current chunk and metadata `last_good_chapter` covers the chunk end; incomplete, stale, or different-scope completed chunks still resume from summary phase checkpoints
 - `preprocess summaries` and orchestration enable resume by default for the same release/run
 - `--force` ignores summary checkpoints for the requested chapter scope and rebuilds all three phases
 - `run retry-failed --stage preprocess-summaries` finds failed or missing required summary rows, rewinds summary checkpoints to before the earliest affected chapter, and reruns from that chapter through the requested end without forcing unrelated cache hits.

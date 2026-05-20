@@ -39,7 +39,7 @@ Implemented package layout (M3 slice):
 
 Implemented package layout (M4 slice):
 
-- `src/resemantica/summaries/`: chapter summary generation, deterministic validation, LLM content-validation gates, chunked batch-order execution, and summary derivation pipeline
+- `src/resemantica/summaries/`: chapter summary generation, deterministic validation, LLM content-validation gates, chunked batch-order execution, summary derivation pipeline, and English checkpoint backfill/resume from approved Chinese continuity rows
 - `src/resemantica/db/summary_repo.py`: SQLite repository for summary drafts, validated Chinese summaries, and derived English summaries; validated-summary reads are approved-only by default with explicit audit access for failed rows
 - `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_zh_validate.txt`, `summary_en_derive.txt`, `summary_graph_continuity_update.txt`: summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
 - `tests/summaries/`: continuity conflict, glossary conflict, future-leak, deterministic story rebuild, schema recovery, and fatal LLM validation flag tests

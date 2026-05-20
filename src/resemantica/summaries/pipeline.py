@@ -192,6 +192,8 @@ def _advance_chinese_checkpoint(
 
 def _advance_english_checkpoint(
     *,
+    conn: Any,
+    release_id: str,
     completed: dict[int, _EnglishPhaseResult],
     current: int,
     ordered_numbers: list[int],
@@ -200,10 +202,57 @@ def _advance_english_checkpoint(
     for number in ordered_numbers:
         if number <= advanced:
             continue
-        if number not in completed:
+        if number not in completed and not _has_complete_english_rows(
+            conn,
+            release_id=release_id,
+            chapter_number=number,
+        ):
             break
         advanced = number
     return advanced
+
+
+def _has_complete_english_rows(
+    conn: Any,
+    *,
+    release_id: str,
+    chapter_number: int,
+) -> bool:
+    rows = conn.execute(
+        """
+        SELECT summary_type
+        FROM derived_summaries_en
+        WHERE release_id = ?
+          AND chapter_number = ?
+          AND summary_type IN ('chapter_summary_en_short', 'story_so_far_en')
+        """,
+        (release_id, chapter_number),
+    ).fetchall()
+    return {str(row["summary_type"]) for row in rows} == {
+        "chapter_summary_en_short",
+        "story_so_far_en",
+    }
+
+
+def _chunk_checkpoint_is_resume_skippable(
+    checkpoint: Any,
+    *,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
+) -> bool:
+    if checkpoint.status != "completed":
+        return False
+    try:
+        last_good_chapter = int(checkpoint.metadata.get("last_good_chapter", 0))
+        checkpoint_start = int(checkpoint.chapter_start)
+        checkpoint_end = int(checkpoint.chapter_end)
+    except (TypeError, ValueError):
+        return False
+    if chapter_start is not None and checkpoint_start != chapter_start:
+        return False
+    if chapter_end is not None and checkpoint_end != chapter_end:
+        return False
+    return last_good_chapter >= checkpoint_end
 
 
 def _chunk_refs(chapter_refs: list[ChapterRef], chunk_size: int) -> list[list[ChapterRef]]:
@@ -807,7 +856,7 @@ def preprocess_summaries(
                 run_id=run_id,
                 stage_name=_STAGE_NAME,
             )
-            if completed is not None:
+            if completed is not None and _chunk_checkpoint_is_resume_skippable(completed):
                 completed_chunk_index = completed.chunk_index
         finally:
             conn.close()
@@ -826,7 +875,11 @@ def preprocess_summaries(
                 )
             finally:
                 conn.close()
-            if chunk_checkpoint is not None and chunk_checkpoint.status == "completed":
+            if chunk_checkpoint is not None and _chunk_checkpoint_is_resume_skippable(
+                chunk_checkpoint,
+                chapter_start=chunk_refs[0].chapter_number,
+                chapter_end=chunk_refs[-1].chapter_number,
+            ):
                 continue
 
         if chunked:
@@ -1232,6 +1285,62 @@ def preprocess_summaries(
                         story_last_chapter=chapter_number,
                     )
                     story_skip_until = chapter_number
+
+                backfill_chapters = {job.chapter_number for job in english_jobs}
+                for ref in chunk_refs:
+                    chapter_number = ref.chapter_number
+                    if (
+                        chapter_number <= en_skip_until
+                        or chapter_number > story_skip_until
+                        or chapter_number in backfill_chapters
+                        or _has_complete_english_rows(
+                            conn,
+                            release_id=release_id,
+                            chapter_number=chapter_number,
+                        )
+                    ):
+                        continue
+                    if _is_excluded(ref, exclude_patterns) or is_non_story_chapter(
+                        conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                    ):
+                        continue
+                    backfill_short_record = get_validated_summary(
+                        conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="chapter_summary_zh_short",
+                    )
+                    backfill_compact_record = get_validated_summary(
+                        conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh_compact",
+                    )
+                    if backfill_short_record is None or backfill_compact_record is None:
+                        continue
+                    en_artifact = paths.summaries_dir / f"chapter-{chapter_number}-en.json"
+                    results_by_chapter.setdefault(
+                        chapter_number,
+                        {
+                            "chapter_number": chapter_number,
+                            "chapter_source_hash": ref.chapter_source_hash or "",
+                            "en_artifact": str(en_artifact),
+                        },
+                    )
+                    locked_glossary = list_locked_entries(conn, release_id=release_id)
+                    english_jobs.append(
+                        _EnglishPhaseJob(
+                            chapter_number=chapter_number,
+                            locked_glossary=locked_glossary,
+                            glossary_version_hash=hash_locked_glossary(locked_glossary),
+                            short_record=backfill_short_record,
+                            compact_story_record=backfill_compact_record,
+                            en_artifact=en_artifact,
+                            zh_usage_payload={field: 0 for field in LLM_USAGE_PAYLOAD_FIELDS},
+                        )
+                    )
             finally:
                 conn.close()
 
@@ -1293,6 +1402,8 @@ def preprocess_summaries(
                     ensure_schema(conn, "summaries")
                     try:
                         new_en_checkpoint = _advance_english_checkpoint(
+                            conn=conn,
+                            release_id=release_id,
                             completed=completed_english,
                             current=en_skip_until,
                             ordered_numbers=ordered_numbers,
@@ -1307,6 +1418,27 @@ def preprocess_summaries(
                             en_skip_until = new_en_checkpoint
                     finally:
                         conn.close()
+
+            conn = open_connection(paths.db_path)
+            ensure_schema(conn, "summaries")
+            try:
+                new_en_checkpoint = _advance_english_checkpoint(
+                    conn=conn,
+                    release_id=release_id,
+                    completed=completed_english,
+                    current=en_skip_until,
+                    ordered_numbers=ordered_numbers,
+                )
+                if new_en_checkpoint > en_skip_until:
+                    set_summary_checkpoint(
+                        conn,
+                        release_id=release_id,
+                        run_id=run_id,
+                        en_last_chapter=new_en_checkpoint,
+                    )
+                    en_skip_until = new_en_checkpoint
+            finally:
+                conn.close()
 
             if chunked:
                 completed_chunk_index = chunk_index

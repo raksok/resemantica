@@ -16,12 +16,16 @@ from resemantica.db.summary_repo import (
     get_summary_checkpoint,
     get_validated_summary,
     list_derived_summaries,
+    save_derived_summary,
+    save_validated_summary,
     set_summary_checkpoint,
 )
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
 from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
 from resemantica.llm.prompts import render_named_sections
+from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+from resemantica.orchestration.events import subscribe, unsubscribe
 from resemantica.settings import derive_paths, load_config
 from resemantica.summaries import derivation as summary_derivation
 from resemantica.summaries.pipeline import preprocess_summaries
@@ -218,6 +222,73 @@ def _insert_locked_glossary_term(
         conn.close()
 
 
+def _seed_summary_backfill_rows(
+    conn,
+    *,
+    release_id: str,
+    chapter_number: int,
+    run_id: str,
+):
+    short = save_validated_summary(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
+        summary_type="chapter_summary_zh_short",
+        content_zh=f"第{chapter_number}章短摘要。",
+        derived_from_chapter_hash=f"hash-ch{chapter_number}",
+        run_id=run_id,
+        validation_status="approved",
+    )
+    compact = save_validated_summary(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
+        summary_type="story_so_far_zh_compact",
+        content_zh=f"截至第{chapter_number}章的紧凑摘要。",
+        derived_from_chapter_hash=f"compact-hash-ch{chapter_number}",
+        run_id=run_id,
+        validation_status="approved",
+    )
+    return short, compact
+
+
+def _seed_complete_english_rows(
+    conn,
+    *,
+    release_id: str,
+    chapter_number: int,
+    run_id: str,
+    short_record,
+    compact_record,
+) -> None:
+    save_derived_summary(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
+        summary_type="chapter_summary_en_short",
+        content_en=f"Chapter {chapter_number} short summary.",
+        source_summary_id=short_record.summary_id,
+        source_summary_hash=summary_derivation.hash_validated_summary(short_record),
+        glossary_version_hash="empty-glossary",
+        model_name="seed",
+        prompt_version="seed",
+        run_id=run_id,
+    )
+    save_derived_summary(
+        conn,
+        release_id=release_id,
+        chapter_number=chapter_number,
+        summary_type="story_so_far_en",
+        content_en=f"Story through chapter {chapter_number}.",
+        source_summary_id=compact_record.summary_id,
+        source_summary_hash=summary_derivation.hash_validated_summary(compact_record),
+        glossary_version_hash="empty-glossary",
+        model_name="seed",
+        prompt_version="seed",
+        run_id=run_id,
+    )
+
+
 def test_preprocess_summaries_materializes_authority_and_derived_rows(
     tmp_path: Path,
     monkeypatch,
@@ -340,7 +411,6 @@ def test_preprocess_summaries_emits_progress_events(tmp_path: Path, monkeypatch)
             }
         }
     )
-    from resemantica.orchestration.events import subscribe, unsubscribe
 
     received = []
 
@@ -2191,3 +2261,200 @@ def test_preprocess_summaries_resume_skips_completed_zh_phase(tmp_path: Path, mo
         assert cp[0] == 2
     finally:
         conn.close()
+
+
+def test_preprocess_summaries_backfills_english_gap_from_persisted_zh_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-summary-en-backfill"
+    run_id = "summaries-001"
+    for chapter_number in range(31, 91):
+        _write_extracted_chapter(
+            release_id=release_id,
+            chapter_number=chapter_number,
+            source_text=f"第{chapter_number}章内容。",
+            chapter_source_hash=f"hash-ch{chapter_number}",
+        )
+
+    config = load_config()
+    config.batch_order.enabled = True
+    config.batch_order.summary_chunk_multiplier = 30
+    config.summaries.chapter_concurrency = 1
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        set_summary_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            zh_last_chapter=90,
+            story_last_chapter=90,
+            en_last_chapter=30,
+        )
+        for chunk_index, chapter_start, chapter_end in [(0, 31, 60), (1, 61, 90)]:
+            save_chunk_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="preprocess-summaries",
+                chunk_index=chunk_index,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+                status="completed",
+                metadata={
+                    "chunk_index": chunk_index,
+                    "chapter_start": chapter_start,
+                    "chapter_end": chapter_end,
+                    "last_good_chapter": 30,
+                },
+            )
+        for chapter_number in range(31, 91):
+            short, compact = _seed_summary_backfill_rows(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                run_id=run_id,
+            )
+            if chapter_number >= 37:
+                _seed_complete_english_rows(
+                    conn,
+                    release_id=release_id,
+                    chapter_number=chapter_number,
+                    run_id=run_id,
+                    short_record=short,
+                    compact_record=compact,
+                )
+    finally:
+        conn.close()
+
+    result = preprocess_summaries(
+        release_id=release_id,
+        run_id=run_id,
+        config=config,
+        llm_client=ScriptedSummaryLLM({}),
+        chapter_start=31,
+        chapter_end=90,
+        resume=True,
+    )
+
+    assert result["status"] == "success"
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        cp = get_summary_checkpoint(conn, release_id=release_id, run_id=run_id)
+        assert cp == (90, 90, 90)
+        for chapter_number in range(31, 37):
+            rows = list_derived_summaries(conn, release_id=release_id, chapter_number=chapter_number)
+            assert {row.summary_type for row in rows} == {"chapter_summary_en_short", "story_so_far_en"}
+            assert all(row.content_en.startswith("EN::") for row in rows)
+        for chunk_index, chapter_end in [(0, 60), (1, 90)]:
+            row = conn.execute(
+                """
+                SELECT metadata_json
+                FROM chunk_checkpoints
+                WHERE release_id = ?
+                  AND run_id = ?
+                  AND stage_name = 'preprocess-summaries'
+                  AND chunk_index = ?
+                """,
+                (release_id, run_id, chunk_index),
+            ).fetchone()
+            assert row is not None
+            assert json.loads(row["metadata_json"])["last_good_chapter"] >= chapter_end
+    finally:
+        conn.close()
+
+
+def test_preprocess_summaries_completed_chunk_skip_requires_last_good_to_cover_chunk(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config.batch_order.enabled = True
+    config.batch_order.summary_chunk_multiplier = 2
+    config.summaries.chapter_concurrency = 1
+
+    def run_case(
+        *,
+        release_id: str,
+        last_good_chapter: int,
+        checkpoint: int,
+        chapter_start: int | None = None,
+        chapter_end: int | None = None,
+        total_chapters: int = 4,
+    ) -> list[int]:
+        for chapter_number in range(1, total_chapters + 1):
+            _write_extracted_chapter(
+                release_id=release_id,
+                chapter_number=chapter_number,
+                source_text=f"第{chapter_number}章内容。",
+                chapter_source_hash=f"hash-ch{chapter_number}",
+            )
+        paths = derive_paths(config, release_id=release_id)
+        conn = open_connection(paths.db_path)
+        ensure_summary_schema(conn)
+        try:
+            if checkpoint:
+                set_summary_checkpoint(
+                    conn,
+                    release_id=release_id,
+                    run_id="summaries-001",
+                    zh_last_chapter=checkpoint,
+                    story_last_chapter=checkpoint,
+                    en_last_chapter=checkpoint,
+                )
+            save_chunk_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id="summaries-001",
+                stage_name="preprocess-summaries",
+                chunk_index=0,
+                chapter_start=1,
+                chapter_end=2,
+                status="completed",
+                metadata={"last_good_chapter": last_good_chapter},
+            )
+        finally:
+            conn.close()
+
+        structured_calls: list[int] = []
+
+        class RecordingLLM(ScriptedSummaryLLM):
+            def generate_text(self, *, model_name: str, prompt: str) -> str:
+                if "SUMMARY_ZH_STRUCTURED" in prompt:
+                    chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+                    if chapter_match is None:
+                        raise RuntimeError("chapter number missing from prompt")
+                    structured_calls.append(int(chapter_match.group(1)))
+                return super().generate_text(model_name=model_name, prompt=prompt)
+
+        llm = RecordingLLM({
+            chapter_number: _structured_summary_payload(chapter_number=chapter_number)
+            for chapter_number in range(1, total_chapters + 1)
+        })
+        result = preprocess_summaries(
+            release_id=release_id,
+            run_id="summaries-001",
+            config=config,
+            llm_client=llm,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+            resume=True,
+        )
+        assert result["status"] == "success"
+        return structured_calls
+
+    assert run_case(release_id="chunk-not-covered", last_good_chapter=1, checkpoint=0) == [1, 2, 3, 4]
+    assert run_case(release_id="chunk-covered", last_good_chapter=2, checkpoint=2) == [3, 4]
+    assert run_case(
+        release_id="chunk-index-reused-scope",
+        last_good_chapter=2,
+        checkpoint=2,
+        chapter_start=3,
+        chapter_end=6,
+        total_chapters=6,
+    ) == [3, 4, 5, 6]
