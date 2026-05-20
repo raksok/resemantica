@@ -5,6 +5,9 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_entries
 from resemantica.db.graph_repo import (
@@ -32,6 +35,7 @@ from resemantica.graph.models import (
 from resemantica.graph.pipeline import preprocess_graph
 from resemantica.graph.validators import validate_graph_state
 from resemantica.settings import derive_paths, load_config
+from resemantica.tracking.repo import ensure_tracking_db, load_events
 
 
 def _write_extracted_chapter(
@@ -537,6 +541,46 @@ def test_snapshot_metadata_written_for_packet_reproducibility(
         assert snapshots[0].snapshot_hash == result["snapshot_hash"]
     finally:
         conn.close()
+
+
+def test_graph_validation_failure_persists_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m19-graph-validation-event"
+    run_id = "graph-001"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三与李四结拜。张三是李四的兄长。",
+    )
+    mock_llm = ScriptedGraphLLM(
+        entities_by_chapter={
+            1: [
+                {"source_term": "张三", "entity_type": "character", "aliases": [], "evidence_snippet": "张三与李四结拜。"}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "resemantica.graph.pipeline.validate_graph_state",
+        lambda **_kwargs: SimpleNamespace(is_valid=False, errors=["unsupported_world_model_edge"]),
+    )
+
+    with pytest.raises(RuntimeError, match="graph_validation_failed"):
+        preprocess_graph(
+            release_id=release_id,
+            run_id=run_id,
+            graph_client=GraphClient(backend=InMemoryGraphBackend()),
+            llm_client=mock_llm,
+        )
+
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id=run_id, release_id=release_id, limit=100)
+    finally:
+        conn.close()
+    failed = [event for event in events if event.event_type == "preprocess-graph.validation_failed"]
+    assert len(failed) == 1
+    assert failed[0].severity == "error"
+    assert failed[0].payload["errors"]
 
 
 def test_graph_resume_uses_persisted_chapter_drafts(

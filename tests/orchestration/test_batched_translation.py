@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from resemantica.orchestration.runner import OrchestrationRunner
 from resemantica.settings import AppConfig, BatchOrderConfig, TranslationConfig, derive_paths, load_config
 from resemantica.tracking.models import RunState
-from resemantica.tracking.repo import ensure_tracking_db, save_run_state
+from resemantica.tracking.repo import ensure_tracking_db, load_events, save_run_state
 
 
 def _write_chapter(release_id: str, number: int) -> None:
@@ -416,6 +418,60 @@ def test_chunked_batched_translate_range_runs_model_order_per_chunk(
         + [("pass2", n) for n in range(21, 26)]
         + [("pass3", n) for n in range(21, 26)]
     )
+
+
+@pytest.mark.parametrize("failed_pass", ["pass1", "pass2", "pass3"])
+def test_batched_pass_exception_persists_pass_failed_event(
+    tmp_path: Path,
+    monkeypatch,
+    failed_pass: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = f"batched-{failed_pass}-failed"
+    run_id = "run"
+    _write_chapter(release_id, 1)
+
+    def pass1(**kwargs):
+        if failed_pass == "pass1":
+            raise RuntimeError("pass1 boom")
+        return {"status": "success", "pass1_artifact": f"p1-{kwargs['chapter_number']}.json"}
+
+    def pass2(**kwargs):
+        if failed_pass == "pass2":
+            raise RuntimeError("pass2 boom")
+        return {"status": "success", "pass2_artifact": f"p2-{kwargs['chapter_number']}.json"}
+
+    def pass3(**kwargs):
+        if failed_pass == "pass3":
+            raise RuntimeError("pass3 boom")
+        return {"status": "success", "pass3_artifact": f"p3-{kwargs['chapter_number']}.json"}
+
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass1", pass1)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass3", pass3)
+
+    result = OrchestrationRunner(release_id, run_id).run_stage(
+        "translate-range",
+        chapter_start=1,
+        chapter_end=1,
+        batched_model_order=True,
+    )
+
+    assert result.success is False
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id=run_id, release_id=release_id, limit=100)
+    finally:
+        conn.close()
+    failed = [
+        event
+        for event in events
+        if event.event_type == f"translate-chapter.{failed_pass}.failed"
+    ]
+    assert len(failed) == 1
+    assert failed[0].severity == "error"
+    assert failed[0].chapter_number == 1
+    assert failed[0].payload == {"pass_name": failed_pass, "reason": f"{failed_pass} boom"}
 
 
 def test_chunked_batched_resume_skips_completed_chunk_and_resumes_partial_pass(

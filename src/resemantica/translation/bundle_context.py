@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -18,6 +18,7 @@ def load_bundles_for_chapter(
     chapter_number: int,
     config: AppConfig | None = None,
     project_root: Path | None = None,
+    warning_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, ParagraphBundle] | None:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -31,22 +32,30 @@ def load_bundles_for_chapter(
         )
     except sqlite3.OperationalError:
         logger.warning("packet_metadata table not found, continuing without bundle context")
+        if warning_callback is not None:
+            warning_callback({"reason": "missing_packet_metadata_table"})
         return None
     finally:
         conn.close()
 
     if metadata is None:
         logger.warning("No packet metadata found for chapter {}", chapter_number)
+        if warning_callback is not None:
+            warning_callback({"reason": "missing_packet_metadata"})
         return None
 
     bundle_path = Path(metadata.bundle_path)
     if not bundle_path.exists():
         logger.warning("Bundle file not found: {}", bundle_path)
+        if warning_callback is not None:
+            warning_callback({"reason": "missing_bundle_file", "bundle_path": str(bundle_path)})
         return None
 
     payload = _read_json(bundle_path)
     raw_bundles = payload.get("bundles")
     if not isinstance(raw_bundles, list) or not raw_bundles:
+        if warning_callback is not None:
+            warning_callback({"reason": "empty_bundle_rows", "bundle_path": str(bundle_path)})
         return None
 
     bundles: dict[str, ParagraphBundle] = {}

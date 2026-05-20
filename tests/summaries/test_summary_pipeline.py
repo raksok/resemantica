@@ -1294,6 +1294,7 @@ def test_story_compaction_repairs_over_budget_output(monkeypatch) -> None:
             return "这是一段明显超过预算的连续性摘要。"
 
     llm = RepairingLLM()
+    events: list[tuple[str, dict[str, object]]] = []
     compact, _source_hash = summary_derivation.compact_story_so_far(
         llm_client=llm,
         release_id="repair",
@@ -1310,11 +1311,18 @@ def test_story_compaction_repairs_over_budget_output(monkeypatch) -> None:
         chapter_summary_zh_short="本章。",
         max_tokens=5,
         cache_root=None,
+        event_callback=lambda event_name, payload: events.append((event_name, payload)),
     )
 
     assert compact == "短。"
     assert [("SUMMARY_STORY_REPAIR" in prompt) for prompt in llm.prompts] == [False, True]
     assert "SUMMARY_STORY_COMPACT" not in llm.prompts[1]
+    assert events == [
+        (
+            "story_compact_repaired",
+            {"attempt": 1, "token_count": 2, "max_tokens": 5, "cache_repaired": False},
+        )
+    ]
 
 
 def test_story_compaction_repairs_stale_over_budget_cache(tmp_path: Path, monkeypatch) -> None:
@@ -1385,6 +1393,7 @@ def test_story_compaction_failure_after_repairs_still_fails(monkeypatch) -> None
         def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
             return "始终超过预算的连续性摘要。"
 
+    events: list[tuple[str, dict[str, object]]] = []
     with pytest.raises(ValueError, match="exceeds configured token budget after repair"):
         summary_derivation.compact_story_so_far(
             llm_client=OverBudgetLLM(),
@@ -1402,7 +1411,15 @@ def test_story_compaction_failure_after_repairs_still_fails(monkeypatch) -> None
             chapter_summary_zh_short="本章。",
             max_tokens=5,
             cache_root=None,
+            event_callback=lambda event_name, payload: events.append((event_name, payload)),
         )
+
+    assert len(events) == 1
+    assert events[0][0] == "story_compact_repair_failed"
+    assert events[0][1]["attempt"] == 2
+    assert events[0][1]["reason"] == "token_budget_exceeded"
+    assert events[0][1]["max_tokens"] == 5
+    assert int(events[0][1]["token_count"]) > 5
 
 
 def test_story_so_far_rebuild_is_deterministic(tmp_path: Path, monkeypatch) -> None:

@@ -31,7 +31,7 @@ Config sections:
 3. Hydrate plain dataclasses for config sections.
 4. Run manual validation for required fields, value ranges, and path shape.
 5. Derive default artifact paths, including `artifacts/` and release-local `resemantica.db`.
-6. Configure loguru console logs and JSON file logs under `artifacts/logs/` (implemented in Task 19a, see LLD 19a).
+6. Configure loguru console logs and JSON file logs under `artifacts/logs/` (implemented in Task 19a, see LLD 19a). Operational JSONL signals are event-backed: pipelines emit `emit_event()` records, and the event bus writes the paired structured Loguru record with run/release/stage context.
 7. Expose budget defaults to LLM, packet, and translation callers.
 
 ## Validation Ownership
@@ -45,7 +45,7 @@ Config sections:
 
 - Runtime-affecting config values must be captured in run metadata through a config hash or version.
 - A config hash change invalidates downstream artifacts that record the prior config version.
-- Logging is append-oriented per run and must not overwrite previous run logs.
+- Logging is append-oriented per run and must not overwrite previous run logs. Event-backed JSONL records are append-only visibility for the same persisted tracking events, while direct Loguru-only diagnostics are limited to low-level helpers without run context.
 
 ## Tests
 

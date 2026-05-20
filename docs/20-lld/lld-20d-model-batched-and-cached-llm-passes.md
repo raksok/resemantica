@@ -63,6 +63,7 @@ Cache may be represented as JSON artifacts plus SQLite metadata. Cached payloads
 - Batched mode records per-pass progress in run state.
 - Chunked batched mode also records `chunk_checkpoints` for cleanup boundaries.
 - Cache corruption or parse failure is treated as cache miss, not as successful reuse.
+- Batched pass-level exception handlers emit `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, or `translate-chapter.pass3.failed` with severity `error`, `chapter_number`, `pass_name`, and `reason` before recording the failure in the range checkpoint.
 
 ## Resume After Stop
 
@@ -85,6 +86,7 @@ For chunked batched mode, completed chunks are skipped on resume. Incomplete chu
 - Cache hit avoids model call.
 - Cache miss calls model and records cache metadata.
 - Invalid cached payload is ignored and regenerated.
+- Batched pass1/pass2/pass3 exceptions emit the matching `translate-chapter.passN.failed` event.
 
 ## Out Of Scope
 

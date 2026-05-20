@@ -58,7 +58,7 @@ Structured Chinese summary schema:
 
 For large ranges, `[batch_order]` chunking changes the outer loop only. Each chunk completes Phase 1, Phase 2, and Phase 3 before the next chunk begins. Effective summary chunk size is `batch_order.summary_chunk_multiplier * summaries.chapter_concurrency`, and chunking activates only when the selected chapter count is larger than that size.
 
-`story_so_far_zh` remains the full audited cumulative Chinese continuity for compatibility and inspection. `story_so_far_zh_compact` is the initial bounded operational continuity source produced before graph extraction and used for English story-so-far derivation during `preprocess-summaries`. Compaction uses the analyst model and `summary_story_compact.txt`. If the analyst returns compact continuity over `summaries.story_compact_max_tokens`, the pipeline runs a targeted repair prompt against the over-budget draft and caches only an under-budget result. Empty compact output, or output that remains over budget after repair, fails `preprocess-summaries` for that story chapter.
+`story_so_far_zh` remains the full audited cumulative Chinese continuity for compatibility and inspection. `story_so_far_zh_compact` is the initial bounded operational continuity source produced before graph extraction and used for English story-so-far derivation during `preprocess-summaries`. Compaction uses the analyst model and `summary_story_compact.txt`. If the analyst returns compact continuity over `summaries.story_compact_max_tokens`, the pipeline runs a targeted repair prompt against the over-budget draft and caches only an under-budget result. Successful repair emits `preprocess-summaries.story_compact_repaired`; exhausted or empty repair emits `preprocess-summaries.story_compact_repair_failed` before the chapter fails. Empty compact output, or output that remains over budget after repair, fails `preprocess-summaries` for that story chapter.
 
 After `preprocess-graph`, `preprocess-continuity` may refresh long-horizon continuity into `story_so_far_zh_graph_compact` using previous graph compact continuity, recent validated chapter summaries, and confirmed chapter-safe graph anchors. This row is preferred by packet build, while `story_so_far_zh_compact` and `story_so_far_zh` remain fallbacks and inspection records.
 
@@ -118,7 +118,7 @@ Summary preprocessing is a primary local-inference bottleneck. The analyst promp
 - structured JSON schema validation and short-summary derivation
 - deterministic rebuild of `story_so_far_zh`
 - ordered `story_so_far_zh_compact` generation from prior compact continuity plus current short summary
-- over-budget `story_so_far_zh_compact` repair, stale over-budget cache replacement, and failure after exhausted repair
+- over-budget `story_so_far_zh_compact` repair, stale over-budget cache replacement, repair event emission, and failure after exhausted repair
 - automatic summary retry for parse, schema, and future-knowledge failures
 - automatic summary retry for fatal LLM content-validation flags
 - exhausted failed summary stops story assembly and blocks checkpoint advancement

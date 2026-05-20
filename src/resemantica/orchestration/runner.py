@@ -1085,6 +1085,16 @@ class OrchestrationRunner:
                             self.run_id,
                             chapter_number,
                         )
+                        emit_event(
+                            self.run_id,
+                            self.release_id,
+                            "translate-chapter.pass1.failed",
+                            "translate-chapter",
+                            chapter_number=chapter_number,
+                            severity="error",
+                            message=f"Pass1 failed for chapter {chapter_number}: {exc}",
+                            payload={"pass_name": "pass1", "reason": str(exc)},
+                        )
                         failures[chapter_number] = str(exc)
                         break
                     self._update_run_state("translate-range", "running", checkpoint_payload())
@@ -1129,6 +1139,16 @@ class OrchestrationRunner:
                             self.release_id,
                             self.run_id,
                             chapter_number,
+                        )
+                        emit_event(
+                            self.run_id,
+                            self.release_id,
+                            "translate-chapter.pass2.failed",
+                            "translate-chapter",
+                            chapter_number=chapter_number,
+                            severity="error",
+                            message=f"Pass2 failed for chapter {chapter_number}: {exc}",
+                            payload={"pass_name": "pass2", "reason": str(exc)},
                         )
                         failures[chapter_number] = str(exc)
                         break
@@ -1184,6 +1204,16 @@ class OrchestrationRunner:
                             self.release_id,
                             self.run_id,
                             chapter_number,
+                        )
+                        emit_event(
+                            self.run_id,
+                            self.release_id,
+                            "translate-chapter.pass3.failed",
+                            "translate-chapter",
+                            chapter_number=chapter_number,
+                            severity="error",
+                            message=f"Pass3 failed for chapter {chapter_number}: {exc}",
+                            payload={"pass_name": "pass3", "reason": str(exc)},
                         )
                         failures[chapter_number] = str(exc)
                         break

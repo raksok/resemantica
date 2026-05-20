@@ -403,6 +403,14 @@ def preprocess_graph(
             relationships=provisional_relationships,
         )
         if not validation.is_valid:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.validation_failed",
+                severity="error",
+                message="Graph validation failed",
+                errors=validation.errors,
+            )
             raise RuntimeError("graph_validation_failed: " + " | ".join(validation.errors))
         raise_if_stop_requested(
             stop_token,

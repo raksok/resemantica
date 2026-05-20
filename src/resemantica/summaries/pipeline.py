@@ -1134,6 +1134,14 @@ def preprocess_summaries(
                         chapter_summary_zh_short=short_record.content_zh,
                         max_tokens=config_obj.summaries.story_compact_max_tokens,
                         cache_root=paths.release_root / "cache" / "llm",
+                        event_callback=lambda event_name, payload: _emit(
+                            run_id,
+                            release_id,
+                            f"{_STAGE_NAME}.{event_name}",
+                            chapter_number=chapter_number,
+                            severity="warning" if event_name.endswith("_failed") else "info",
+                            **payload,
+                        ),
                     )
                     compact_record = save_validated_summary(
                         conn,

@@ -27,7 +27,7 @@ Implemented package layout (M2 slice):
 - `src/resemantica/llm/`: LLM client and prompt loading helpers
 - `src/resemantica/llm/prompts/translate_pass1.txt`, `translate_pass2.txt`: prompt templates with version headers
 - Analyst-facing prompt files under `src/resemantica/llm/prompts/` use prompt-local anti-restart policy text: one reasoning pass is allowed, recursive restarts/self-correction loops are discouraged, and prompt version bumps invalidate stale analyst outputs.
-- `src/resemantica/translation/`: pass1/pass2, validators, checkpoints, translate-chapter pipeline; batched range chunking is orchestrated by `orchestration.runner`
+- `src/resemantica/translation/`: pass1/pass2, validators, checkpoints, bundle-context loading, translate-chapter pipeline; missing packet bundle context emits `translate-chapter.bundle_context_missing`, and batched range chunking is orchestrated by `orchestration.runner`
 - `tests/translation/`: M2 translation tests
 
 Implemented package layout (M3 slice):
@@ -44,8 +44,8 @@ Implemented package layout (M4 slice):
 - `src/resemantica/llm/prompts/summary_zh_structured.txt`, `summary_zh_validate.txt`, `summary_en_derive.txt`, `summary_graph_continuity_update.txt`: summary prompt files; the structured prompt is schema-first and versioned to invalidate stale cache entries after prompt changes
 - `tests/summaries/`: continuity conflict, glossary conflict, future-leak, deterministic story rebuild, schema recovery, and fatal LLM validation flag tests
 - Summary schema recovery is scoped to `src/resemantica/summaries/generator.py`: after one targeted retry, known recoverable structured-summary drift can be defaulted or dropped with warning codes that are written to summary artifacts under `warnings`.
-- Summary compact continuity recovery is scoped to `src/resemantica/summaries/derivation.py`: over-budget `story_so_far_zh_compact` drafts are repaired before caching, and stale over-budget cache entries are replaced with under-budget repaired text.
-- `src/resemantica/summaries/continuity.py`: post-graph graph-grounded compact continuity refresh and deterministic chapter-safe graph anchor formatting
+- Summary compact continuity recovery is scoped to `src/resemantica/summaries/derivation.py`: over-budget `story_so_far_zh_compact` drafts are repaired before caching, stale over-budget cache entries are replaced with under-budget repaired text, and repair success/failure events are emitted through the summary pipeline callback.
+- `src/resemantica/summaries/continuity.py`: post-graph graph-grounded compact continuity refresh, deterministic chapter-safe graph anchor formatting, and `preprocess-continuity.chapter_failed` event emission for per-chapter failures
 
 Implemented package layout (M5 slice):
 
@@ -56,7 +56,7 @@ Implemented package layout (M5 slice):
 
 Implemented package layout (M6 slice):
 
-- `src/resemantica/graph/`: graph models, Ladybug client wrapper, deterministic extraction, validation, filtering, and preprocessing pipeline; confirmed graph state feeds the post-graph continuity refresh
+- `src/resemantica/graph/`: graph models, Ladybug client wrapper, deterministic extraction, validation, filtering, and preprocessing pipeline; confirmed graph state feeds the post-graph continuity refresh, and graph validation failures emit `preprocess-graph.validation_failed`
 - `src/resemantica/db/graph_repo.py`: SQLite repository for deferred entities, graph extraction drafts, and graph snapshot metadata
 - `tests/graph/`: alias reveal gating, relationship chapter eligibility, validation, deferred lifecycle, and snapshot metadata tests
 
@@ -89,17 +89,18 @@ Implemented package layout (M10 slice):
 
 - `src/resemantica/orchestration/`: centralized run control, stage ordering, retries, resume behavior, cleanup planning, and structured events
 - `src/resemantica/orchestration/models.py`: `StageResult`, `legal_transition()`, `next_stage()`, `STAGE_ORDER` including `preprocess-continuity` between graph and packet build
-- `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production, stage execution, transition validation, gate handling, and auto review artifact generation for unresolved votes
+- `src/resemantica/orchestration/runner.py`: `run_production()` and `run_stage()` for resumable production, stage execution, transition validation, gate handling, auto review artifact generation for unresolved votes, batched translation pass-failure events, and chunk checkpoint updates
 - `src/resemantica/orchestration/chunk_checkpoints.py`: durable chunk checkpoint repository used by summary and batched translation cleanup boundaries
 - `src/resemantica/orchestration/retry_failed.py`: durable failed-unit planner and executor for `run retry-failed`, including `llm_content_validation_failed` summary recovery
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
 - `src/resemantica/orchestration/cleanup.py`: shared cleanup scopes plus `plan_cleanup()` and `apply_cleanup()` for validated, two-step cleanup workflow, including `last-good-chunk`
-- `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission
+- `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission, tracking persistence, and paired structured Loguru records for operational signals
 - `src/resemantica/tracking/`: event and run state models with SQLite persistence
 - `src/resemantica/tracking/models.py`: `Event` and `RunState` dataclasses with schema versioning
 - `src/resemantica/tracking/repo.py`: SQLite persistence for events and run state
 - `src/resemantica/cli.py`: `run` command with `production`, `resume`, `retry-failed`, `cleanup-plan`, `cleanup-apply` subcommands
-- `tests/orchestration/`: stage transition, event emission, chunk checkpoints, cleanup plan/apply, batched translation, resume, and run stage tests
+- `tests/orchestration/`: stage transition, event emission, chunk checkpoints, cleanup plan/apply, batched translation, resume, run stage, and logging contract guard tests
+- `tests/translation/test_bundle_context_logging.py`: bundle-context missing event tests for absent packet metadata, missing bundle files, and empty bundle rows
 
 ## Target State
 

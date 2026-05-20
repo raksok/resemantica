@@ -30,7 +30,7 @@ from resemantica.llm.client import (
 )
 from resemantica.llm.prompts import PromptTemplate, load_prompt, render_named_sections
 from resemantica.llm.tokens import count_tokens
-from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
+from resemantica.orchestration.stop import StopRequested, StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
     derive_english_summary,
@@ -375,92 +375,106 @@ def preprocess_continuity(
                 continue
 
             _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_started", chapter_number=chapter_number)
-            continuity_input = build_graph_continuity_input(
-                conn=conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                graph_client=graph,
-                rebase_interval=config_obj.summaries.graph_continuity_rebase_interval,
-            )
-            compact_text, model_anchor_audit = refresh_graph_continuity_text(
-                llm_client=client,
-                release_id=release_id,
-                model_name=config_obj.models.analyst_name,
-                prompt=prompt,
-                continuity_input=continuity_input,
-                config=config_obj,
-                cache_root=paths.release_root / "cache" / "llm",
-            )
-            record = save_validated_summary(
-                conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                summary_type="story_so_far_zh_graph_compact",
-                content_zh=compact_text,
-                derived_from_chapter_hash=continuity_input.source_hash,
-                run_id=run_id,
-                validation_status="approved",
-            )
-            en_text = derive_english_summary(
-                llm_client=client,
-                model_name=config_obj.models.translator_name,
-                prompt_template=prompt_en.template,
-                source_text_zh=compact_text,
-                locked_glossary=locked_glossary,
-            )
-            en_record = save_derived_summary(
-                conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                summary_type="story_so_far_en_graph_compact",
-                content_en=en_text,
-                source_summary_id=record.summary_id,
-                source_summary_hash=hash_validated_summary(record),
-                glossary_version_hash=glossary_hash,
-                model_name=config_obj.models.translator_name,
-                prompt_version=prompt_en.version,
-                run_id=run_id,
-            )
-            artifact_path = paths.summaries_dir / f"chapter-{chapter_number}-graph-continuity.json"
-            _write_json(
-                artifact_path,
-                {
-                    "release_id": release_id,
-                    "run_id": run_id,
-                    "chapter_number": chapter_number,
-                    "schema_version": 1,
-                    "validated": {
-                        "story_so_far_zh_graph_compact": record.to_json_dict(),
+            try:
+                continuity_input = build_graph_continuity_input(
+                    conn=conn,
+                    release_id=release_id,
+                    chapter_number=chapter_number,
+                    graph_client=graph,
+                    rebase_interval=config_obj.summaries.graph_continuity_rebase_interval,
+                )
+                compact_text, model_anchor_audit = refresh_graph_continuity_text(
+                    llm_client=client,
+                    release_id=release_id,
+                    model_name=config_obj.models.analyst_name,
+                    prompt=prompt,
+                    continuity_input=continuity_input,
+                    config=config_obj,
+                    cache_root=paths.release_root / "cache" / "llm",
+                )
+                record = save_validated_summary(
+                    conn,
+                    release_id=release_id,
+                    chapter_number=chapter_number,
+                    summary_type="story_so_far_zh_graph_compact",
+                    content_zh=compact_text,
+                    derived_from_chapter_hash=continuity_input.source_hash,
+                    run_id=run_id,
+                    validation_status="approved",
+                )
+                en_text = derive_english_summary(
+                    llm_client=client,
+                    model_name=config_obj.models.translator_name,
+                    prompt_template=prompt_en.template,
+                    source_text_zh=compact_text,
+                    locked_glossary=locked_glossary,
+                )
+                en_record = save_derived_summary(
+                    conn,
+                    release_id=release_id,
+                    chapter_number=chapter_number,
+                    summary_type="story_so_far_en_graph_compact",
+                    content_en=en_text,
+                    source_summary_id=record.summary_id,
+                    source_summary_hash=hash_validated_summary(record),
+                    glossary_version_hash=glossary_hash,
+                    model_name=config_obj.models.translator_name,
+                    prompt_version=prompt_en.version,
+                    run_id=run_id,
+                )
+                artifact_path = paths.summaries_dir / f"chapter-{chapter_number}-graph-continuity.json"
+                _write_json(
+                    artifact_path,
+                    {
+                        "release_id": release_id,
+                        "run_id": run_id,
+                        "chapter_number": chapter_number,
+                        "schema_version": 1,
+                        "validated": {
+                            "story_so_far_zh_graph_compact": record.to_json_dict(),
+                        },
+                        "derived": {
+                            "story_so_far_en_graph_compact": en_record.to_json_dict(),
+                        },
+                        "graph_anchor_audit": continuity_input.graph_anchor_audit,
+                        "model_anchor_audit": model_anchor_audit,
+                        "graph_anchors_zh": continuity_input.graph_anchors_zh,
                     },
-                    "derived": {
-                        "story_so_far_en_graph_compact": en_record.to_json_dict(),
-                    },
-                    "graph_anchor_audit": continuity_input.graph_anchor_audit,
-                    "model_anchor_audit": model_anchor_audit,
-                    "graph_anchors_zh": continuity_input.graph_anchors_zh,
-                },
-            )
-            refreshed.append(
-                {
-                    "chapter_number": chapter_number,
-                    "summary_id": record.summary_id,
-                    "artifact": str(artifact_path),
-                    "anchor_count": continuity_input.graph_anchor_audit["entity_count"],
-                }
-            )
-            _emit(
-                run_id,
-                release_id,
-                f"{_STAGE_NAME}.chapter_completed",
-                chapter_number=chapter_number,
-                summary_id=record.summary_id,
-                artifact_path=str(artifact_path),
-            )
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
-                message=f"Continuity refresh stopped after chapter {chapter_number}",
-            )
+                )
+                refreshed.append(
+                    {
+                        "chapter_number": chapter_number,
+                        "summary_id": record.summary_id,
+                        "artifact": str(artifact_path),
+                        "anchor_count": continuity_input.graph_anchor_audit["entity_count"],
+                    }
+                )
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_completed",
+                    chapter_number=chapter_number,
+                    summary_id=record.summary_id,
+                    artifact_path=str(artifact_path),
+                )
+                raise_if_stop_requested(
+                    stop_token,
+                    checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
+                    message=f"Continuity refresh stopped after chapter {chapter_number}",
+                )
+            except StopRequested:
+                raise
+            except Exception as exc:
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_failed",
+                    chapter_number=chapter_number,
+                    severity="error",
+                    message=f"Continuity refresh failed for chapter {chapter_number}: {exc}",
+                    reason=str(exc),
+                )
+                raise
     finally:
         conn.close()
 

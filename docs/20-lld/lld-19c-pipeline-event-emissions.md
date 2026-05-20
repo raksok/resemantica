@@ -103,6 +103,8 @@ Emission points in `packets/builder.py`:
 - Event emission failures (e.g., EventBus subscriber exceptions) must not crash pipelines.
 - The existing `EventBus.publish` already catches subscriber exceptions and logs warnings.
 - No new EventBus subscriptions are added in this task — only emissions.
+- Any run-context pipeline warning or error must be paired with `emit_event()`, a local `_emit()` wrapper, or a helper callback that emits in the caller. Loguru-only warning/error diagnostics are allowed only for helpers without run context or explicitly allowlisted low-level diagnostics.
+- Repair/fallback/failure events are first-class operational signals. Current additions are `preprocess-summaries.story_compact_repaired`, `preprocess-summaries.story_compact_repair_failed`, `preprocess-graph.validation_failed`, `preprocess-continuity.chapter_failed`, `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, `translate-chapter.pass3.failed`, and `translate-chapter.bundle_context_missing`.
 
 ## Data Flow
 1. Pipeline function receives `run_id`, `release_id` from caller.

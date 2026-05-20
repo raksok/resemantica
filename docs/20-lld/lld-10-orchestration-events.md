@@ -36,6 +36,19 @@ Event model minimum fields:
 - `payload`
 - `schema_version`
 
+## Operator Logging Contract
+
+Operational signals with run context must be emitted through `emit_event()` or a pipeline-local `_emit()` wrapper. This persists the event in the tracking DB and writes the paired structured Loguru JSONL record. Direct Loguru warning/error messages are reserved for helper diagnostics that do not know `run_id`/`release_id`, or for diagnostics paired by a callback into the run-context caller.
+
+The event-backed path is required for operator-affecting lifecycle, warning, skip, retry, fallback, validation, artifact, and failure decisions. Current required failure/repair signals include:
+
+- `preprocess-summaries.story_compact_repaired`: compact continuity exceeded budget and was repaired; payload includes `attempt`, `token_count`, `max_tokens`, and `cache_repaired`.
+- `preprocess-summaries.story_compact_repair_failed`: compact continuity repair exhausted or returned empty output; payload includes `reason`, `attempt`, `token_count`, and `max_tokens`.
+- `preprocess-continuity.chapter_failed`: graph continuity refresh failed for a chapter; payload includes `reason`.
+- `preprocess-graph.validation_failed`: graph validation failed before snapshot promotion; payload includes `errors`.
+- `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, `translate-chapter.pass3.failed`: batched range pass-level exception handlers failed; payload includes `pass_name` and `reason`.
+- `translate-chapter.bundle_context_missing`: translation continued without packet bundle context; payload includes `pass_name`, `reason`, and `bundle_path` when available.
+
 ## Data Flow
 
 1. CLI, TUI, or a production workflow requests a stage action.

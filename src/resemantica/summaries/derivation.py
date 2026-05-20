@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
+from typing import Callable
 
 from resemantica.db.summary_repo import ValidatedSummaryZhRecord
 from resemantica.glossary.models import LockedGlossaryEntry
@@ -100,6 +101,7 @@ def compact_story_so_far(
     chapter_summary_zh_short: str,
     max_tokens: int,
     cache_root: Path | None,
+    event_callback: Callable[[str, dict[str, object]], None] | None = None,
 ) -> tuple[str, str]:
     source_text = (
         previous_story_so_far_zh_compact.strip()
@@ -136,12 +138,23 @@ def compact_story_so_far(
     if not compact.strip():
         raise ValueError("story_so_far_zh_compact generation returned empty text")
     token_count = count_tokens(compact)
-    for _attempt in range(2):
+    for attempt in range(2):
         if token_count <= max_tokens:
             compact = compact.strip()
             if cache_root is not None and (cached is None or compact != cached):
                 save_cached_text(cache_root, identity, compact)
+            if attempt > 0 and event_callback is not None:
+                event_callback(
+                    "story_compact_repaired",
+                    {
+                        "attempt": attempt,
+                        "token_count": token_count,
+                        "max_tokens": max_tokens,
+                        "cache_repaired": cached is not None,
+                    },
+                )
             return compact, source_hash
+        over_budget_token_count = token_count
         repair_prompt = _render_story_compact_repair_prompt(
             previous_story_so_far_zh_compact=previous_story_so_far_zh_compact,
             chapter_summary_zh_short=chapter_summary_zh_short,
@@ -151,8 +164,28 @@ def compact_story_so_far(
         )
         compact = llm_client.generate_text(model_name=model_name, prompt=repair_prompt).strip()
         if not compact:
+            if event_callback is not None:
+                event_callback(
+                    "story_compact_repair_failed",
+                    {
+                        "attempt": attempt + 1,
+                        "reason": "empty_repair_output",
+                        "token_count": over_budget_token_count,
+                        "max_tokens": max_tokens,
+                    },
+                )
             raise ValueError("story_so_far_zh_compact generation returned empty text")
         token_count = count_tokens(compact)
+    if event_callback is not None:
+        event_callback(
+            "story_compact_repair_failed",
+            {
+                "attempt": 2,
+                "reason": "token_budget_exceeded",
+                "token_count": token_count,
+                "max_tokens": max_tokens,
+            },
+        )
     raise ValueError(
         "story_so_far_zh_compact exceeds configured token budget after repair: "
         f"{token_count} > {max_tokens}"

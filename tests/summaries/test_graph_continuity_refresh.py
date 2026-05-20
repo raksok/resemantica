@@ -17,6 +17,7 @@ from resemantica.summaries.continuity import (
     build_graph_continuity_input,
     preprocess_continuity,
 )
+from resemantica.tracking.repo import ensure_tracking_db, load_events
 
 
 class ScriptedContinuityLLM:
@@ -255,6 +256,17 @@ def test_output_over_token_budget_fails_clearly(tmp_path: Path, monkeypatch) -> 
             graph_client=client,
             llm_client=ScriptedContinuityLLM("很长的连续性。"),
         )
+
+    tracking = ensure_tracking_db(release_id)
+    try:
+        events = load_events(tracking, run_id="continuity-001", release_id=release_id, limit=100)
+    finally:
+        tracking.close()
+    failed = [event for event in events if event.event_type == "preprocess-continuity.chapter_failed"]
+    assert len(failed) == 1
+    assert failed[0].chapter_number == 1
+    assert failed[0].severity == "error"
+    assert "story_so_far_zh_graph_compact exceeds configured token budget" in failed[0].payload["reason"]
 
 
 def test_missing_graph_snapshot_fails_stage_contract(tmp_path: Path, monkeypatch) -> None:

@@ -121,6 +121,26 @@ def _emit_pass2_fallback_event(
     )
 
 
+def _emit_bundle_context_missing_event(
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    pass_name: str,
+    payload: dict[str, object],
+) -> None:
+    reason = str(payload.get("reason", "bundle_context_missing"))
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="bundle_context_missing",
+        chapter_number=chapter_number,
+        severity="warning",
+        message=f"Bundle context missing for chapter {chapter_number}: {reason}",
+        payload={"pass_name": pass_name, **payload},
+    )
+
+
 def _is_blocking_restore_warning(warning: str) -> bool:
     return warning.startswith("Unknown placeholder") or warning.startswith(
         "Unexpected closing placeholder"
@@ -251,6 +271,13 @@ def translate_chapter_pass1(
         chapter_number=chapter_number,
         config=config_obj,
         project_root=project_root,
+        warning_callback=lambda payload: _emit_bundle_context_missing_event(
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            pass_name="pass1",
+            payload=payload,
+        ),
     )
 
     run_root = paths.release_root / "runs" / run_id
@@ -959,6 +986,13 @@ def translate_chapter_pass2(
         chapter_number=chapter_number,
         config=config_obj,
         project_root=project_root,
+        warning_callback=lambda payload: _emit_bundle_context_missing_event(
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            pass_name="pass2",
+            payload=payload,
+        ),
     )
 
     run_root = paths.release_root / "runs" / run_id
@@ -1373,6 +1407,13 @@ def translate_chapter_pass3(
             chapter_number=chapter_number,
             config=config_obj,
             project_root=project_root,
+            warning_callback=lambda payload: _emit_bundle_context_missing_event(
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                pass_name="pass3",
+                payload=payload,
+            ),
         )
 
         threshold_high = config_obj.translation.risk_threshold_high
