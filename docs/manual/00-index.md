@@ -3,7 +3,7 @@
 > Local-first EPUB translation pipeline for Chinese web novels
 
 **Version:** 0.1.0  
-**Entry point:** `rsem`  
+**Entry point:** `uv run rsem`  
 **Python:** >= 3.13  
 **License:** Proprietary
 
@@ -30,7 +30,7 @@
 
 | Resource | Location |
 |----------|----------|
-| Man page | `docs/rsem.1.md` |
+| Man page | `docs/uv run rsem.1.md` |
 | Architecture | `docs/10-architecture/` |
 | Low-level design | `docs/20-lld/` |
 | Task briefs | `docs/40-tasks/` |

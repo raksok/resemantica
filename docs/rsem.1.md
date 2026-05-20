@@ -4,16 +4,16 @@ NAME
     rsem — local-first EPUB translation pipeline for Chinese web novels
 
 SYNOPSIS
-    rsem [options] <command> [<args>...]
+    uv run rsem [options] <command> [<args>...]
 
-    rsem extract   -i <epub> -r <release> [options]
-    rsem translate -r <release> -R <run> (-C <N> | -s <N> [-e <N>]) [options]
-    rsem preprocess <subcommand> -r <release> [options]
-    rsem packets   build -r <release> -R <run> [options]
-    rsem rebuild   -r <release> -R <run> [options]
-    rsem run       <subcommand> -r <release> -R <run> [options]
-    rsem tui       [options]
-    rsem set-chapter-flag -r <release> -C <N> (--story | --non-story) [options]
+    uv run rsem extract   -i <epub> -r <release> [options]
+    uv run rsem translate -r <release> -R <run> (-C <N> | -s <N> [-e <N>]) [options]
+    uv run rsem preprocess <subcommand> -r <release> [options]
+    uv run rsem packets   build -r <release> -R <run> [options]
+    uv run rsem rebuild   -r <release> -R <run> [options]
+    uv run rsem run       <subcommand> -r <release> -R <run> [options]
+    uv run rsem tui       [options]
+    uv run rsem set-chapter-flag -r <release> -C <N> (--story | --non-story) [options]
 
 DESCRIPTION
     Resemantica is a local-first, multi-stage pipeline that converts
@@ -238,38 +238,38 @@ FILES
 
 EXAMPLES
     # Extract a new release
-    rsem extract -i novel.epub -r v1.0
+    uv run rsem extract -i novel.epub -r v1.0
 
     # Generate summaries (must run before glossary)
-    rsem preprocess summaries -r v1.0
+    uv run rsem preprocess summaries -r v1.0
 
     # Discover glossary terms
-    rsem preprocess glossary-discover -r v1.0
+    uv run rsem preprocess glossary-discover -r v1.0
 
     # Translate, review, promote
-    rsem preprocess glossary-review -r v1.0
+    uv run rsem preprocess glossary-review -r v1.0
     # (edit artifacts/v1.0/glossary/review.csv)
-    rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
+    uv run rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
 
     # Translate chapters 1-10
-    rsem translate -r v1.0 -R run1 -s 1 -e 10
+    uv run rsem translate -r v1.0 -R run1 -s 1 -e 10
 
     # Full production pipeline
-    rsem run production -r v1.0 -R run1
-    rsem run production -r v1.0 -R run1 -n   # dry-run
+    uv run rsem run production -r v1.0 -R run1
+    uv run rsem run production -r v1.0 -R run1 -n   # dry-run
 
     # Resume from checkpoint
-    rsem run resume -r v1.0 -R run1
+    uv run rsem run resume -r v1.0 -R run1
 
     # Cleanup
-    rsem run cleanup-plan -r v1.0 -R run1 -S preprocess
-    rsem run cleanup-apply -r v1.0 -R run1 -S preprocess
+    uv run rsem run cleanup-plan -r v1.0 -R run1 -S preprocess
+    uv run rsem run cleanup-apply -r v1.0 -R run1 -S preprocess
 
     # With custom config
-    rsem translate -c ./my-config.toml -r v1.0 -R run1 -C 1
+    uv run rsem translate -c ./my-config.toml -r v1.0 -R run1 -C 1
 
     # Launch TUI
-    rsem tui -r v1.0
+    uv run rsem tui -r v1.0
 
 SEE ALSO
     Full documentation: docs/ directory in the project root.

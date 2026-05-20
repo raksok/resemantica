@@ -4,17 +4,17 @@
 
 All inference runs locally via `llama.cpp` router mode. No cloud services.
 
-Full manual: `docs/manual/00-index.md` · Man page: `docs/rsem.1.md`
+Full manual: `docs/manual/00-index.md` · Man page: `docs/uv run rsem.1.md`
 
 ## Quick Start
 
 ```bash
 # Extract a release
-rsem extract -i novel.epub -r v1.0
+uv run rsem extract -i novel.epub -r v1.0
 
 # Full production pipeline — dry-run first, then execute
-rsem run production -r v1.0 -R run1 -n
-rsem run production -r v1.0 -R run1
+uv run rsem run production -r v1.0 -R run1 -n
+uv run rsem run production -r v1.0 -R run1
 ```
 
 ## Features
@@ -28,7 +28,7 @@ rsem run production -r v1.0 -R run1
 
 ## Installation
 
-Requires Python >= 3.13 and a running llama.cpp server.
+Requires Python >= 3.13, uv (package manager), and a running llama.cpp server.
 
 ```bash
 git clone <repo-url> && cd resemantica
@@ -46,7 +46,7 @@ First run auto-downloads **BAAI/bge-m3** (embedding model) and **HanLP** (~500MB
 
 ## Pipeline Stages
 
-Executed in this canonical order by `rsem run production`:
+Executed in this canonical order by `uv run rsem run production`:
 
 | # | Stage | What it does |
 |---|-------|-------------|
@@ -60,7 +60,7 @@ Executed in this canonical order by `rsem run production`:
 
 | Resource | Path |
 |----------|------|
-| Man page | `docs/rsem.1.md` |
+| Man page | `docs/uv run rsem.1.md` |
 | Full manual | `docs/manual/00-index.md` |
 | Architecture | `docs/10-architecture/` |
 | Specification | `SPEC.md` |
@@ -70,6 +70,6 @@ Executed in this canonical order by `rsem run production`:
 
 ## Entry Points
 
-- `rsem <command>` — primary CLI
+- `uv run rsem <command>` — primary CLI
 - `python -m resemantica <command>` — alternative
 - `python -m resemantica.cli <command>` — direct module

@@ -78,39 +78,39 @@ When running via CLI progress (most commands), the stderr handler is temporarily
 ### After an interrupted run
 
 ```bash
-rsem run retry-failed -r v1.0 -R run1 -n
+uv run rsem run retry-failed -r v1.0 -R run1 -n
 ```
 ```bash
-rsem run resume -r v1.0 -R run1
+uv run rsem run resume -r v1.0 -R run1
 ```
 ```bash
-rsem run retry-failed -r v1.0 -R run1 --stage translate-range
+uv run rsem run retry-failed -r v1.0 -R run1 --stage translate-range
 ```
 
 ### After partial data corruption
 
 ```bash
-rsem run cleanup-plan -r v1.0 -R run1 -S translation
+uv run rsem run cleanup-plan -r v1.0 -R run1 -S translation
 ```
 ```bash
-rsem run cleanup-apply -r v1.0 -R run1 -S translation
+uv run rsem run cleanup-apply -r v1.0 -R run1 -S translation
 ```
 ```bash
-rsem translate -r v1.0 -R run1 -s 1 -e 50 -f
+uv run rsem translate -r v1.0 -R run1 -s 1 -e 50 -f
 ```
 
 ### Factory reset a release
 
 ```bash
-rsem run cleanup-apply -r v1.0 -R run1 -S factory -f
+uv run rsem run cleanup-apply -r v1.0 -R run1 -S factory -f
 ```
 ```bash
-rsem extract -i novel.epub -r v1.0
+uv run rsem extract -i novel.epub -r v1.0
 ```
 
 ## Getting Help
 
-- Man page: `docs/rsem.1.md`
+- Man page: `docs/uv run rsem.1.md`
 - Full manual: `docs/manual/00-index.md`
 - Architecture: `docs/10-architecture/`
 - Design decisions: `docs/DECISIONS.md`

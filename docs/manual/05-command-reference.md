@@ -24,7 +24,7 @@ These options are available on most commands:
 Unpack, validate, and round-trip an EPUB.
 
 ```bash
-rsem extract -i <epub> -r <release> [options]
+uv run rsem extract -i <epub> -r <release> [options]
 ```
 
 | Option | Required | Description |
@@ -42,7 +42,7 @@ Exit behavior: always prints `status`, `release_root`, `rebuilt_epub`, `validati
 Two-pass translation of extracted chapters.
 
 ```bash
-rsem translate -r <release> -R <run> (-C <N> | -s <N> [-e <N>]) [options]
+uv run rsem translate -r <release> -R <run> (-C <N> | -s <N> [-e <N>]) [options]
 ```
 
 | Option | Required | Description |
@@ -68,7 +68,7 @@ Preprocessing sub-stages. Requires a subcommand.
 Scan chapters for candidate glossary terms.
 
 ```bash
-rsem preprocess glossary-discover -r <release> [options]
+uv run rsem preprocess glossary-discover -r <release> [options]
 ```
 
 | Option | Description |
@@ -86,7 +86,7 @@ Output: `candidates.json`
 Translate candidates to provisional English.
 
 ```bash
-rsem preprocess glossary-translate -r <release> [options]
+uv run rsem preprocess glossary-translate -r <release> [options]
 ```
 
 ### `glossary-review` (alias: `gls-review`)
@@ -94,7 +94,7 @@ rsem preprocess glossary-translate -r <release> [options]
 Generate review files for human editing.
 
 ```bash
-rsem preprocess glossary-review -r <release> [options]
+uv run rsem preprocess glossary-review -r <release> [options]
 ```
 
 Output: `review.json` and `review.csv`
@@ -104,7 +104,7 @@ Output: `review.json` and `review.csv`
 Validate and promote candidates into locked glossary.
 
 ```bash
-rsem preprocess glossary-promote -r <release> [options]
+uv run rsem preprocess glossary-promote -r <release> [options]
 ```
 
 | Option | Description |
@@ -119,7 +119,7 @@ Output: promoted entries in SQLite, `conflicts.json` if conflicts found.
 Generate chapter summaries.
 
 ```bash
-rsem preprocess summaries -r <release> [options]
+uv run rsem preprocess summaries -r <release> [options]
 ```
 
 Produces: `story_so_far_zh`, `chapter_summary_zh_short`, `arc_summary_zh` per chapter in SQLite.
@@ -129,7 +129,7 @@ Produces: `story_so_far_zh`, `chapter_summary_zh_short`, `arc_summary_zh` per ch
 Detect and validate idiom policies.
 
 ```bash
-rsem preprocess idioms -r <release> [options]
+uv run rsem preprocess idioms -r <release> [options]
 ```
 
 ### `idiom-review` (alias: `idi-review`)
@@ -137,7 +137,7 @@ rsem preprocess idioms -r <release> [options]
 Generate idiom review files.
 
 ```bash
-rsem preprocess idiom-review -r <release> [options]
+uv run rsem preprocess idiom-review -r <release> [options]
 ```
 
 Output: `review.json` and `review.csv`
@@ -147,7 +147,7 @@ Output: `review.json` and `review.csv`
 Validate and promote idiom policies.
 
 ```bash
-rsem preprocess idiom-promote -r <release> [options]
+uv run rsem preprocess idiom-promote -r <release> [options]
 ```
 
 | Option | Description |
@@ -159,7 +159,7 @@ rsem preprocess idiom-promote -r <release> [options]
 Build entity-relationship graph.
 
 ```bash
-rsem preprocess graph -r <release> [options]
+uv run rsem preprocess graph -r <release> [options]
 ```
 
 Output: `graph.ladybug` (LadybugDB), `snapshot.json`, `warnings.json`
@@ -169,7 +169,7 @@ Output: `graph.ladybug` (LadybugDB), `snapshot.json`, `warnings.json`
 Refresh graph-grounded compact continuity.
 
 ```bash
-rsem preprocess continuity -r <release> [options]
+uv run rsem preprocess continuity -r <release> [options]
 ```
 
 ---
@@ -179,7 +179,7 @@ rsem preprocess continuity -r <release> [options]
 Build chapter packets from validated upstream state.
 
 ```bash
-rsem packets build -r <release> -R <run> [options]
+uv run rsem packets build -r <release> -R <run> [options]
 ```
 
 Assembles `ChapterPacket` per chapter with glossary, summaries, idioms, graph context. Derives `ParagraphBundle` per block.
@@ -191,7 +191,7 @@ Assembles `ChapterPacket` per chapter with glossary, summaries, idioms, graph co
 Rebuild EPUB from translated pass artifacts.
 
 ```bash
-rsem rebuild -r <release> -R <run> [options]
+uv run rsem rebuild -r <release> -R <run> [options]
 ```
 
 Output: `rebuild/reconstructed.epub`
@@ -207,7 +207,7 @@ Orchestration workflow control.
 Execute full pipeline in canonical order.
 
 ```bash
-rsem run production -r <release> -R <run> [options]
+uv run rsem run production -r <release> -R <run> [options]
 ```
 
 Stage order: `preprocess-summaries` → `preprocess-glossary` → `preprocess-idioms` → `preprocess-graph` → `preprocess-continuity` → `packets-build` → `translate-range` → `epub-rebuild`
@@ -221,7 +221,7 @@ Stage order: `preprocess-summaries` → `preprocess-glossary` → `preprocess-id
 Resume from last checkpoint.
 
 ```bash
-rsem run resume -r <release> -R <run> [options]
+uv run rsem run resume -r <release> -R <run> [options]
 ```
 
 | Option | Description |
@@ -243,7 +243,7 @@ Retry failed pipeline units. The system classifies failures as **retryable** (au
 | `translate-range` | Chapter has `status = 'failed'` in `translation_checkpoints` | — |
 
 ```bash
-rsem run retry-failed -r <release> -R <run> [options]
+uv run rsem run retry-failed -r <release> -R <run> [options]
 ```
 
 | Option | Description |
@@ -256,7 +256,7 @@ rsem run retry-failed -r <release> -R <run> [options]
 Preview deletable artifacts.
 
 ```bash
-rsem run cleanup-plan -r <release> -R <run> [options]
+uv run rsem run cleanup-plan -r <release> -R <run> [options]
 ```
 
 | Option | Description |
@@ -270,7 +270,7 @@ Scopes: `run`, `translation`, `preprocess`, `cache`, `keep-extracted`, `last-goo
 Execute cleanup.
 
 ```bash
-rsem run cleanup-apply -r <release> -R <run> [options]
+uv run rsem run cleanup-apply -r <release> -R <run> [options]
 ```
 
 | Option | Description |
@@ -285,7 +285,7 @@ rsem run cleanup-apply -r <release> -R <run> [options]
 Launch the Textual TUI.
 
 ```bash
-rsem tui [options]
+uv run rsem tui [options]
 ```
 
 | Option | Description |
@@ -302,7 +302,7 @@ rsem tui [options]
 Override chapter story/non-story classification.
 
 ```bash
-rsem set-chapter-flag -r <release> -C <N> (--story | --non-story)
+uv run rsem set-chapter-flag -r <release> -C <N> (--story | --non-story)
 ```
 
 | Option | Description |

@@ -17,7 +17,7 @@ Resemantica supports two-stage interrupt via `StopToken` (`orchestration/stop.py
 - `StopToken.requested` is set via a `threading.Event`
 - Running LLM calls complete their current generation
 - Pipeline code calls `raise_if_stop_requested()` at granular checkpoints, which raises `StopRequested` carrying a `checkpoint` dict for resumption
-- No data loss; pipeline resumable via `rsem run resume`
+- No data loss; pipeline resumable via `uv run rsem run resume`
 - Prints: `Stopping after current task...`
 
 **Second Ctrl+C** — Force stop:
@@ -36,5 +36,5 @@ Resemantica supports two-stage interrupt via `StopToken` (`orchestration/stop.py
 For transient failures (network, LLM timeout):
 
 1. Automatic retries: configured via `llm.max_retries` (default: 2)
-2. Stage retry: `rsem run retry-failed --stage <stage>` retries only failed pipeline units
+2. Stage retry: `uv run rsem run retry-failed --stage <stage>` retries only failed pipeline units
 3. Full rebuild: `--force` flag re-runs a stage from scratch, ignoring checkpoints

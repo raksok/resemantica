@@ -7,7 +7,7 @@ The cleanup system uses a **two-phase design** for safety: `cleanup-plan` (previ
 ### Phase 1: Plan
 
 ```bash
-rsem run cleanup-plan -r <release> -R <run> -S <scope>
+uv run rsem run cleanup-plan -r <release> -R <run> -S <scope>
 ```
 
 - Enumerates deletable artifacts (files + SQLite rows) without removing anything.
@@ -17,7 +17,7 @@ rsem run cleanup-plan -r <release> -R <run> -S <scope>
 ### Phase 2: Apply
 
 ```bash
-rsem run cleanup-apply -r <release> -R <run> -S <scope>
+uv run rsem run cleanup-apply -r <release> -R <run> -S <scope>
 ```
 
 - Reads the plan JSON and validates it before executing.
@@ -104,26 +104,26 @@ The `all` scope preserves 5 artifacts:
 ## Common Cleanup Workflows
 
 ```bash
-rsem run cleanup-plan -r v1.0 -R run1 -S translation
+uv run rsem run cleanup-plan -r v1.0 -R run1 -S translation
 ```
 ```bash
-rsem run cleanup-apply -r v1.0 -R run1 -S translation
+uv run rsem run cleanup-apply -r v1.0 -R run1 -S translation
 ```
 ```bash
-rsem run cleanup-plan -r v1.0 -R run1 -S all
+uv run rsem run cleanup-plan -r v1.0 -R run1 -S all
 ```
 ```bash
-rsem run cleanup-apply -r v1.0 -R run1 -S all
+uv run rsem run cleanup-apply -r v1.0 -R run1 -S all
 ```
 ```bash
-rsem run cleanup-plan -r v1.0 -R run1 -S factory
+uv run rsem run cleanup-plan -r v1.0 -R run1 -S factory
 ```
 ```bash
-rsem run cleanup-apply -r v1.0 -R run1 -S factory -f
+uv run rsem run cleanup-apply -r v1.0 -R run1 -S factory -f
 ```
 ```bash
-rsem run cleanup-plan -r v1.0 -R run1 -S last-good-chunk --stage preprocess-summaries
+uv run rsem run cleanup-plan -r v1.0 -R run1 -S last-good-chunk --stage preprocess-summaries
 ```
 ```bash
-rsem run cleanup-apply -r v1.0 -R run1 -S last-good-chunk --stage preprocess-summaries
+uv run rsem run cleanup-apply -r v1.0 -R run1 -S last-good-chunk --stage preprocess-summaries
 ```

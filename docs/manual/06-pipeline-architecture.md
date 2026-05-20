@@ -56,7 +56,7 @@ Stages enforce a forward-only ordering via `legal_transition()` (`orchestration/
 - Moving **forward** in `STAGE_ORDER` is allowed.
 - Moving **backward** is **denied** unless `--allow-rewind` is set.
 
-When `rsem run resume` loads a checkpoint, it checks the persisted run state:
+When `uv run rsem run resume` loads a checkpoint, it checks the persisted run state:
 - If the last stage is `completed`, resume skips to the **next** stage.
 - If the last stage is `failed`, `stopped`, or `running`, it **re-runs** that stage.
 

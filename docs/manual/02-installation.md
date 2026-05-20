@@ -7,6 +7,7 @@
 - **Disk space** Varies by corpus size; 10+ GB recommended for large novels
 - **RAM** 16+ GB recommended for running local LLMs
 - **llama.cpp server** running in router mode (or any OpenAI-compatible API)
+- **uv** >= 0.6 (Python package manager)
 
 ## Setup
 

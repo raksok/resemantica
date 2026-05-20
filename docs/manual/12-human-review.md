@@ -11,7 +11,7 @@ discover → translate → review → (edit) → promote
 ### Generate Review Files
 
 ```bash
-rsem preprocess glossary-review -r v1.0
+uv run rsem preprocess glossary-review -r v1.0
 ```
 
 Produces two files at `<release_root>/glossary/`:
@@ -70,7 +70,7 @@ For each entry you can:
 ### Promote with Edits
 
 ```bash
-rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
+uv run rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
 ```
 
 **How promotion consumes the review file:**
@@ -92,7 +92,7 @@ rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
 ### Generate Review Files
 
 ```bash
-rsem preprocess idiom-review -r v1.0
+uv run rsem preprocess idiom-review -r v1.0
 ```
 
 Produces `<release_root>/idioms/review.json` and `review.csv`.
@@ -150,7 +150,7 @@ Key difference from glossary review: idioms have **two vote kinds** — `'render
 ### Promote with Edits
 
 ```bash
-rsem preprocess idiom-promote -r v1.0 -F artifacts/v1.0/idioms/review.csv
+uv run rsem preprocess idiom-promote -r v1.0 -F artifacts/v1.0/idioms/review.csv
 ```
 
 **How promotion consumes the review file:**
@@ -172,16 +172,16 @@ If you skip the review step and call `glossary-promote` or `idiom-promote` witho
 ## Workflow Example
 
 ```bash
-rsem preprocess glossary-discover -r v1.0
+uv run rsem preprocess glossary-discover -r v1.0
 ```
 ```bash
-rsem preprocess glossary-translate -r v1.0
+uv run rsem preprocess glossary-translate -r v1.0
 ```
 ```bash
-rsem preprocess glossary-review -r v1.0
+uv run rsem preprocess glossary-review -r v1.0
 ```
 ```bash
-rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
+uv run rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
 ```
 ```bash
 cat artifacts/v1.0/glossary/conflicts.json
