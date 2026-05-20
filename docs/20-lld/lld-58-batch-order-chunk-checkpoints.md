@@ -60,6 +60,7 @@ Existing pass checkpoints and run-state pass lists remain the normal resume auth
 
 - For `preprocess-summaries`, cleanup removes summary and downstream rows/artifacts after the last completed chunk and rewinds `summary_checkpoints` to `last_good_chapter`.
 - For `translate-range`, cleanup removes translation rows/artifacts after the last completed chunk and trims run-state pass lists to the boundary.
+- Broad cleanup scopes (`run`, `preprocess`, `keep-extracted`, and `all`) delete summary chunk checkpoints outright so summary reruns restart from the remaining extracted chapter input. Only `last-good-chunk` rewinds to a completed chunk boundary.
 
 ## Events
 

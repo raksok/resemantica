@@ -93,7 +93,7 @@ Implemented package layout (M10 slice):
 - `src/resemantica/orchestration/chunk_checkpoints.py`: durable chunk checkpoint repository used by summary and batched translation cleanup boundaries
 - `src/resemantica/orchestration/retry_failed.py`: durable failed-unit planner and executor for `run retry-failed`, including `llm_content_validation_failed` summary recovery
 - `src/resemantica/orchestration/resume.py`: `resume_run()` for checkpoint-based resume
-- `src/resemantica/orchestration/cleanup.py`: shared cleanup scopes plus `plan_cleanup()` and `apply_cleanup()` for validated, two-step cleanup workflow, including `last-good-chunk`
+- `src/resemantica/orchestration/cleanup.py`: shared cleanup scopes plus `plan_cleanup()` and `apply_cleanup()` for validated, two-step cleanup workflow, including stale-plan protection and `last-good-chunk`
 - `src/resemantica/orchestration/events.py`: `emit_event()` for structured event emission, tracking persistence, and paired structured Loguru records for operational signals
 - `src/resemantica/tracking/`: event and run state models with SQLite persistence
 - `src/resemantica/tracking/models.py`: `Event` and `RunState` dataclasses with schema versioning

@@ -87,12 +87,12 @@ Post-apply report:
 
 | Scope | What it deletes | SQLite cleanup | Run ID needed? |
 |-------|-----------------|----------------|----------------|
-| `run` | One run directory | Events + state for that run | Yes |
+| `run` | One run directory | Events, state, checkpoints, summary checkpoints, and summary chunk checkpoints for that run | Yes |
 | `translation` | Translation subdir of a run | Checkpoints for that run | Yes |
-| `preprocess` | extracted/, glossary/, summaries/, idioms/, graph/, packets/ | Extracted chapters + blocks for that run | Yes |
+| `preprocess` | extracted/, glossary/, summaries/, idioms/, graph/, packets/ | Extracted chapters + blocks, downstream metadata, summary checkpoints, and summary chunk checkpoints for that run | Yes |
 | `cache` | `.cache/` directory | None | Yes |
-| `keep-extracted` | Downstream preprocess dirs, `.cache/`, and run translation output; preserves `extracted/` | Downstream checkpoints/metadata; preserves extracted chapters + blocks | Yes |
-| `all` | Everything in release root except tracking.db, resemantica.db, graph.ladybug, and cleanup files | All rows for that run | Yes |
+| `keep-extracted` | Downstream preprocess dirs, `.cache/`, and run translation output; preserves `extracted/` | Downstream checkpoints/metadata, including summary checkpoints and summary chunk checkpoints; preserves extracted chapters + blocks | Yes |
+| `all` | Everything in release root except tracking.db, resemantica.db, graph.ladybug, and cleanup files | All rows for that run, including summary checkpoints and summary chunk checkpoints | Yes |
 | `factory` | All release directories + legacy global `resemantica.db`/`graph.ladybug` if present | None (files deleted) | No |
 
 ## Key Bindings

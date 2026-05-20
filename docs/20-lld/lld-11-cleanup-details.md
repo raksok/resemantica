@@ -29,7 +29,7 @@ Artifacts:
     - `translation`: selected run's `translation/` directory.
     - `preprocess`: release-level `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, and `packets/`.
     - `cache`: release-level `.cache/`.
-    - `keep-extracted`: downstream artifacts and selected run translation output while preserving `extracted/`.
+    - `keep-extracted`: downstream artifacts, selected run translation output, and downstream resume/checkpoint state while preserving `extracted/` and extraction metadata.
     - `last-good-chunk`: artifacts and rows after the last completed chunk for the failed/current stage.
     - `all`: everything under the release root except release-local stores and cleanup files.
     - `factory`: all release directories plus legacy global stores under artifact root.
@@ -43,13 +43,13 @@ Cleanup scopes are defined once in `orchestration.cleanup.CLEANUP_SCOPES` and re
 
 | Scope | Filesystem deletion | SQLite deletion |
 |---|---|---|
-| `run` | `runs/<run_id>/` | tracking `events`/`run_state`, translation checkpoints, extraction metadata, preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows |
+| `run` | `runs/<run_id>/` | tracking `events`/`run_state`, translation checkpoints, extraction metadata, preprocessing checkpoints/drafts/votes, summary checkpoints, `preprocess-summaries` chunk checkpoints, graph drafts, packet metadata, generic run/checkpoint rows |
 | `translation` | `runs/<run_id>/translation/` | translation checkpoints only |
-| `preprocess` | `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/` | extraction metadata plus preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows |
+| `preprocess` | `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/` | extraction metadata plus preprocessing checkpoints/drafts/votes, summary checkpoints, `preprocess-summaries` chunk checkpoints, graph drafts, packet metadata, generic run/checkpoint rows |
 | `cache` | `.cache/` | none |
-| `keep-extracted` | `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/`, `.cache/`, selected run `translation/` | tracking rows, translation checkpoints, downstream preprocessing checkpoints/drafts/votes, graph drafts, packet metadata, generic run/checkpoint rows; preserves `extracted_chapters` and `extracted_blocks` |
+| `keep-extracted` | `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/`, `.cache/`, selected run `translation/` | tracking rows, translation checkpoints, summaries, glossary, idioms, graph, packets, summary checkpoints, `preprocess-summaries` chunk checkpoints, and generic run/checkpoint rows; preserves `extracted_chapters` and `extracted_blocks` |
 | `last-good-chunk` | summary or translation artifacts after the last completed chunk | stage-specific rows after the chunk boundary; summary checkpoints or translation run-state lists are rewound to `last_good_chapter` |
-| `all` | all direct release-root children except protected stores and cleanup files | same run-scoped rows as `run` |
+| `all` | all direct release-root children except protected stores and cleanup files | same run-scoped rows as `run`, including summary checkpoints and `preprocess-summaries` chunk checkpoints |
 | `factory` | artifact-root `releases/`, legacy global `resemantica.db`, legacy global `graph.ladybug` | none |
 
 Protected release-local files are `tracking.db`, `resemantica.db`, `graph.ladybug`, `cleanup_plan.json`, and `cleanup_report.json`.
@@ -59,7 +59,8 @@ Protected release-local files are `tracking.db`, `resemantica.db`, `graph.ladybu
 - cleanup MUST NOT delete source EPUBs or configuration files by default
 - cleanup MUST NOT delete authoritative `locked_glossary` unless scope is `all`
 - plans must be generated and persisted before execution
-- apply validates plan schema, release/run identity, scope, expected root, and target containment
+- apply validates plan schema, release/run identity, scope, expected root, target containment, and the exact SQLite target contract for the requested scope
+- apply must reject stale or incomplete persisted plans; rerun `cleanup-plan` when the cleanup contract changes
 - `--force` may bypass scope mismatch only; it must not bypass release/run mismatch or path safety
 - `last-good-chunk` resolves the stage from run state, or accepts `--stage preprocess-summaries|translate-range`; other stages are rejected
 

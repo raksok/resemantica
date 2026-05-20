@@ -704,6 +704,8 @@ class TestM11CleanupScopes:
 
     def _seed_cleanup_db_rows(self, release_id: str, run_id: str) -> Path:
         from resemantica.db.sqlite import ensure_full_schema, open_connection
+        from resemantica.db.summary_repo import save_summary_draft
+        from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
         from resemantica.settings import derive_paths, load_config
 
         paths = derive_paths(load_config(), release_id=release_id)
@@ -749,6 +751,30 @@ class TestM11CleanupScopes:
                 """,
                 (release_id, run_id),
             )
+            save_chunk_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="preprocess-summaries",
+                chunk_index=0,
+                chapter_start=1,
+                chapter_end=1,
+                status="completed",
+                metadata={"last_good_chapter": 1},
+            )
+            save_summary_draft(
+                conn,
+                release_id=release_id,
+                chapter_number=1,
+                summary_type="chapter_summary_zh_structured",
+                content={"chapter_number": 1, "is_story_chapter": True},
+                chapter_source_hash="hash",
+                model_name="model",
+                prompt_version="prompt",
+                run_id=run_id,
+                validation_status="approved",
+                is_story_chapter=1,
+            )
             conn.execute(
                 """
                 INSERT INTO packet_metadata(
@@ -765,6 +791,51 @@ class TestM11CleanupScopes:
         finally:
             conn.close()
         return paths.db_path
+
+    @staticmethod
+    def _write_extracted_summary_chapter(
+        release_id: str,
+        chapter_number: int,
+        *,
+        source_text: str | None = None,
+    ) -> None:
+        import json
+
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
+        block_id = f"ch{chapter_number:03d}_blk001"
+        source_path = f"OEBPS/chapter{chapter_number}.xhtml"
+        payload = {
+            "chapter_id": f"chapter-{chapter_number}",
+            "chapter_number": chapter_number,
+            "source_document_path": source_path,
+            "chapter_source_hash": f"hash-ch{chapter_number}",
+            "schema_version": 1,
+            "records": [
+                {
+                    "chapter_id": f"chapter-{chapter_number}",
+                    "chapter_number": chapter_number,
+                    "source_document_path": source_path,
+                    "block_id": block_id,
+                    "parent_block_id": block_id,
+                    "segment_id": None,
+                    "block_order": 1,
+                    "segment_order": None,
+                    "source_text_zh": source_text or f"第{chapter_number}章内容。",
+                    "placeholder_map_ref": str(
+                        (paths.extracted_placeholders_dir / f"chapter-{chapter_number}.json").as_posix()
+                    ),
+                    "chapter_source_hash": f"hash-ch{chapter_number}",
+                    "schema_version": 1,
+                }
+            ],
+        }
+        (paths.extracted_chapters_dir / f"chapter-{chapter_number}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _count_rows(db_path: Path, table: str) -> int:
@@ -835,6 +906,11 @@ class TestM11CleanupScopes:
         assert str(run_dir / "translation") in plan["deletable_artifacts"]
         assert not any(row["table"] == "extracted_chapters" for row in plan["sqlite_rows"])
         assert not any(row["table"] == "extracted_blocks" for row in plan["sqlite_rows"])
+        assert any(row["table"] == "summary_checkpoints" for row in plan["sqlite_rows"])
+        assert any(
+            row["table"] == "chunk_checkpoints" and row.get("stage_name") == "preprocess-summaries"
+            for row in plan["sqlite_rows"]
+        )
 
         result = apply_cleanup(release_id, run_id, scope="keep-extracted")
 
@@ -845,8 +921,184 @@ class TestM11CleanupScopes:
         assert self._count_rows(db_path, "extracted_chapters") == 1
         assert self._count_rows(db_path, "extracted_blocks") == 1
         assert self._count_rows(db_path, "summary_checkpoints") == 0
+        assert self._count_rows(db_path, "chunk_checkpoints") == 0
+        assert self._count_rows(db_path, "summary_drafts") == 0
         assert self._count_rows(db_path, "packet_metadata") == 0
         assert self._count_rows(db_path, "translation_checkpoints") == 0
+
+    def test_broad_cleanup_scopes_include_summary_resume_targets(self):
+        import uuid
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        for scope in ["run", "preprocess", "keep-extracted", "all"]:
+            plan = plan_cleanup(release_id, run_id, scope=scope, dry_run=True)
+            identities = {
+                (
+                    row.get("database"),
+                    row.get("table"),
+                    row.get("column"),
+                    row.get("release_column"),
+                    row.get("stage_name"),
+                )
+                for row in plan["sqlite_rows"]
+            }
+            assert ("resemantica.db", "summary_checkpoints", "run_id", "release_id", None) in identities
+            assert (
+                "resemantica.db",
+                "chunk_checkpoints",
+                "run_id",
+                "release_id",
+                "preprocess-summaries",
+            ) in identities
+
+    def test_cleanup_apply_rejects_stale_keep_extracted_plan(self):
+        import json
+        import uuid
+
+        from resemantica.orchestration.cleanup import _get_cleanup_plan_path
+
+        release_id = f"test-release-{uuid.uuid4().hex[:8]}"
+        run_id = f"test-run-{uuid.uuid4().hex[:8]}"
+
+        release_root, run_dir = self._create_test_artifacts(release_id, run_id)
+        db_path = self._seed_cleanup_db_rows(release_id, run_id)
+        plan = plan_cleanup(release_id, run_id, scope="keep-extracted", dry_run=True)
+        plan["sqlite_rows"] = [
+            row
+            for row in plan["sqlite_rows"]
+            if not (row["table"] == "chunk_checkpoints" and row.get("stage_name") == "preprocess-summaries")
+        ]
+        plan_path = _get_cleanup_plan_path(release_id, scope="keep-extracted")
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        result = apply_cleanup(release_id, run_id, scope="keep-extracted")
+
+        assert result["success"] is False
+        assert "stale or incomplete" in result["message"]
+        assert (release_root / "summaries").exists()
+        assert (run_dir / "translation").exists()
+        assert self._count_rows(db_path, "summary_checkpoints") == 1
+        assert self._count_rows(db_path, "chunk_checkpoints") == 1
+        assert self._count_rows(db_path, "summary_drafts") == 1
+
+    def test_keep_extracted_cleanup_allows_summary_rerun_from_first_chapter(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ):
+        import json
+
+        from resemantica.db.sqlite import ensure_full_schema, open_connection
+        from resemantica.db.summary_repo import get_summary_checkpoint, save_summary_draft
+        from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+        from resemantica.settings import derive_paths, load_config
+        from resemantica.summaries.pipeline import preprocess_summaries
+
+        monkeypatch.chdir(tmp_path)
+        release_id = "cleanup-summary-rerun"
+        run_id = "summaries-001"
+        config = load_config()
+        config.batch_order.enabled = True
+        config.batch_order.summary_chunk_multiplier = 2
+        config.summaries.chapter_concurrency = 1
+        for chapter_number in range(1, 5):
+            self._write_extracted_summary_chapter(release_id, chapter_number)
+
+        paths = derive_paths(config, release_id=release_id)
+        conn = open_connection(paths.db_path)
+        try:
+            ensure_full_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO summary_checkpoints(
+                    release_id, run_id, zh_last_chapter, story_last_chapter, en_last_chapter
+                ) VALUES (?, ?, 4, 4, 4)
+                """,
+                (release_id, run_id),
+            )
+            save_chunk_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="preprocess-summaries",
+                chunk_index=0,
+                chapter_start=1,
+                chapter_end=2,
+                status="completed",
+                metadata={"last_good_chapter": 2},
+            )
+            save_summary_draft(
+                conn,
+                release_id=release_id,
+                chapter_number=1,
+                summary_type="chapter_summary_zh_structured",
+                content={"chapter_number": 1, "is_story_chapter": True},
+                chapter_source_hash="hash-ch1",
+                model_name="model",
+                prompt_version="prompt",
+                run_id=run_id,
+                validation_status="approved",
+                is_story_chapter=1,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        plan_cleanup(release_id, run_id, scope="keep-extracted", dry_run=True)
+        result = apply_cleanup(release_id, run_id, scope="keep-extracted")
+        assert result["success"] is True
+
+        conn = open_connection(paths.db_path)
+        try:
+            assert get_summary_checkpoint(conn, release_id=release_id, run_id=run_id) is None
+            assert self._count_rows(paths.db_path, "summary_drafts") == 0
+            assert self._count_rows(paths.db_path, "chunk_checkpoints") == 0
+        finally:
+            conn.close()
+
+        structured_calls: list[int] = []
+
+        class RecordingLLM:
+            def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+                if "SUMMARY_ZH_STRUCTURED" in prompt:
+                    import re
+
+                    chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
+                    if chapter_match is None:
+                        raise RuntimeError("chapter number missing from prompt")
+                    chapter_number = int(chapter_match.group(1))
+                    structured_calls.append(chapter_number)
+                    return json.dumps({
+                        "chapter_number": chapter_number,
+                        "characters_mentioned": ["张三"],
+                        "key_events": ["张三开始修炼"],
+                        "new_terms": [],
+                        "relationships_changed": [{"entity": "张三", "change": "开始修炼"}],
+                        "setting": "山中",
+                        "tone": "calm",
+                        "narrative_progression": "张三开始修炼。",
+                        "is_story_chapter": True,
+                    }, ensure_ascii=False)
+                if "SUMMARY_EN_DERIVE" in prompt:
+                    return "EN::content"
+                if "SUMMARY_STORY_COMPACT" in prompt:
+                    return "张三开始修炼。"
+                if "SUMMARY_ZH_VALIDATE" in prompt:
+                    return json.dumps({"flags": [], "warnings": []}, ensure_ascii=False)
+                raise RuntimeError("Unexpected prompt")
+
+        summary_result = preprocess_summaries(
+            release_id=release_id,
+            run_id=run_id,
+            config=config,
+            llm_client=RecordingLLM(),
+            resume=True,
+        )
+
+        assert summary_result["status"] == "success"
+        assert structured_calls == [1, 2, 3, 4]
 
     def test_scope_cache_deletes_no_sqlite_rows(self):
         import uuid

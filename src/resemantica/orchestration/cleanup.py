@@ -31,7 +31,8 @@ CleanupScope = Literal[
     "all",
     "factory",
 ]
-SUPPORTED_CLEANUP_PLAN_SCHEMA = "1.1"
+SUPPORTED_CLEANUP_PLAN_SCHEMA = "1.2"
+STALE_CLEANUP_PLAN_MESSAGE = "Cleanup plan is stale or incomplete. Run cleanup-plan again."
 
 _PROTECTED_RELEASE_ARTIFACTS = {
     "tracking.db",
@@ -97,8 +98,22 @@ _RELEASE_SQLITE_TARGETS = {
     ),
 }
 
+def _sqlite_target_identity(target: dict[str, Any]) -> tuple[str, str, str, str | None, str | None]:
+    return (
+        str(target.get("database", "")),
+        str(target.get("table", "")),
+        str(target.get("column", "")),
+        target.get("release_column"),
+        target.get("stage_name"),
+    )
+
+
+def _sqlite_target_identity_set(targets: list[dict[str, Any]]) -> set[tuple[str, str, str, str | None, str | None]]:
+    return {_sqlite_target_identity(target) for target in targets}
+
+
 _ALLOWED_SQLITE_TARGETS = {
-    (str(target["database"]), str(target["table"]), str(target["column"]), target["release_column"])
+    _sqlite_target_identity(target)
     for targets in [*_RELEASE_SQLITE_TARGETS.values(), _TRACKING_SQLITE_TARGETS]
     for target in targets
 }
@@ -478,8 +493,8 @@ def _validate_plan(
     scope: str,
     force: bool,
 ) -> str | None:
-    if plan.get("schema_version") not in {"1.0", SUPPORTED_CLEANUP_PLAN_SCHEMA}:
-        return f"Unsupported cleanup plan schema: {plan.get('schema_version')}"
+    if plan.get("schema_version") != SUPPORTED_CLEANUP_PLAN_SCHEMA:
+        return STALE_CLEANUP_PLAN_MESSAGE
 
     plan_scope = str(plan.get("scope", ""))
     if plan_scope not in CLEANUP_SCOPES:
@@ -508,6 +523,13 @@ def _validate_plan(
         if not _is_under_root(target, expected_root):
             return f"Cleanup target outside expected root: {target}"
 
+    sqlite_rows = plan.get("sqlite_rows", [])
+    if not isinstance(sqlite_rows, list) or not all(isinstance(row, dict) for row in sqlite_rows):
+        return STALE_CLEANUP_PLAN_MESSAGE
+    current_targets = _sqlite_targets_for_scope(scope)
+    if _sqlite_target_identity_set(sqlite_rows) != _sqlite_target_identity_set(current_targets):
+        return STALE_CLEANUP_PLAN_MESSAGE
+
     return None
 
 
@@ -535,7 +557,13 @@ def _delete_sqlite_targets(
         table = str(target.get("table", ""))
         column = str(target.get("column", ""))
         release_column = target.get("release_column")
-        allowed_key = (database, table, column, release_column)
+        allowed_key = _sqlite_target_identity({
+            "database": database,
+            "table": table,
+            "column": column,
+            "release_column": release_column,
+            "stage_name": target.get("stage_name"),
+        })
         if allowed_key not in _ALLOWED_SQLITE_TARGETS:
             raise ValueError(f"Unsupported SQLite cleanup target: {database}.{table}.{column}")
         if not _table_exists(conn, table):
@@ -673,17 +701,7 @@ def _rewind_tracking_checkpoint(plan: dict[str, Any], release_id: str, run_id: s
 
 
 def _plan_sqlite_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
-    sqlite_rows = list(plan.get("sqlite_rows", []))
-    if sqlite_rows and all("column" in row for row in sqlite_rows):
-        return sqlite_rows
-    scope = str(plan.get("scope", ""))
-    if scope not in CLEANUP_SCOPES:
-        return []
-    rows = _sqlite_targets_for_scope(scope)
-    for row in rows:
-        row["release_id"] = plan.get("release_id", "")
-        row["run_id"] = plan.get("run_id", "")
-    return rows
+    return list(plan.get("sqlite_rows", []))
 
 
 def apply_cleanup(
