@@ -1,0 +1,188 @@
+# 12. Human Review Workflow
+
+The human review workflow lets you inspect and correct glossary and idiom candidates before they are promoted to the locked stores. The cycle is:
+
+```text
+discover → translate → review → (edit) → promote
+```
+
+## Glossary Review
+
+### Generate Review Files
+
+```bash
+rsem preprocess glossary-review -r v1.0
+```
+
+Produces two files at `<release_root>/glossary/`:
+- `review.json` — Full structured data with all fields
+- `review.csv` — Tab-separated spreadsheet-friendly format
+
+### Review File Format
+
+**JSON structure:**
+```json
+{
+    "review_schema_version": 1,
+    "release_id": "v1.0",
+    "instructions": "Edit 'translation' to override...",
+    "entries": [
+        {
+            "candidate_id": "gcan_abc123",
+            "source_term": "修仙",
+            "category": "concept",
+            "translation": "",
+            "evidence_snippet": "...
+修仙之路...",
+            "alternatives": [
+                {
+                    "model_name": "HY-MT1.5-7B",
+                    "translation": "cultivation",
+                    "resolution_status": "pending"
+                }
+            ],
+            "action": "keep"
+        }
+    ]
+}
+```
+
+**CSV columns** (tab-separated):
+
+| Column | Editable | Description |
+|--------|----------|-------------|
+| `action` | Yes | `keep`, `delete`, or `add` |
+| `source_term` | Yes (for `add`) | Chinese term |
+| `category` | Yes (for `add`) | Term category (person, place, concept, etc.) |
+| `translation` | Yes | Override the English rendering |
+| `candidate_id` | No (empty for `add`) | Internal ID |
+| `evidence_snippet` | Yes (for `add`) | Context from source text |
+| `alternatives` | No (informational) | Pipe-delimited model translations |
+
+### Editing Instructions
+
+For each entry you can:
+
+- **`"action": "keep"`** (default) — Include in promotion. Optionally edit the `translation` field to override the English rendering.
+- **`"action": "delete"`** — Exclude this candidate from promotion.
+- **`"action": "add"`** — Insert a new entry. Omit `candidate_id`, provide `source_term`, `category`, `translation`, and optionally `evidence_snippet`.
+
+### Promote with Edits
+
+```bash
+rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
+```
+
+**How promotion consumes the review file:**
+
+1. **Read** — Auto-detects format by extension (`.csv` or `.json`).
+2. **Apply overrides** — `_apply_review_overrides()` processes each entry:
+   - **Existing candidates** (by `candidate_id`):
+     - `delete`: skipped from promotion.
+     - Changed `translation`: updates the candidate's `candidate_translation_en`, resets `validation_status` to `'pending'`, clears `conflict_reason`.
+   - **New entries** (`action: add`, no `candidate_id`):
+     - Generates synthetic ID `gcan_review_<sha256_prefix>`.
+     - Creates candidate with `discovery_run_id="review"`, `translator_model_name="human"`.
+     - Upserts into `glossary_candidates` table.
+3. **Validate** — `validate_candidates_for_promotion()` checks for conflicts against existing `locked_glossary` entries.
+4. **Promote** — Conflict-free entries are promoted to `locked_glossary` and marked `candidate_status = 'promoted'`. Conflicts are written to `conflicts.json`.
+
+## Idiom Review
+
+### Generate Review Files
+
+```bash
+rsem preprocess idiom-review -r v1.0
+```
+
+Produces `<release_root>/idioms/review.json` and `review.csv`.
+
+### Review File Format
+
+**JSON structure:**
+```json
+{
+    "review_schema_version": 1,
+    "release_id": "v1.0",
+    "entries": [
+        {
+            "candidate_id": "ican_def456",
+            "source_text": "对牛弹琴",
+            "meaning_zh": "对不懂道理的人讲道理",
+            "meaning_en": "",
+            "rendering": "",
+            "evidence_snippet": "...对牛弹琴...",
+            "alternatives": [
+                {
+                    "model_name": "Qwen3.5-9B-GLM5.1",
+                    "kind": "rendering",
+                    "translation": "casting pearls before swine",
+                    "resolution_status": "pending"
+                }
+            ],
+            "action": "keep"
+        }
+    ]
+}
+```
+
+**CSV columns** (tab-separated):
+
+| Column | Editable | Description |
+|--------|----------|-------------|
+| `action` | Yes | `keep`, `delete`, or `add` |
+| `source_text` | Yes (for `add`) | Chinese idiom text |
+| `meaning_zh` | Yes (for `add`) | Chinese meaning explanation |
+| `meaning_en` | Yes | English meaning explanation |
+| `rendering` | Yes | Override the English idiom rendering |
+| `candidate_id` | No (empty for `add`) | Internal ID |
+| `evidence_snippet` | No | Context from source text |
+| `alternatives` | No (informational) | Pipe-delimited `kind:translation` pairs |
+
+Key difference from glossary review: idioms have **two vote kinds** — `'rendering'` (the English translation) and `'meaning'` (the semantic explanation). The CSV alternatives column encodes both with a `kind:` prefix.
+
+### Editing Instructions
+
+- **`"action": "keep"`** — Include in promotion. Edit `rendering` and/or `meaning_en`.
+- **`"action": "delete"`** — Exclude from promotion.
+- **`"action": "add"`** — Insert a new idiom. Provide `source_text`, `meaning_zh`, `rendering`, and optionally `meaning_en`, `usage_notes`, `evidence_snippet`.
+
+### Promote with Edits
+
+```bash
+rsem preprocess idiom-promote -r v1.0 -F artifacts/v1.0/idioms/review.csv
+```
+
+**How promotion consumes the review file:**
+
+1. **Read** — Auto-detects format by extension.
+2. **Apply overrides** — `_apply_idiom_review_overrides()`:
+   - **Existing candidates** (`delete` or updated `rendering`/`meaning_en`).
+   - **New entries**: synthetic ID `ican_review_<sha256_prefix>`, `detection_run_id="review"`, `translator_model_name="human"`, `analyst_model_name="human"`.
+3. **Validate** — `validate_idiom_policy()` checks for conflicts against existing `idiom_policies`.
+4. **Promote** — Conflict-free entries written to `idiom_policies`, candidates marked `candidate_status = 'approved'`.
+
+## Without Review Files
+
+If you skip the review step and call `glossary-promote` or `idiom-promote` without `--review-file`, the system promotes all candidates with:
+
+- **Glossary**: `candidate_translation_en IS NOT NULL AND candidate_status != 'promoted' AND llm_keep = 1`
+- **Idioms**: `candidate_status = 'translated'`
+
+## Workflow Example
+
+```bash
+rsem preprocess glossary-discover -r v1.0
+```
+```bash
+rsem preprocess glossary-translate -r v1.0
+```
+```bash
+rsem preprocess glossary-review -r v1.0
+```
+```bash
+rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/review.csv
+```
+```bash
+cat artifacts/v1.0/glossary/conflicts.json
+```

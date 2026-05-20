@@ -1,0 +1,313 @@
+# 5. Command Reference
+
+## Global Options
+
+These options are available on most commands:
+
+| Option | Description |
+|--------|-------------|
+| `-c, --config PATH` | Path to config TOML (default: `./resemantica.toml`) |
+| `-v, --verbose` | Increase verbosity; repeat for DEBUG (`-vvv`/`-vvvv`) |
+| `-r, --release ID` | Release identifier; creates `artifacts/releases/<ID>/` |
+| `-R, --run ID` | Run identifier for checkpoint/artifact scoping |
+| `-f, --force` | Rebuild instead of resuming |
+| `-w, --allow-rewind` | Allow running even if later stages started |
+| `-C, --chapter N` | Single chapter number (mutually exclusive with `--start`) |
+| `-s, --start N` | First chapter in range (inclusive) |
+| `-e, --end N` | Last chapter in range (inclusive) |
+| `-b, --batched, --batched-model-order` | Run all chapters pass1-first, then pass2/3 |
+
+---
+
+## `extract` (alias: `ext`)
+
+Unpack, validate, and round-trip an EPUB.
+
+```bash
+rsem extract -i <epub> -r <release> [options]
+```
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `-i, --input PATH` | Yes | Path to source EPUB file |
+
+Produces: validation report, placeholder maps, and a lossless reconstructed EPUB.
+
+Exit behavior: always prints `status`, `release_root`, `rebuilt_epub`, `validation_report`.
+
+---
+
+## `translate` (alias: `tra`)
+
+Two-pass translation of extracted chapters.
+
+```bash
+rsem translate -r <release> -R <run> (-C <N> | -s <N> [-e <N>]) [options]
+```
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `-r, --release ID` | Yes | Release identifier |
+| `-R, --run ID` | Yes | Artifact scoping identifier |
+| `-C, --chapter N` | * | Single chapter (* mutually exclusive) |
+| `-s, --start N` | * | Range start |
+| `-e, --end N` | No | Range end (requires `--start`) |
+| `-f, --force, --force-pass1` | No | Ignore checkpoints, re-run |
+| `-b, --batched` | No | Batched model order |
+
+Output: pass1 and pass2 artifacts per chapter.
+
+---
+
+## `preprocess` (alias: `pre`)
+
+Preprocessing sub-stages. Requires a subcommand.
+
+### `glossary-discover` (alias: `gls-discover`)
+
+Scan chapters for candidate glossary terms.
+
+```bash
+rsem preprocess glossary-discover -r <release> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-p, --pruning-threshold FLOAT` | Min corpus score (override config) |
+| `--eval-batch-size INT` | Batch size for LLM evaluation |
+| `--skip-llm-eval` | Skip LLM candidate evaluation |
+| `--dedup-threshold FLOAT` | Embedding similarity for alias clustering |
+| `-f, --force` | Rebuild instead of resume |
+
+Output: `candidates.json`
+
+### `glossary-translate` (alias: `gls-translate`)
+
+Translate candidates to provisional English.
+
+```bash
+rsem preprocess glossary-translate -r <release> [options]
+```
+
+### `glossary-review` (alias: `gls-review`)
+
+Generate review files for human editing.
+
+```bash
+rsem preprocess glossary-review -r <release> [options]
+```
+
+Output: `review.json` and `review.csv`
+
+### `glossary-promote` (alias: `gls-promote`)
+
+Validate and promote candidates into locked glossary.
+
+```bash
+rsem preprocess glossary-promote -r <release> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-F, --review, --review-file PATH` | Apply user edits from review file |
+| `-f, --force` | Re-promote even if already promoted |
+
+Output: promoted entries in SQLite, `conflicts.json` if conflicts found.
+
+### `summaries` (alias: `sum`)
+
+Generate chapter summaries.
+
+```bash
+rsem preprocess summaries -r <release> [options]
+```
+
+Produces: `story_so_far_zh`, `chapter_summary_zh_short`, `arc_summary_zh` per chapter in SQLite.
+
+### `idioms`
+
+Detect and validate idiom policies.
+
+```bash
+rsem preprocess idioms -r <release> [options]
+```
+
+### `idiom-review` (alias: `idi-review`)
+
+Generate idiom review files.
+
+```bash
+rsem preprocess idiom-review -r <release> [options]
+```
+
+Output: `review.json` and `review.csv`
+
+### `idiom-promote` (alias: `idi-promote`)
+
+Validate and promote idiom policies.
+
+```bash
+rsem preprocess idiom-promote -r <release> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-F, --review, --review-file PATH` | Apply user edits from review file |
+
+### `graph`
+
+Build entity-relationship graph.
+
+```bash
+rsem preprocess graph -r <release> [options]
+```
+
+Output: `graph.ladybug` (LadybugDB), `snapshot.json`, `warnings.json`
+
+### `continuity`
+
+Refresh graph-grounded compact continuity.
+
+```bash
+rsem preprocess continuity -r <release> [options]
+```
+
+---
+
+## `packets build` (alias: `pac build`)
+
+Build chapter packets from validated upstream state.
+
+```bash
+rsem packets build -r <release> -R <run> [options]
+```
+
+Assembles `ChapterPacket` per chapter with glossary, summaries, idioms, graph context. Derives `ParagraphBundle` per block.
+
+---
+
+## `rebuild` (alias: `reb`)
+
+Rebuild EPUB from translated pass artifacts.
+
+```bash
+rsem rebuild -r <release> -R <run> [options]
+```
+
+Output: `rebuild/reconstructed.epub`
+
+---
+
+## `run`
+
+Orchestration workflow control.
+
+### `production` (alias: `prod`)
+
+Execute full pipeline in canonical order.
+
+```bash
+rsem run production -r <release> -R <run> [options]
+```
+
+Stage order: `preprocess-summaries` → `preprocess-glossary` → `preprocess-idioms` → `preprocess-graph` → `preprocess-continuity` → `packets-build` → `translate-range` → `epub-rebuild`
+
+| Option | Description |
+|--------|-------------|
+| `-n, --dry-run` | Print stage plan without executing |
+
+### `resume`
+
+Resume from last checkpoint.
+
+```bash
+rsem run resume -r <release> -R <run> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-t, --stage, --from-stage STAGE` | Override resume point |
+
+### `retry-failed`
+
+Retry failed pipeline units. The system classifies failures as **retryable** (auto-recovered) or **non-retryable** (require human intervention):
+
+| Stage | Retryable if... | Non-retryable if... |
+|-------|-----------------|---------------------|
+| `preprocess-summaries` | Chapter has `validation_status = 'failed'` or missing `validated_summaries_zh` rows | — |
+| `preprocess-glossary` | Candidate not in a terminal state | Entries in `glossary_conflicts` table (need human review) |
+| `preprocess-idioms` | Candidate not in a terminal state | Entries in `idiom_conflicts` table (need human review) |
+| `preprocess-graph` | Chapter missing `graph_extraction_drafts` or has failed events | — |
+| `preprocess-continuity` | Chapter missing compact continuity summary or has failed events | — |
+| `packets-build` | Chapter missing `packet_metadata` or has failed events | — |
+| `translate-range` | Chapter has `status = 'failed'` in `translation_checkpoints` | — |
+
+```bash
+rsem run retry-failed -r <release> -R <run> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-t, --stage` | Stage to retry: `preprocess-summaries`, `preprocess-glossary`, `preprocess-idioms`, `preprocess-graph`, `preprocess-continuity`, `packets-build`, `translate-range`, `all` |
+| `-n, --dry-run` | Report retryable/non-retryable units without mutation |
+
+### `cleanup-plan` (alias: `cln-plan`)
+
+Preview deletable artifacts.
+
+```bash
+rsem run cleanup-plan -r <release> -R <run> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-S, --scope` | Cleanup scope (default: `run`) |
+
+Scopes: `run`, `translation`, `preprocess`, `cache`, `keep-extracted`, `last-good-chunk`, `all`, `factory`
+
+### `cleanup-apply` (alias: `cln-apply`)
+
+Execute cleanup.
+
+```bash
+rsem run cleanup-apply -r <release> -R <run> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-S, --scope` | Same scopes as cleanup-plan |
+| `-f, --force` | Skip scope-mismatch safety check |
+
+---
+
+## `tui`
+
+Launch the Textual TUI.
+
+```bash
+rsem tui [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-r, --release` | Release to pre-load |
+| `-R, --run` | Run to pre-load |
+| `-c, --config PATH` | Config path |
+| `-s, --start` / `-e, --end` / `-C, --chapter` | Chapter scope |
+
+---
+
+## `set-chapter-flag` (alias: `scf`)
+
+Override chapter story/non-story classification.
+
+```bash
+rsem set-chapter-flag -r <release> -C <N> (--story | --non-story)
+```
+
+| Option | Description |
+|--------|-------------|
+| `--story` | Mark as narrative content |
+| `--non-story` | Mark as non-narrative (front-matter, afterword, etc.) |
+
+Requires extracted chapter metadata for creating non-story flags (run `extract` first).
