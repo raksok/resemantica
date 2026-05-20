@@ -29,6 +29,7 @@ The function keeps the same public entrypoint and returned `chapter_artifacts` s
 ## Events And Artifacts
 - Chinese artifacts are written during ordered story assembly after full and compact continuity rows are saved.
 - English artifacts are written during the translator phase.
+- Ordered story assembly and English story derivation emit `preprocess-summaries.summary_generation_started` and `preprocess-summaries.summary_generation_completed` for `story_so_far_zh`, `story_so_far_zh_compact`, and `story_so_far_en` before the chapter completion event.
 - `preprocess-summaries.chapter_completed` is emitted after the English artifact is written for each processed chapter.
 - Final completion counters keep the same processed/skipped semantics.
 

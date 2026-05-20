@@ -40,9 +40,13 @@ Out:
 | `preprocess-summaries.chapter_started` | Per chapter | `chapter_number` |
 | `preprocess-summaries.draft_generated` | LLM returns JSON | `chapter_number` |
 | `preprocess-summaries.validation_completed` | After validation | `chapter_number`, `status` |
+| `preprocess-summaries.summary_generation_started` | Story summary row generation starts | `chapter_number`, `summary_type`, optional `model_name` |
+| `preprocess-summaries.summary_generation_completed` | Story summary row is saved | `chapter_number`, `summary_type`, optional `model_name`, saved row identity/hash fields |
 | `preprocess-summaries.chapter_completed` | Chapter done | `chapter_number` |
 | `preprocess-summaries.chapter_skipped` | Non-story or failed | `chapter_number`, `reason` |
 | `preprocess-summaries.completed` | Pipeline ends | `done`, `skipped`, `failed` counts |
+
+Story summary generation emits per-summary-type started/completed events for `story_so_far_zh`, `story_so_far_zh_compact`, and `story_so_far_en`. Completed events must include `summary_id`; Chinese validated summaries also include `derived_from_chapter_hash`, and derived English summaries include `source_summary_id`, `source_summary_hash`, and `glossary_version_hash`. For a normal story chapter, the observable order is full Chinese story -> compact Chinese story -> English story -> `preprocess-summaries.chapter_completed`.
 
 ### Glossary pipeline (`preprocess-glossary`)
 

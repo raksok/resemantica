@@ -38,6 +38,8 @@ All events follow the convention defined in LLD 19b:
 | `preprocess-summaries.chapter_started` | Per chapter begin | `chapter_number` |
 | `preprocess-summaries.draft_generated` | LLM returns parsed JSON | `chapter_number` |
 | `preprocess-summaries.validation_completed` | Validation done | `chapter_number`, `status: str` |
+| `preprocess-summaries.summary_generation_started` | A materialized summary row begins generation or deterministic derivation | `chapter_number`, `summary_type`, optional `model_name` |
+| `preprocess-summaries.summary_generation_completed` | A materialized summary row is saved | `chapter_number`, `summary_type`, optional `model_name`, `summary_id`, row source hash fields |
 | `preprocess-summaries.chapter_completed` | Chapter fully processed | `chapter_number` |
 | `preprocess-summaries.chapter_skipped` | Non-story or failed | `chapter_number`, `reason: str` |
 | `preprocess-summaries.completed` | Pipeline ends | `done: int`, `skipped: int`, `failed: int` |
@@ -47,9 +49,15 @@ Emission points in `summaries/pipeline.py`:
 - `preprocess-summaries.chapter_started` at the start of each chapter loop iteration.
 - `preprocess-summaries.draft_generated` after successful LLM response parsing in `generate_chapter_summary`.
 - `preprocess-summaries.validation_completed` after `validate_chinese_summary` returns.
+- `preprocess-summaries.summary_generation_started` and `preprocess-summaries.summary_generation_completed` around the ordered story summary rows:
+  - `story_so_far_zh` deterministic assembly and `save_validated_summary()`.
+  - `story_so_far_zh_compact` compaction and `save_validated_summary()`.
+  - `story_so_far_en` English derivation and `save_derived_summary()`.
 - `preprocess-summaries.chapter_completed` on successful summary materialization.
 - `preprocess-summaries.chapter_skipped` on `is_story_chapter: false` or generation failure.
 - `preprocess-summaries.completed` at pipeline return with aggregate counts.
+
+The `summary_generation_completed` payload must include enough identity to audit the saved row. Chinese validated summary rows include `summary_id` and `derived_from_chapter_hash`; derived English summary rows include `summary_id`, `source_summary_id`, `source_summary_hash`, and `glossary_version_hash`. Events keep the same chapter order as the pipeline: full Chinese story, compact Chinese story, English story, then `preprocess-summaries.chapter_completed`.
 
 #### Glossary pipeline — stage name: `preprocess-glossary`
 

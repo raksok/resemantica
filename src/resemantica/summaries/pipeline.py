@@ -36,6 +36,7 @@ from resemantica.orchestration.chunk_checkpoints import (
     load_chunk_checkpoint,
     save_chunk_checkpoint,
 )
+from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
@@ -94,6 +95,82 @@ class _EnglishPhaseResult:
 
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
     _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
+
+
+def _emit_summary_generation_event(
+    *,
+    run_id: str,
+    release_id: str,
+    event_name: str,
+    chapter_number: int,
+    summary_type: str,
+    message: str,
+    model_name: str | None = None,
+    **payload_fields: object,
+) -> None:
+    payload: dict[str, object] = {
+        "chapter_number": chapter_number,
+        "summary_type": summary_type,
+    }
+    if model_name is not None:
+        payload["model_name"] = model_name
+    payload.update(payload_fields)
+    try:
+        emit_event(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.{event_name}",
+            _STAGE_NAME,
+            chapter_number=chapter_number,
+            message=message,
+            payload=payload,
+        )
+    except Exception:
+        logger.opt(exception=True).debug(
+            "Failed to emit summary generation event {} for chapter {}",
+            event_name,
+            chapter_number,
+        )
+
+
+def _emit_summary_generation_started(
+    *,
+    run_id: str,
+    release_id: str,
+    chapter_number: int,
+    summary_type: str,
+    model_name: str | None = None,
+) -> None:
+    _emit_summary_generation_event(
+        run_id=run_id,
+        release_id=release_id,
+        event_name="summary_generation_started",
+        chapter_number=chapter_number,
+        summary_type=summary_type,
+        model_name=model_name,
+        message=f"{summary_type} generation started for chapter {chapter_number}",
+    )
+
+
+def _emit_summary_generation_completed(
+    *,
+    run_id: str,
+    release_id: str,
+    chapter_number: int,
+    summary_type: str,
+    model_name: str | None = None,
+    **payload_fields: object,
+) -> None:
+    _emit_summary_generation_event(
+        run_id=run_id,
+        release_id=release_id,
+        event_name="summary_generation_completed",
+        chapter_number=chapter_number,
+        summary_type=summary_type,
+        model_name=model_name,
+        message=f"{summary_type} generation completed for chapter {chapter_number}",
+        **payload_fields,
+    )
 
 
 def _sum_usage_payloads(*payloads: dict[str, int]) -> dict[str, int]:
@@ -737,6 +814,13 @@ def _run_english_phase(
             prompt_version=prompt_en.version,
             run_id=run_id,
         )
+        _emit_summary_generation_started(
+            run_id=run_id,
+            release_id=release_id,
+            chapter_number=job.chapter_number,
+            summary_type="story_so_far_en",
+            model_name=config.models.translator_name,
+        )
         story_so_far_en = derive_english_summary(
             llm_client=llm_client,
             model_name=config.models.translator_name,
@@ -744,6 +828,7 @@ def _run_english_phase(
             source_text_zh=job.compact_story_record.content_zh,
             locked_glossary=job.locked_glossary,
         )
+        story_source_summary_hash = hash_validated_summary(job.compact_story_record)
         story_en_record = save_derived_summary(
             conn,
             release_id=release_id,
@@ -751,11 +836,22 @@ def _run_english_phase(
             summary_type="story_so_far_en",
             content_en=story_so_far_en,
             source_summary_id=job.compact_story_record.summary_id,
-            source_summary_hash=hash_validated_summary(job.compact_story_record),
+            source_summary_hash=story_source_summary_hash,
             glossary_version_hash=job.glossary_version_hash,
             model_name=config.models.translator_name,
             prompt_version=prompt_en.version,
             run_id=run_id,
+        )
+        _emit_summary_generation_completed(
+            run_id=run_id,
+            release_id=release_id,
+            chapter_number=job.chapter_number,
+            summary_type="story_so_far_en",
+            model_name=config.models.translator_name,
+            summary_id=story_en_record.summary_id,
+            source_summary_id=story_en_record.source_summary_id,
+            source_summary_hash=story_en_record.source_summary_hash,
+            glossary_version_hash=story_en_record.glossary_version_hash,
         )
     except Exception as exc:
         _emit(
@@ -1154,6 +1250,12 @@ def preprocess_summaries(
                         summary_type="chapter_summary_zh_short",
                         max_chapter_number=chapter_number,
                     )
+                    _emit_summary_generation_started(
+                        run_id=run_id,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh",
+                    )
                     composite_hash = _composite_chapter_hash(
                         short_summaries,
                         ref.chapter_source_hash or short_record.derived_from_chapter_hash,
@@ -1175,6 +1277,22 @@ def preprocess_summaries(
                         derived_from_chapter_hash=composite_hash,
                         run_id=run_id,
                         validation_status="approved",
+                    )
+                    _emit_summary_generation_completed(
+                        run_id=run_id,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh",
+                        summary_id=story_record.summary_id,
+                        derived_from_chapter_hash=story_record.derived_from_chapter_hash,
+                        summary_hash=hash_validated_summary(story_record),
+                    )
+                    _emit_summary_generation_started(
+                        run_id=run_id,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh_compact",
+                        model_name=config_obj.models.analyst_name,
                     )
                     compact_text, compact_source_hash = compact_story_so_far(
                         llm_client=client,
@@ -1205,6 +1323,16 @@ def preprocess_summaries(
                         derived_from_chapter_hash=compact_source_hash,
                         run_id=run_id,
                         validation_status="approved",
+                    )
+                    _emit_summary_generation_completed(
+                        run_id=run_id,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh_compact",
+                        model_name=config_obj.models.analyst_name,
+                        summary_id=compact_record.summary_id,
+                        derived_from_chapter_hash=compact_record.derived_from_chapter_hash,
+                        summary_hash=hash_validated_summary(compact_record),
                     )
 
                     zh_artifact = paths.summaries_dir / f"chapter-{chapter_number}-zh.json"

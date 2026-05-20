@@ -439,6 +439,71 @@ def test_preprocess_summaries_emits_progress_events(tmp_path: Path, monkeypatch)
     ]
     positions = [event_types.index(event_type) for event_type in expected_progress]
     assert positions == sorted(positions)
+    summary_events = [
+        event
+        for event in received
+        if event.event_type
+        in {
+            "preprocess-summaries.summary_generation_started",
+            "preprocess-summaries.summary_generation_completed",
+        }
+    ]
+    assert [
+        (event.event_type, event.payload["summary_type"])
+        for event in summary_events
+    ] == [
+        ("preprocess-summaries.summary_generation_started", "story_so_far_zh"),
+        ("preprocess-summaries.summary_generation_completed", "story_so_far_zh"),
+        ("preprocess-summaries.summary_generation_started", "story_so_far_zh_compact"),
+        ("preprocess-summaries.summary_generation_completed", "story_so_far_zh_compact"),
+        ("preprocess-summaries.summary_generation_started", "story_so_far_en"),
+        ("preprocess-summaries.summary_generation_completed", "story_so_far_en"),
+    ]
+    completed_summary_events = [
+        event
+        for event in summary_events
+        if event.event_type == "preprocess-summaries.summary_generation_completed"
+    ]
+    assert [
+        event.payload["summary_type"]
+        for event in completed_summary_events
+    ] == ["story_so_far_zh", "story_so_far_zh_compact", "story_so_far_en"]
+    assert event_types.index("preprocess-summaries.chapter_completed") > received.index(
+        completed_summary_events[-1]
+    )
+    for event in summary_events:
+        assert event.chapter_number == 1
+        assert event.payload["chapter_number"] == 1
+        assert event.payload["summary_type"] in {
+            "story_so_far_zh",
+            "story_so_far_zh_compact",
+            "story_so_far_en",
+        }
+    for event in completed_summary_events:
+        assert event.payload["summary_id"]
+        if event.payload["summary_type"] in {"story_so_far_zh", "story_so_far_zh_compact"}:
+            assert event.payload["derived_from_chapter_hash"]
+        else:
+            assert event.payload["source_summary_id"]
+            assert event.payload["source_summary_hash"]
+            assert event.payload["glossary_version_hash"]
+
+    persisted_conn = ensure_tracking_db(release_id)
+    try:
+        persisted_types = [
+            event.event_type
+            for event in load_events(
+                persisted_conn,
+                run_id="summaries-events",
+                release_id=release_id,
+                limit=100,
+            )
+        ]
+    finally:
+        persisted_conn.close()
+    assert "preprocess-summaries.summary_generation_started" in persisted_types
+    assert "preprocess-summaries.summary_generation_completed" in persisted_types
+
     assert "preprocess-summaries.generation_started" in event_types
     assert "preprocess-summaries.generation_completed" in event_types
     assert "preprocess-summaries.llm_validation_started" in event_types
@@ -448,6 +513,77 @@ def test_preprocess_summaries_emits_progress_events(tmp_path: Path, monkeypatch)
     assert received[0].payload["total_chapters"] == 1
     assert received[1].chapter_number == 1
     assert received[-1].payload["done"] == 1
+
+
+def test_preprocess_summaries_emits_compact_events_when_repaired(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(summary_derivation, "count_tokens", len)
+    release_id = "m19-summary-compact-repair-events"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三来到青云山。",
+        chapter_source_hash="hash-ch1",
+    )
+
+    class RepairingPipelineLLM(ScriptedSummaryLLM):
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            if "SUMMARY_STORY_REPAIR" in prompt:
+                return "短。"
+            if "SUMMARY_STORY_COMPACT" in prompt:
+                return "长" * 3000
+            return super().generate_text(model_name=model_name, prompt=prompt)
+
+    llm = RepairingPipelineLLM(
+        {
+            1: {
+                "chapter_number": 1,
+                "characters_mentioned": ["张三"],
+                "key_events": ["张三来到青云山"],
+                "new_terms": ["青云山"],
+                "relationships_changed": [{"entity": "张三", "change": "entered"}],
+                "setting": "青云山",
+                "tone": "calm",
+                "narrative_progression": "张三初入山门。",
+                "is_story_chapter": True,
+            }
+        }
+    )
+    received = []
+
+    def callback(event):
+        if event.run_id == "summaries-compact-repair-events":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        preprocess_summaries(
+            release_id=release_id,
+            run_id="summaries-compact-repair-events",
+            llm_client=llm,
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    compact_events = [
+        event
+        for event in received
+        if event.payload.get("summary_type") == "story_so_far_zh_compact"
+    ]
+    assert [
+        event.event_type
+        for event in compact_events
+    ] == [
+        "preprocess-summaries.summary_generation_started",
+        "preprocess-summaries.summary_generation_completed",
+    ]
+    assert "preprocess-summaries.story_compact_repaired" in [
+        event.event_type for event in received
+    ]
+    assert compact_events[-1].payload["summary_id"]
 
 
 def test_glossary_conflict_does_not_block_chinese_summary_validation(
