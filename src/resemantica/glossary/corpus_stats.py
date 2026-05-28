@@ -1,9 +1,12 @@
 import math
 from dataclasses import dataclass
+from typing import Callable
 
 from loguru import logger
 
 from resemantica.glossary.candidate_gen import RawCandidate
+
+ScoringProgressCallback = Callable[[dict[str, object]], None]
 
 
 @dataclass(slots=True)
@@ -64,7 +67,8 @@ def compute_corpus_stats(per_chapter_candidates: dict[int, list[RawCandidate]]) 
 
 def compute_c_value(
     candidates: list[RawCandidate],
-    term_freq: dict[str, int]
+    term_freq: dict[str, int],
+    progress_callback: ScoringProgressCallback | None = None,
 ) -> dict[str, float]:
     """
     Compute C-value for multi-word terms.
@@ -79,10 +83,23 @@ def compute_c_value(
     """
     all_terms = {c.normalized_form for c in candidates}
     terms = sorted(all_terms, key=len, reverse=True)
+    total_count = len(terms)
+    progress_interval = max(100, total_count // 100) if total_count else 100
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "started",
+                "phase": "c_value",
+                "processed_count": 0,
+                "total_count": total_count,
+                "percent": 0.0,
+            }
+        )
 
     super_info: dict[str, tuple[int, int]] = {t: (0, 0) for t in terms}
 
-    for term in terms:
+    for index, term in enumerate(terms, start=1):
         freq = term_freq.get(term, 0)
         t_len = len(term)
 
@@ -97,6 +114,16 @@ def compute_c_value(
                     seen.add(sub)
                     s_freq, s_cnt = super_info[sub]
                     super_info[sub] = (s_freq + freq, s_cnt + 1)
+        if progress_callback is not None and (index == total_count or index % progress_interval == 0):
+            progress_callback(
+                {
+                    "event": "progress",
+                    "phase": "c_value",
+                    "processed_count": index,
+                    "total_count": total_count,
+                    "percent": (index / total_count * 100) if total_count else 100.0,
+                }
+            )
 
     c_values: dict[str, float] = {}
     for term in terms:
@@ -115,6 +142,17 @@ def compute_c_value(
 
         c_values[term] = max(0.0, val)
 
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "completed",
+                "phase": "c_value",
+                "processed_count": total_count,
+                "total_count": total_count,
+                "percent": 100.0,
+            }
+        )
+
     return c_values
 
 
@@ -122,6 +160,7 @@ def score_candidates(
     candidates: list[RawCandidate],
     stats: CorpusStats,
     summary_term_set: set[str] | None = None,
+    progress_callback: ScoringProgressCallback | None = None,
 ) -> list[ScoredCandidate]:
     """
     Compute TF-IDF and C-value for each candidate.
@@ -138,7 +177,7 @@ def score_candidates(
     if not candidates:
         return []
 
-    c_values = compute_c_value(candidates, stats.term_frequency)
+    c_values = compute_c_value(candidates, stats.term_frequency, progress_callback=progress_callback)
 
     # Compute TF-IDF
     tf_idfs = {}
@@ -160,8 +199,21 @@ def score_candidates(
 
     max_strategies = 5.0 # We have ~5 main strategies
 
+    total_count = len(candidates)
+    progress_interval = max(100, total_count // 100) if total_count else 100
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "started",
+                "phase": "composite",
+                "processed_count": 0,
+                "total_count": total_count,
+                "percent": 0.0,
+            }
+        )
+
     scored = []
-    for c in candidates:
+    for index, c in enumerate(candidates, start=1):
         norm = c.normalized_form
         tf_idf = tf_idfs[norm]
         c_val = c_values[norm]
@@ -198,6 +250,27 @@ def score_candidates(
                 c_value=c_val,
                 composite_score=composite
             )
+        )
+        if progress_callback is not None and (index == total_count or index % progress_interval == 0):
+            progress_callback(
+                {
+                    "event": "progress",
+                    "phase": "composite",
+                    "processed_count": index,
+                    "total_count": total_count,
+                    "percent": (index / total_count * 100) if total_count else 100.0,
+                }
+            )
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "completed",
+                "phase": "composite",
+                "processed_count": total_count,
+                "total_count": total_count,
+                "percent": 100.0,
+            }
         )
 
     # Sort descending by composite score

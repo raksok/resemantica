@@ -54,6 +54,25 @@ def test_cli_progress_creates_and_advances_chapter_task() -> None:
     assert task.completed == 1
 
 
+def test_cli_progress_updates_generic_progress_task() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
+
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-glossary.discover.scoring.progress",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-glossary",
+            payload={"processed_count": 40, "total_count": 100, "phase": "c_value"},
+        )
+    )
+
+    task_id = subscriber.tasks_by_stage["preprocess-glossary.discover.scoring"]
+    task = subscriber.progress.tasks[task_id]
+    assert task.total == 100
+    assert task.completed == 40
+
+
 def test_cli_progress_counts_warnings_and_skips() -> None:
     subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
 

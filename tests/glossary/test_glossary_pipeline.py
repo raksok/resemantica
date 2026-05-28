@@ -669,6 +669,9 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.discover.started" in event_types
     assert "preprocess-glossary.discover.chapter_started" in event_types
     assert "preprocess-glossary.discover.chapter_completed" in event_types
+    assert "preprocess-glossary.discover.scoring.started" in event_types
+    assert "preprocess-glossary.discover.scoring.progress" in event_types
+    assert "preprocess-glossary.discover.scoring.completed" in event_types
     assert "preprocess-glossary.discover.completed" in event_types
     assert "preprocess-glossary.translate.started" in event_types
     assert "preprocess-glossary.translate.chapter_started" in event_types
@@ -676,6 +679,19 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.promote.started" in event_types
     assert "preprocess-glossary.promote.completed" in event_types
     assert event_types[-1] == "preprocess-glossary.completed"
+    chapter_completed_index = event_types.index("preprocess-glossary.discover.chapter_completed")
+    scoring_started_index = event_types.index("preprocess-glossary.discover.scoring.started")
+    scoring_completed_index = event_types.index("preprocess-glossary.discover.scoring.completed")
+    filter_completed_index = event_types.index("preprocess-glossary.discover.filter_completed")
+    assert chapter_completed_index < scoring_started_index < scoring_completed_index < filter_completed_index
+    scoring_completed = received[scoring_completed_index]
+    assert {
+        "candidate_count",
+        "duration_ms",
+        "top_score",
+        "median_score",
+        "min_score",
+    }.issubset(scoring_completed.payload)
     assert all(
         event.message
         for event in received

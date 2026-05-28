@@ -43,6 +43,16 @@
 2. Increase `pass2_concurrency` in `[translation]`
 3. Break the chapter range into smaller batches
 
+### Glossary discovery appears stuck after chapters finish
+
+**Cause:** Corpus scoring can be CPU-heavy on large candidate sets. This happens after
+`preprocess-glossary.discover.chapter_completed` events and before
+`preprocess-glossary.discover.filter_completed`.
+
+**Check:** Look for `preprocess-glossary.discover.scoring.progress` events or messages like
+`Scoring glossary candidates: c_value 4200/18000`. If those counts are moving, the run is slow
+rather than stuck.
+
 ### Checkpoint mismatch after config change
 
 **Cause:** Changing `--run` or config creates a new checkpoint namespace.

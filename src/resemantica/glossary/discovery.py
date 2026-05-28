@@ -4,6 +4,7 @@ import json
 import re
 from hashlib import sha256
 from pathlib import Path
+from time import monotonic
 from typing import Any, Callable
 
 from loguru import logger
@@ -121,7 +122,7 @@ def discover_candidates_from_extracted(
     release_id: str,
     discovery_run_id: str,
     chapter_refs: list[ChapterRef],
-    event_callback: Callable[[str, int, dict[str, object]], None] | None = None,
+    event_callback: Callable[[str, int | None, dict[str, object]], None] | None = None,
     stop_token: StopToken | None = None,
     skip_chapters: set[int] | None = None,
     chapter_summaries: dict[int, dict] | None = None,
@@ -334,7 +335,67 @@ def discover_candidates_from_extracted(
         len(global_raw),
         total_chapters,
     )
-    scored_list = score_candidates(global_raw, stats, summary_term_set=summary_term_set or None)
+    if event_callback:
+        event_callback(
+            "scoring.started",
+            None,
+            {
+                "message": f"Scoring glossary candidates: 0/{len(global_raw)}",
+                "candidate_count": len(global_raw),
+                "total_chapters": total_chapters,
+                "phase": "scoring",
+            },
+        )
+
+    def _emit_scoring_progress(payload: dict[str, object]) -> None:
+        if not event_callback or payload.get("event") != "progress":
+            return
+        phase = str(payload.get("phase") or "scoring")
+        processed_count = payload.get("processed_count")
+        total_count = payload.get("total_count")
+        event_callback(
+            "scoring.progress",
+            None,
+            {
+                "message": f"Scoring glossary candidates: {phase} {processed_count}/{total_count}",
+                "phase": phase,
+                "processed_count": processed_count,
+                "total_count": total_count,
+                "percent": payload.get("percent"),
+            },
+        )
+
+    scoring_started = monotonic()
+    scored_list = score_candidates(
+        global_raw,
+        stats,
+        summary_term_set=summary_term_set or None,
+        progress_callback=_emit_scoring_progress,
+    )
+    if scored_list:
+        top_score = scored_list[0].composite_score
+        median_score = scored_list[len(scored_list) // 2].composite_score
+        min_score = scored_list[-1].composite_score
+    else:
+        top_score = 0.0
+        median_score = 0.0
+        min_score = 0.0
+    if event_callback:
+        event_callback(
+            "scoring.completed",
+            None,
+            {
+                "message": (
+                    "Glossary candidate scoring completed: "
+                    f"{len(scored_list)} candidates"
+                ),
+                "candidate_count": len(scored_list),
+                "duration_ms": int((monotonic() - scoring_started) * 1000),
+                "top_score": top_score,
+                "median_score": median_score,
+                "min_score": min_score,
+            },
+        )
 
     # 3. Convert to GlossaryCandidate
     candidates: list[GlossaryCandidate] = []

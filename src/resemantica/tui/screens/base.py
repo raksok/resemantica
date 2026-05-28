@@ -1018,6 +1018,7 @@ class BaseScreen(Screen):
         )
         totals: dict[str, int] = {}
         completed: dict[str, set[int]] = {}
+        completed_counts: dict[str, int] = {}
         active: dict[str, int] = {}
 
         for event in ordered:
@@ -1028,6 +1029,16 @@ class BaseScreen(Screen):
                 stage_key = event_type.removesuffix(".started")
                 if isinstance(total, int):
                     totals[stage_key] = total
+                continue
+
+            if event_type.endswith(".progress") and isinstance(payload, dict):
+                stage_key = event_type.removesuffix(".progress")
+                total_count = payload.get("total_count")
+                processed_count = payload.get("processed_count")
+                if isinstance(total_count, int):
+                    totals[stage_key] = total_count
+                if isinstance(processed_count, int):
+                    completed_counts[stage_key] = max(0, processed_count)
                 continue
 
             if event_type.endswith(".chapter_started"):
@@ -1049,9 +1060,10 @@ class BaseScreen(Screen):
         models: dict[str, StageProgress] = {}
         for stage_key, total in totals.items():
             done = completed.get(stage_key, set())
+            done_count = completed_counts.get(stage_key, len(done))
             models[stage_key] = StageProgress(
                 total=total,
-                completed=min(len(done), total),
+                completed=min(done_count, total),
                 active_chapter=active.get(stage_key),
             )
         return models

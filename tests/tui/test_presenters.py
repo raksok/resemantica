@@ -548,6 +548,26 @@ def test_preprocessing_progress_models_use_scoped_started_totals():
     assert model.active_chapter == 4
 
 
+def test_preprocessing_progress_models_use_generic_progress_payloads():
+    from resemantica.tui.screens.preprocessing import PreprocessingScreen
+
+    events = [
+        _make_event(
+            event_type="preprocess-glossary.discover.scoring.progress",
+            event_time=_iso(12, 1),
+            payload={"processed_count": 250, "total_count": 1000, "phase": "c_value"},
+        ),
+    ]
+
+    model = PreprocessingScreen._derive_stage_progress(events)[
+        "preprocess-glossary.discover.scoring"
+    ]
+
+    assert model.total == 1000
+    assert model.completed == 250
+    assert model.active_chapter is None
+
+
 def test_preprocessing_render_shows_glossary_parent_and_active_subphase():
     from resemantica.tui.launch_control import (
         LaunchAction,
@@ -607,6 +627,50 @@ def test_preprocessing_render_shows_glossary_parent_and_active_subphase():
     assert "discover" in rendered
     assert "3/12" in rendered
     assert "96" not in rendered
+
+
+def test_preprocessing_render_shows_glossary_scoring_subphase():
+    from resemantica.tui.launch_control import (
+        LaunchAction,
+        LaunchContext,
+        LaunchSnapshot,
+        LaunchStageStatus,
+    )
+    from resemantica.tui.screens.preprocessing import PreprocessingScreen
+
+    events = [
+        _make_event(
+            event_type="preprocess-glossary.discover.scoring.progress",
+            event_time=_iso(12, 1),
+            payload={"processed_count": 25, "total_count": 100, "phase": "c_value"},
+        ),
+    ]
+    snapshot = LaunchSnapshot(
+        context=LaunchContext(release_id="rel-1", run_id="run-1"),
+        active_action="preprocess-glossary",
+        stages=[
+            LaunchStageStatus(
+                key="preprocess-glossary",
+                label="Glossary",
+                status="running",
+                action=LaunchAction(
+                    key="preprocess-glossary",
+                    label="Glossary",
+                    enabled=False,
+                    reason="",
+                    shortcut="g",
+                ),
+                latest_event=None,
+                latest_failure=None,
+            )
+        ],
+        latest_failure=None,
+    )
+
+    rendered = PreprocessingScreen()._render_stages_from_snapshot(snapshot, events=events)
+
+    assert "scoring" in rendered
+    assert "25/100" in rendered
 
 
 def test_preprocessing_launch_workflow_chains_stages():

@@ -77,3 +77,4 @@ Always follow the milestone sequence below.
 | M57 | task-57 | M56 | Summary Validation Gates For Translation Safety |
 | M58 | task-58 | M57 | Batch-Order Chunk Checkpoints |
 | M59 | task-59 | M58 | Glossary Discovery Chapter Resume |
+| M60 | task-60 | M59 | Glossary Scoring Progress |

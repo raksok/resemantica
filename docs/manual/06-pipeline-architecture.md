@@ -127,6 +127,11 @@ Long-running stages (summaries, translate-range) use chunk-level checkpoints (`o
 7. **Execution** — Stage work begins, writing durable checkpoints per chunk
 8. **Event bus** — Stages emit events consumed by CLI progress bar, TUI, and tracking DB
 
+Glossary discovery emits chapter-level progress while extracting candidates. It also emits
+`preprocess-glossary.discover.scoring.started`, `.progress`, and `.completed` events during
+corpus scoring, with `.progress` payloads reporting `phase`, `processed_count`,
+`total_count`, and `percent`.
+
 ## Translation Sub-flow
 
 For each chapter, the translation sub-stage runs:

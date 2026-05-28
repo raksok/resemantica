@@ -226,6 +226,15 @@ class CliProgressSubscriber:
             self._ensure_task(stage, total=total if isinstance(total, int) else None)
             return
 
+        if event_type.endswith(".progress"):
+            stage = event_type.removesuffix(".progress")
+            total = payload.get("total_count")
+            completed = payload.get("processed_count")
+            task_id = self._ensure_task(stage, total=total if isinstance(total, int) else None)
+            if isinstance(completed, int):
+                self._progress().update(task_id, completed=completed)
+            return
+
         if event_type.endswith(".completed"):
             self._complete_task(event_type.removesuffix(".completed"))
             return

@@ -131,6 +131,7 @@ class PreprocessingScreen(BaseScreen):
             if stage.key == "preprocess-glossary":
                 for phase_key, phase_label in (
                     ("preprocess-glossary.discover", "discover"),
+                    ("preprocess-glossary.discover.scoring", "scoring"),
                     ("preprocess-glossary.translate", "translate"),
                     ("preprocess-glossary.promote", "promote"),
                 ):
@@ -160,6 +161,7 @@ class PreprocessingScreen(BaseScreen):
                 for key in (
                     "preprocess-glossary.promote",
                     "preprocess-glossary.translate",
+                    "preprocess-glossary.discover.scoring",
                     "preprocess-glossary.discover",
                 )
                 if key in models

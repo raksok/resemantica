@@ -144,7 +144,8 @@ def _is_critical_event(event: Event) -> bool:
 
 def _is_sampled_progress_event(event_type: str) -> bool:
     return (
-        ".paragraph_" in event_type
+        event_type.endswith(".progress")
+        or ".paragraph_" in event_type
         or ".chapter_" in event_type
     )
 

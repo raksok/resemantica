@@ -63,6 +63,32 @@ def test_reduced_policy_samples_progress_but_delivers_all(tmp_path: Path, monkey
     assert len(persisted) == 4
 
 
+def test_reduced_policy_samples_generic_progress_events(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    bus = EventBus(persistence_mode="reduced", progress_sample_every=3)
+    delivered: list[Event] = []
+    bus.subscribe("*", delivered.append)
+
+    for index in range(10):
+        bus.publish(
+            Event(
+                event_type="preprocess-glossary.discover.scoring.progress",
+                run_id="run",
+                release_id="rel",
+                stage_name="preprocess-glossary",
+                payload={"processed_count": index + 1, "total_count": 10},
+            )
+        )
+
+    assert len(delivered) == 10
+    conn = ensure_tracking_db("rel")
+    try:
+        persisted = load_events(conn, run_id="run", limit=20)
+    finally:
+        conn.close()
+    assert len(persisted) == 4
+
+
 def test_reduced_policy_always_persists_warning_and_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     bus = EventBus(persistence_mode="reduced", progress_sample_every=100)

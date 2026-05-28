@@ -1,6 +1,7 @@
 
 from resemantica.glossary.candidate_gen import CAT_OTHER, RawCandidate
 from resemantica.glossary.corpus_stats import (
+    compute_c_value,
     compute_corpus_stats,
     score_candidates,
 )
@@ -86,3 +87,68 @@ def test_score_candidates_summary_boost_empty_set():
     scored_without = score_candidates([c], stats)
 
     assert scored_with[0].composite_score == scored_without[0].composite_score
+
+
+def test_score_candidates_progress_callback_does_not_change_scores():
+    c_long = RawCandidate("无上仙门", "无上仙门", ["NN"], None, CAT_OTHER, {"ner"}, appearances=10)
+    c_short = RawCandidate("仙门", "仙门", ["NN"], None, CAT_OTHER, {"ngram"}, appearances=10)
+    stats = compute_corpus_stats({1: [c_long, c_short]})
+    progress_events: list[dict[str, object]] = []
+
+    scored_without = score_candidates([c_long, c_short], stats)
+    scored_with = score_candidates([c_long, c_short], stats, progress_callback=progress_events.append)
+
+    assert [
+        (item.raw.normalized_form, item.tf_idf, item.c_value, item.composite_score)
+        for item in scored_with
+    ] == [
+        (item.raw.normalized_form, item.tf_idf, item.c_value, item.composite_score)
+        for item in scored_without
+    ]
+    assert progress_events
+
+
+def test_score_candidates_progress_callback_reports_c_value_and_composite_phases():
+    candidates = [
+        RawCandidate("无上仙门", "无上仙门", ["NN"], None, CAT_OTHER, {"ner"}, appearances=10),
+        RawCandidate("仙门", "仙门", ["NN"], None, CAT_OTHER, {"ngram"}, appearances=10),
+    ]
+    stats = compute_corpus_stats({1: candidates})
+    progress_events: list[dict[str, object]] = []
+
+    score_candidates(candidates, stats, progress_callback=progress_events.append)
+
+    assert ("c_value", "started") in {
+        (event["phase"], event["event"]) for event in progress_events
+    }
+    assert ("c_value", "progress") in {
+        (event["phase"], event["event"]) for event in progress_events
+    }
+    assert ("c_value", "completed") in {
+        (event["phase"], event["event"]) for event in progress_events
+    }
+    assert ("composite", "started") in {
+        (event["phase"], event["event"]) for event in progress_events
+    }
+    assert ("composite", "progress") in {
+        (event["phase"], event["event"]) for event in progress_events
+    }
+    assert ("composite", "completed") in {
+        (event["phase"], event["event"]) for event in progress_events
+    }
+
+
+def test_compute_c_value_small_candidate_set_emits_final_progress():
+    candidate = RawCandidate("青云门", "青云门", ["NR"], None, CAT_OTHER, {"ner"}, appearances=1)
+    progress_events: list[dict[str, object]] = []
+
+    compute_c_value([candidate], {"青云门": 1}, progress_callback=progress_events.append)
+
+    final_progress = [
+        event
+        for event in progress_events
+        if event["event"] == "progress" and event["phase"] == "c_value"
+    ][-1]
+    assert final_progress["processed_count"] == 1
+    assert final_progress["total_count"] == 1
+    assert final_progress["percent"] == 100.0
