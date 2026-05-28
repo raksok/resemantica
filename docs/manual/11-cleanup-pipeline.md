@@ -28,11 +28,11 @@ uv run rsem run cleanup-apply -r <release> -R <run> -S <scope>
 
 | Scope | Deletes on Disk | Deletes in SQLite | Notes |
 |-------|----------------|-------------------|-------|
-| `run` | `runs/{run_id}/` | 16 tables in `resemantica.db` + 2 in `tracking.db` | Current run artifacts |
+| `run` | `runs/{run_id}/` | Run, extraction, translation, and preprocess rows in `resemantica.db` + 2 in `tracking.db` | Current run artifacts |
 | `translation` | `runs/{run_id}/translation/` | `translation_checkpoints`, `chunk_checkpoints` (translate-range) | Translation outputs only |
-| `preprocess` | `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/` | 14 tables (extraction + preprocess downstream + generic run) | All preprocessing artifacts |
+| `preprocess` | `extracted/`, `summaries/`, `glossary/`, `idioms/`, `graph/`, `packets/` | Extraction, preprocess downstream, and generic run rows | All preprocessing artifacts |
 | `cache` | `.cache/` | None | LLM cache only |
-| `keep-extracted` | Everything except `extracted/` | 14 tables (preprocess downstream + translation + generic run) + 2 tracking | Preserve extraction, remove rest |
+| `keep-extracted` | Everything except `extracted/` | Translation, preprocess downstream, and generic run rows + 2 tracking tables | Preserve extraction, remove rest |
 | `last-good-chunk` | Per-chapter artifacts after last completed chunk | Chapter rows, chunk rows; rewinds checkpoints | Granular rollback |
 | `all` | Everything under `release_root/` except `tracking.db`, `resemantica.db`, `graph.ladybug`, `cleanup_plan.json`, `cleanup_report.json` | Same as `run` | Full release cleanup |
 | `factory` | `{artifact_root}/releases/`, `{artifact_root}/resemantica.db`, `{artifact_root}/graph.ladybug` | None | Complete reset |
@@ -93,10 +93,10 @@ The `all` scope preserves 5 artifacts:
 
 | Scope | `tracking.db` Tables | `resemantica.db` Tables |
 |-------|---------------------|------------------------|
-| `run` | `events`, `run_state` | `translation_checkpoints`, `chunk_checkpoints` (translate-range), `extracted_chapters`, `extracted_blocks`, `summary_checkpoints`, `summary_drafts`, `validated_summaries_zh`, `derived_summaries_en`, `glossary_checkpoints`, `glossary_translation_votes`, `glossary_alias_clusters`, `glossary_candidates`, `idiom_checkpoints`, `idiom_translation_votes`, `idiom_candidates`, `graph_extraction_drafts`, `packet_metadata`, `checkpoints`, `runs` |
+| `run` | `events`, `run_state` | `translation_checkpoints`, `chunk_checkpoints` (translate-range), `extracted_chapters`, `extracted_blocks`, `summary_checkpoints`, `summary_drafts`, `validated_summaries_zh`, `derived_summaries_en`, `glossary_checkpoints`, `glossary_discovery_chapter_state`, `glossary_translation_votes`, `glossary_alias_clusters`, `glossary_candidates`, `idiom_checkpoints`, `idiom_translation_votes`, `idiom_candidates`, `graph_extraction_drafts`, `packet_metadata`, `checkpoints`, `runs` |
 | `translation` | — | `translation_checkpoints`, `chunk_checkpoints` (translate-range) |
-| `preprocess` | — | Extraction (2) + preprocess downstream (10) + `checkpoints`, `runs` |
-| `keep-extracted` | `events`, `run_state` | Translation (2) + preprocess downstream (10) + `checkpoints`, `runs` |
+| `preprocess` | — | Extraction rows + preprocess downstream rows, including `glossary_discovery_chapter_state`, + `checkpoints`, `runs` |
+| `keep-extracted` | `events`, `run_state` | Translation rows + preprocess downstream rows, including `glossary_discovery_chapter_state`, + `checkpoints`, `runs` |
 | `all` | `events`, `run_state` | Same as `run` |
 | `last-good-chunk` | Rewinds `run_state` | Deletes chapter rows (4 tables) + chunk rows; rewinds `summary_checkpoints` |
 | `cache` / `factory` | — | — |

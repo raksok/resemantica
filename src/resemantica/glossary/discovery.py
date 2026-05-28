@@ -9,6 +9,10 @@ from typing import Any, Callable
 from loguru import logger
 
 from resemantica.chapters.manifest import ChapterRef
+from resemantica.db.glossary_repo import (
+    load_valid_discovery_chapter_state,
+    save_discovery_chapter_state,
+)
 from resemantica.glossary.candidate_gen import (
     RawCandidate,
     generate_chapter_candidates,
@@ -44,6 +48,61 @@ def _collect_source_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _stable_json_hash(payload: object) -> str:
+    return sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _chapter_source_hash(ref: ChapterRef) -> str:
+    if ref.chapter_source_hash:
+        return ref.chapter_source_hash
+    return sha256(ref.chapter_path.read_bytes()).hexdigest()
+
+
+def _summary_seed_payload(summary_data: dict[str, Any] | None) -> dict[str, Any]:
+    if not summary_data:
+        return {}
+    return {
+        "characters_mentioned": summary_data.get("characters_mentioned", []),
+        "new_terms": summary_data.get("new_terms", []),
+        "setting": summary_data.get("setting", ""),
+    }
+
+
+def _default_discovery_settings_hash(config: Any) -> str:
+    glossary = getattr(config, "glossary", None)
+    if glossary is None:
+        return _stable_json_hash({"schema_version": 1})
+    return _stable_json_hash(
+        {
+            "schema_version": 1,
+            "min_term_length": getattr(glossary, "min_term_length", None),
+            "max_term_length": getattr(glossary, "max_term_length", None),
+            "min_corpus_score": getattr(glossary, "min_corpus_score", None),
+            "eval_batch_size": getattr(glossary, "eval_batch_size", None),
+            "dedup_similarity_threshold": getattr(glossary, "dedup_similarity_threshold", None),
+        }
+    )
+
+
+def _chapter_input_hash(
+    *,
+    chapter_source_hash: str,
+    summary_data: dict[str, Any] | None,
+    discovery_settings_hash: str,
+    skip_reason: str | None,
+) -> str:
+    return _stable_json_hash(
+        {
+            "chapter_source_hash": chapter_source_hash,
+            "summary_seed_hash": _stable_json_hash(_summary_seed_payload(summary_data)),
+            "discovery_settings_hash": discovery_settings_hash,
+            "skip_reason": skip_reason,
+        }
+    )
+
+
 def _candidate_id(
     *,
     release_id: str,
@@ -76,6 +135,9 @@ def discover_candidates_from_extracted(
     chapter_end: int | None = None,
     config: Any = None,
     cache_root: Path | None = None,
+    conn: Any = None,
+    resume: bool = True,
+    discovery_settings_hash: str | None = None,
 ) -> list[GlossaryCandidate]:
     """
     Deterministic Chapter-by-Chapter extraction + Corpus-level scoring.
@@ -91,6 +153,7 @@ def discover_candidates_from_extracted(
     # Track first/last seen chapter
     first_seen: dict[str, int] = {}
     last_seen: dict[str, int] = {}
+    settings_hash = discovery_settings_hash or _default_discovery_settings_hash(config)
 
     for ref in chapter_refs:
         chapter_number = ref.chapter_number
@@ -100,27 +163,109 @@ def discover_candidates_from_extracted(
         raise_if_stop_requested(stop_token)
 
         # Skip non-story chapters (marked by summaries pipeline)
+        summary_data = (chapter_summaries or {}).get(chapter_number)
+        source_hash = _chapter_source_hash(ref)
+        skip_reason = "non_story" if skip_chapters and chapter_number in skip_chapters else None
+        input_hash = _chapter_input_hash(
+            chapter_source_hash=source_hash,
+            summary_data=summary_data,
+            discovery_settings_hash=settings_hash,
+            skip_reason=skip_reason,
+        )
+        if conn is not None and resume:
+            state = load_valid_discovery_chapter_state(
+                conn,
+                release_id=release_id,
+                run_id=discovery_run_id,
+                chapter_number=chapter_number,
+                chapter_source_hash=source_hash,
+                input_hash=input_hash,
+            )
+            if state is not None:
+                raw_candidates = state.raw_candidates
+                logger.debug(
+                    "Chapter {}: reused glossary discovery state ({})",
+                    chapter_number,
+                    state.status,
+                )
+                if state.status == "skipped":
+                    if event_callback:
+                        event_callback(
+                            "chapter_skipped",
+                            chapter_number,
+                            {"reason": state.skip_reason or "skipped", "reused": True},
+                        )
+                    continue
+                if event_callback:
+                    event_callback(
+                        "chapter_completed",
+                        chapter_number,
+                        {"term_count": len(raw_candidates), "reused": True},
+                    )
+            else:
+                raw_candidates = None
+        else:
+            raw_candidates = None
+
         if skip_chapters and chapter_number in skip_chapters:
             logger.debug("Chapter {}: non-story, skipping", chapter_number)
+            if conn is not None:
+                save_discovery_chapter_state(
+                    conn,
+                    release_id=release_id,
+                    run_id=discovery_run_id,
+                    chapter_number=chapter_number,
+                    chapter_source_hash=source_hash,
+                    input_hash=input_hash,
+                    status="skipped",
+                    skip_reason="non_story",
+                    raw_candidates=[],
+                )
+                conn.commit()
             if event_callback:
                 event_callback("chapter_skipped", chapter_number, {"reason": "non_story"})
             continue
 
-        # Load chapter text
-        payload = json.loads(ref.chapter_path.read_text(encoding="utf-8"))
-        text = _collect_source_text(payload)
+        if raw_candidates is None:
+            # Load chapter text
+            payload = json.loads(ref.chapter_path.read_text(encoding="utf-8"))
+            text = _collect_source_text(payload)
 
-        if not text:
-            logger.debug("Chapter {}: empty text, skipping", chapter_number)
-            if event_callback:
-                event_callback("chapter_skipped", chapter_number, {"reason": "empty_text"})
-            continue
+            if not text:
+                logger.debug("Chapter {}: empty text, skipping", chapter_number)
+                if conn is not None:
+                    save_discovery_chapter_state(
+                        conn,
+                        release_id=release_id,
+                        run_id=discovery_run_id,
+                        chapter_number=chapter_number,
+                        chapter_source_hash=source_hash,
+                        input_hash=input_hash,
+                        status="skipped",
+                        skip_reason="empty_text",
+                        raw_candidates=[],
+                    )
+                    conn.commit()
+                if event_callback:
+                    event_callback("chapter_skipped", chapter_number, {"reason": "empty_text"})
+                continue
 
-        logger.debug("Chapter {}: {} chars of source text collected", chapter_number, len(text))
+            logger.debug("Chapter {}: {} chars of source text collected", chapter_number, len(text))
 
-        # Extract candidates for this chapter
-        summary_data = (chapter_summaries or {}).get(chapter_number)
-        raw_candidates = generate_chapter_candidates(text, summary_data=summary_data)
+            # Extract candidates for this chapter
+            raw_candidates = generate_chapter_candidates(text, summary_data=summary_data)
+            if conn is not None:
+                save_discovery_chapter_state(
+                    conn,
+                    release_id=release_id,
+                    run_id=discovery_run_id,
+                    chapter_number=chapter_number,
+                    chapter_source_hash=source_hash,
+                    input_hash=input_hash,
+                    status="completed",
+                    raw_candidates=raw_candidates,
+                )
+                conn.commit()
 
         # Incremental merge into single accumulator dict
         merge_across_chapters(merged_accumulator, raw_candidates)

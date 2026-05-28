@@ -123,6 +123,36 @@ def test_evaluate_candidate_batch_caching(tmp_path: Path):
     assert results2[0].keep is True
 
 
+def test_cached_eval_batch_invokes_persist_callback(tmp_path: Path):
+    candidates = [_make_candidate("c1", "李明")]
+    response_json = [
+        {"candidate_id": "c1", "keep": True, "term_type": "character", "reason_code": "proper_noun", "confidence": 0.9},
+    ]
+    evaluate_candidate_batch(
+        candidates=candidates,
+        llm_client=MockLLMClient(json.dumps(response_json)),
+        model_name="test-model",
+        prompt_template="{CANDIDATES_JSON}",
+        prompt_version="1.0",
+        batch_size=50,
+        cache_root=tmp_path,
+    )
+
+    persisted = []
+    evaluate_candidate_batch(
+        candidates=candidates,
+        llm_client=MockLLMClient("invalid json"),
+        model_name="test-model",
+        prompt_template="{CANDIDATES_JSON}",
+        prompt_version="1.0",
+        batch_size=50,
+        cache_root=tmp_path,
+        persist_callback=lambda results: persisted.extend(results),
+    )
+
+    assert [result.candidate_id for result in persisted] == ["c1"]
+
+
 def test_evaluate_candidate_batch_error():
     candidates = [_make_candidate("c1", "李明")]
 
@@ -141,3 +171,22 @@ def test_evaluate_candidate_batch_error():
     assert results[0].candidate_id == "c1"
     assert results[0].keep is False
     assert results[0].reason_code == "eval_error"
+
+
+def test_eval_error_batch_invokes_persist_callback():
+    candidates = [_make_candidate("c1", "李明")]
+    persisted = []
+
+    evaluate_candidate_batch(
+        candidates=candidates,
+        llm_client=MockLLMClient("invalid json response"),
+        model_name="test-model",
+        prompt_template="{CANDIDATES_JSON}",
+        prompt_version="1.0",
+        batch_size=50,
+        persist_callback=lambda results: persisted.extend(results),
+    )
+
+    assert len(persisted) == 1
+    assert persisted[0].candidate_id == "c1"
+    assert persisted[0].keep is False

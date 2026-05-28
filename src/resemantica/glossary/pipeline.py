@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from loguru import logger
 
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import (
+    clear_alias_clusters_for_run,
+    clear_discovery_chapter_state,
     find_exact_locked_entry,
     get_checkpoint,
     insert_conflicts,
@@ -50,6 +53,103 @@ from resemantica.utils import _build_llm_client, _write_json
 from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-glossary"
+
+
+def _stable_json_hash(payload: object) -> str:
+    return sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _summary_seed_payload(summary_data: dict[str, Any] | None) -> dict[str, Any]:
+    if not summary_data:
+        return {}
+    return {
+        "characters_mentioned": summary_data.get("characters_mentioned", []),
+        "new_terms": summary_data.get("new_terms", []),
+        "setting": summary_data.get("setting", ""),
+    }
+
+
+def _discovery_settings_hash(config: AppConfig) -> str:
+    return _stable_json_hash(
+        {
+            "schema_version": 1,
+            "min_term_length": config.glossary.min_term_length,
+            "max_term_length": config.glossary.max_term_length,
+            "min_corpus_score": config.glossary.min_corpus_score,
+            "eval_batch_size": config.glossary.eval_batch_size,
+            "dedup_similarity_threshold": config.glossary.dedup_similarity_threshold,
+        }
+    )
+
+
+def _chapter_source_hash(ref: Any) -> str:
+    if ref.chapter_source_hash:
+        return str(ref.chapter_source_hash)
+    return sha256(ref.chapter_path.read_bytes()).hexdigest()
+
+
+def _discover_stage_input_hash(
+    *,
+    chapter_refs: list[Any],
+    chapter_summaries: dict[int, dict],
+    skip_chapters: set[int],
+    discovery_settings_hash: str,
+    pruning_threshold: float | None,
+) -> str:
+    return _stable_json_hash(
+        {
+            "schema_version": 1,
+            "chapters": [
+                {
+                    "chapter_number": ref.chapter_number,
+                    "chapter_source_hash": _chapter_source_hash(ref),
+                    "summary_seed": _summary_seed_payload(chapter_summaries.get(ref.chapter_number)),
+                    "skip": ref.chapter_number in skip_chapters,
+                }
+                for ref in chapter_refs
+            ],
+            "discovery_settings_hash": discovery_settings_hash,
+            "pruning_threshold": pruning_threshold,
+        }
+    )
+
+
+def _eval_stage_input_hash(
+    *,
+    discover_input_hash: str,
+    skip_llm_eval: bool,
+    eval_batch_size: int | None,
+    model_name: str,
+    prompt_version: str | None,
+) -> str:
+    return _stable_json_hash(
+        {
+            "schema_version": 1,
+            "discover_input_hash": discover_input_hash,
+            "skip_llm_eval": skip_llm_eval,
+            "eval_batch_size": eval_batch_size,
+            "model_name": model_name,
+            "prompt_version": prompt_version,
+        }
+    )
+
+
+def _dedup_stage_input_hash(
+    *,
+    eval_input_hash: str,
+    model_name: str,
+    dedup_threshold: float | None,
+) -> str:
+    return _stable_json_hash(
+        {
+            "schema_version": 1,
+            "eval_input_hash": eval_input_hash,
+            "model_name": model_name,
+            "dedup_threshold": dedup_threshold,
+        }
+    )
 
 
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
@@ -133,7 +233,58 @@ def discover_glossary_candidates(
     except Exception:
         pass  # Table may not exist if summaries haven't run yet
 
-    resume_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id) if resume and not force else None
+    glossary_discovery_settings_hash = _discovery_settings_hash(config_obj)
+    discover_input_hash = _discover_stage_input_hash(
+        chapter_refs=chapter_refs,
+        chapter_summaries=chapter_summaries,
+        skip_chapters=skip_chapters,
+        discovery_settings_hash=glossary_discovery_settings_hash,
+        pruning_threshold=pruning_threshold,
+    )
+    eval_prompt_version = None
+    if not skip_llm_eval:
+        eval_prompt_version = load_prompt("glossary_evaluate.txt").version
+    eval_input_hash = _eval_stage_input_hash(
+        discover_input_hash=discover_input_hash,
+        skip_llm_eval=skip_llm_eval,
+        eval_batch_size=eval_batch_size if eval_batch_size is not None else config_obj.glossary.eval_batch_size,
+        model_name=config_obj.models.eval_name,
+        prompt_version=eval_prompt_version,
+    )
+    dedup_input_hash = _dedup_stage_input_hash(
+        eval_input_hash=eval_input_hash,
+        model_name=config_obj.models.embedding_name,
+        dedup_threshold=(
+            dedup_threshold
+            if dedup_threshold is not None
+            else config_obj.glossary.dedup_similarity_threshold
+        ),
+    )
+
+    resume_stage = None
+    if force:
+        with conn:
+            clear_discovery_chapter_state(conn, release_id=release_id, run_id=run_id)
+            clear_alias_clusters_for_run(conn, release_id=release_id, discovery_run_id=run_id)
+            replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=[])
+            conn.execute(
+                "DELETE FROM glossary_checkpoints WHERE release_id = ? AND run_id = ?",
+                (release_id, run_id),
+            )
+    elif resume:
+        checkpoint_stage = get_checkpoint(conn, release_id=release_id, run_id=run_id)
+        expected_hash = {
+            "filtered": discover_input_hash,
+            "eval_completed": eval_input_hash,
+            "dedup_completed": dedup_input_hash,
+        }.get(checkpoint_stage or "")
+        if expected_hash is not None:
+            resume_stage = get_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                input_hash=expected_hash,
+            )
 
     try:
         _emit(
@@ -165,6 +316,9 @@ def discover_glossary_candidates(
                     **payload,
                 ),
                 stop_token=stop_token,
+                conn=conn,
+                resume=resume and not force,
+                discovery_settings_hash=glossary_discovery_settings_hash,
             )
             logger.info("Discovery: {} raw candidates from {} chapters", len(discovered), len(chapter_refs))
 
@@ -191,11 +345,21 @@ def discover_glossary_candidates(
 
             # Checkpoint after discovery + filter
             replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
-            set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="filtered")
+            set_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="filtered",
+                input_hash=discover_input_hash,
+            )
             resume_stage = "filtered"
         else:
             logger.info("Resuming from checkpoint stage: {}", resume_stage)
-            discovered = list_candidates(conn, release_id=release_id)
+            discovered = [
+                candidate
+                for candidate in list_candidates(conn, release_id=release_id)
+                if candidate.discovery_run_id == run_id
+            ]
 
         raise_if_stop_requested(stop_token)
 
@@ -217,7 +381,9 @@ def discover_glossary_candidates(
                             llm_type=r.term_type,
                             llm_reason_code=r.reason_code,
                             llm_confidence=r.confidence,
+                            candidate_status="discovered" if r.keep else "llm_rejected",
                         )
+                    conn.commit()
 
                 eval_results = evaluate_candidate_batch(
                     candidates=pending_eval,
@@ -250,9 +416,22 @@ def discover_glossary_candidates(
 
                 # Checkpoint after LLM eval
                 replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
-                set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="eval_completed")
+                set_checkpoint(
+                    conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    stage_name="eval_completed",
+                    input_hash=eval_input_hash,
+                )
+                resume_stage = "eval_completed"
             elif resume_stage == "filtered":
-                set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="eval_completed")
+                set_checkpoint(
+                    conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    stage_name="eval_completed",
+                    input_hash=eval_input_hash,
+                )
                 resume_stage = "eval_completed"
 
         raise_if_stop_requested(stop_token)
@@ -297,6 +476,7 @@ def discover_glossary_candidates(
             )
             logger.info("Dedup: {} clusters formed, {} aliases merged", len(clusters), alias_merged)
 
+            clear_alias_clusters_for_run(conn, release_id=release_id, discovery_run_id=run_id)
             if clusters:
                 upsert_alias_clusters(
                     conn,
@@ -304,7 +484,24 @@ def discover_glossary_candidates(
                     release_id=release_id,
                     discovery_run_id=run_id,
                 )
-            set_checkpoint(conn, release_id=release_id, run_id=run_id, stage_name="dedup_completed")
+            replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+            set_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="dedup_completed",
+                input_hash=dedup_input_hash,
+            )
+        elif resume_stage != "dedup_completed":
+            clear_alias_clusters_for_run(conn, release_id=release_id, discovery_run_id=run_id)
+            replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+            set_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="dedup_completed",
+                input_hash=dedup_input_hash,
+            )
 
         # --- Final snapshot write ---
         _write_candidate_snapshot(

@@ -83,6 +83,7 @@ _RELEASE_SQLITE_TARGETS = {
         _sqlite_target("resemantica.db", "validated_summaries_zh", "run_id"),
         _sqlite_target("resemantica.db", "derived_summaries_en", "run_id"),
         _sqlite_target("resemantica.db", "glossary_checkpoints", "run_id"),
+        _sqlite_target("resemantica.db", "glossary_discovery_chapter_state", "run_id"),
         _sqlite_target("resemantica.db", "glossary_translation_votes", "translation_run_id"),
         _sqlite_target("resemantica.db", "glossary_alias_clusters", "discovery_run_id"),
         _sqlite_target("resemantica.db", "glossary_candidates", "discovery_run_id"),

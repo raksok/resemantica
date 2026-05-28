@@ -179,8 +179,23 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             release_id TEXT NOT NULL,
             run_id TEXT NOT NULL,
             stage_name TEXT NOT NULL,
+            input_hash TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (release_id, run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS glossary_discovery_chapter_state (
+            release_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            chapter_number INTEGER NOT NULL,
+            chapter_source_hash TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            skip_reason TEXT,
+            raw_candidates_json TEXT NOT NULL,
+            candidate_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (release_id, run_id, chapter_number)
         );
 
         CREATE TABLE IF NOT EXISTS summary_checkpoints (
@@ -455,6 +470,16 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER" + " TABLE summary_checkpoints "
             "ADD COLUMN story_last_chapter INTEGER NOT NULL DEFAULT 0"
+        )
+
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(glossary_checkpoints)").fetchall()
+    }
+    if "input_hash" not in columns:
+        conn.execute(
+            "ALTER" + " TABLE glossary_checkpoints "
+            "ADD COLUMN input_hash TEXT NOT NULL DEFAULT ''"
         )
 
     conn.commit()

@@ -81,6 +81,8 @@ uv run rsem preprocess glossary-discover -r <release> [options]
 
 Output: `candidates.json`
 
+Resume is the default. Discovery reuses completed per-chapter raw candidate state when the chapter source hash, summary seed content, and discovery settings still match. Missing or stale chapters are re-extracted; corpus scoring, filtering, LLM evaluation, and deduplication then continue from the rebuilt aggregate. `--force` clears discovery state for the run and rebuilds all chapters.
+
 ### `glossary-translate` (alias: `gls-translate`)
 
 Translate candidates to provisional English.

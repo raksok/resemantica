@@ -751,6 +751,15 @@ class TestM11CleanupScopes:
                 """,
                 (release_id, run_id),
             )
+            conn.execute(
+                """
+                INSERT INTO glossary_discovery_chapter_state(
+                    release_id, run_id, chapter_number, chapter_source_hash, input_hash,
+                    status, skip_reason, raw_candidates_json, candidate_count
+                ) VALUES (?, ?, 1, 'src', 'input', 'completed', NULL, '[]', 0)
+                """,
+                (release_id, run_id),
+            )
             save_chunk_checkpoint(
                 conn,
                 release_id=release_id,
@@ -923,6 +932,7 @@ class TestM11CleanupScopes:
         assert self._count_rows(db_path, "summary_checkpoints") == 0
         assert self._count_rows(db_path, "chunk_checkpoints") == 0
         assert self._count_rows(db_path, "summary_drafts") == 0
+        assert self._count_rows(db_path, "glossary_discovery_chapter_state") == 0
         assert self._count_rows(db_path, "packet_metadata") == 0
         assert self._count_rows(db_path, "translation_checkpoints") == 0
 
@@ -945,6 +955,13 @@ class TestM11CleanupScopes:
                 for row in plan["sqlite_rows"]
             }
             assert ("resemantica.db", "summary_checkpoints", "run_id", "release_id", None) in identities
+            assert (
+                "resemantica.db",
+                "glossary_discovery_chapter_state",
+                "run_id",
+                "release_id",
+                None,
+            ) in identities
             assert (
                 "resemantica.db",
                 "chunk_checkpoints",

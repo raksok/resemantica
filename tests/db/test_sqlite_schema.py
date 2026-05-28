@@ -27,6 +27,11 @@ def test_ensure_schema_creates_absorbed_columns_on_fresh_db() -> None:
             "metadata_json",
         } <= _columns(conn, "chunk_checkpoints")
         assert {"pos_tags", "llm_confidence"} <= _columns(conn, "glossary_candidates")
+        assert {"input_hash"} <= _columns(conn, "glossary_checkpoints")
+        assert {"raw_candidates_json", "candidate_count"} <= _columns(
+            conn,
+            "glossary_discovery_chapter_state",
+        )
         assert {"dictionary_match", "existing_policy_id"} <= _columns(conn, "idiom_candidates")
     finally:
         conn.close()

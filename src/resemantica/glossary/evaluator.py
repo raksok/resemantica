@@ -64,8 +64,12 @@ def evaluate_candidate_batch(
                     with open(cache_file, "r", encoding="utf-8") as f:
                         cached_data = json.load(f)
 
+                    batch_results = []
                     for item in cached_data:
-                        results.append(EvalResult(**item))
+                        batch_results.append(EvalResult(**item))
+                    results.extend(batch_results)
+                    if persist_callback:
+                        persist_callback(batch_results)
                     if event_callback:
                         event_callback("eval_batch_cached", {
                             "batch_size": len(batch),
@@ -180,8 +184,9 @@ def evaluate_candidate_batch(
                 len(batch),
             )
             # Default to reject if LLM fails
+            batch_results = []
             for c in batch:
-                results.append(
+                batch_results.append(
                     EvalResult(
                         candidate_id=c.candidate_id,
                         keep=False,
@@ -190,5 +195,8 @@ def evaluate_candidate_batch(
                         confidence=0.0
                     )
                 )
+            results.extend(batch_results)
+            if persist_callback:
+                persist_callback(batch_results)
 
     return results

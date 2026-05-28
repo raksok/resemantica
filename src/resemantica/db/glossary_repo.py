@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import dataclass
 from typing import Sequence
 
 from resemantica.db.sqlite import ensure_schema
+from resemantica.glossary.candidate_gen import RawCandidate
 from resemantica.glossary.models import (
     AliasCluster,
     GlossaryCandidate,
@@ -13,6 +15,19 @@ from resemantica.glossary.models import (
     GlossaryTranslationVote,
     LockedGlossaryEntry,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class GlossaryDiscoveryChapterState:
+    release_id: str
+    run_id: str
+    chapter_number: int
+    chapter_source_hash: str
+    input_hash: str
+    status: str
+    skip_reason: str | None
+    raw_candidates: list[RawCandidate]
+    candidate_count: int
 
 
 def ensure_glossary_schema(conn: sqlite3.Connection) -> None:
@@ -665,6 +680,18 @@ def upsert_alias_clusters(
         )
 
 
+def clear_alias_clusters_for_run(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    discovery_run_id: str,
+) -> None:
+    conn.execute(
+        "DELETE FROM glossary_alias_clusters WHERE release_id = ? AND discovery_run_id = ?",
+        (release_id, discovery_run_id),
+    )
+
+
 def replace_candidates(
     conn: sqlite3.Connection,
     *,
@@ -674,13 +701,13 @@ def replace_candidates(
 ) -> None:
     """Replace ALL candidates for a release/run (used for checkpoint writes).
     Deletes existing entries first to avoid double-counting appearance_count."""
-    if not candidates:
-        return
     with conn:
         conn.execute(
             "DELETE FROM glossary_candidates WHERE release_id = ? AND discovery_run_id = ?",
             (release_id, discovery_run_id),
         )
+        if not candidates:
+            return
         conn.executemany(
             """
             INSERT OR REPLACE INTO glossary_candidates(
@@ -725,16 +752,212 @@ def update_candidate_llm_fields(
     llm_type: str,
     llm_reason_code: str,
     llm_confidence: float,
+    candidate_status: str | None = None,
 ) -> None:
     """Update LLM evaluation fields for a single candidate."""
+    if candidate_status is None:
+        conn.execute(
+            """
+            UPDATE glossary_candidates
+            SET llm_keep = ?, llm_type = ?, llm_reason_code = ?, llm_confidence = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE candidate_id = ?
+            """,
+            (1 if llm_keep else 0, llm_type, llm_reason_code, llm_confidence, candidate_id),
+        )
+        return
     conn.execute(
         """
         UPDATE glossary_candidates
         SET llm_keep = ?, llm_type = ?, llm_reason_code = ?, llm_confidence = ?,
+            candidate_status = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE candidate_id = ?
         """,
-        (1 if llm_keep else 0, llm_type, llm_reason_code, llm_confidence, candidate_id),
+        (
+            1 if llm_keep else 0,
+            llm_type,
+            llm_reason_code,
+            llm_confidence,
+            candidate_status,
+            candidate_id,
+        ),
+    )
+
+
+def _raw_candidate_to_dict(candidate: RawCandidate) -> dict[str, object]:
+    return {
+        "surface_form": candidate.surface_form,
+        "normalized_form": candidate.normalized_form,
+        "pos_tags": list(candidate.pos_tags),
+        "ner_label": candidate.ner_label,
+        "type_prior": candidate.type_prior,
+        "strategies": sorted(candidate.strategies),
+        "appearances": candidate.appearances,
+        "context_snippets": list(candidate.context_snippets),
+    }
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _raw_candidate_from_dict(data: dict[str, object]) -> RawCandidate:
+    appearances_raw = data.get("appearances", 1)
+    return RawCandidate(
+        surface_form=str(data["surface_form"]),
+        normalized_form=str(data["normalized_form"]),
+        pos_tags=_string_list(data.get("pos_tags", [])),
+        ner_label=(None if data.get("ner_label") is None else str(data["ner_label"])),
+        type_prior=str(data["type_prior"]),
+        strategies=set(_string_list(data.get("strategies", []))),
+        appearances=int(appearances_raw) if isinstance(appearances_raw, int | str | float) else 1,
+        context_snippets=_string_list(data.get("context_snippets", [])),
+    )
+
+
+def serialize_raw_candidates(candidates: Sequence[RawCandidate]) -> str:
+    return json.dumps(
+        [_raw_candidate_to_dict(candidate) for candidate in candidates],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def deserialize_raw_candidates(raw_candidates_json: str) -> list[RawCandidate]:
+    raw_rows = json.loads(raw_candidates_json)
+    if not isinstance(raw_rows, list):
+        raise ValueError("raw candidate state must be a list")
+    return [_raw_candidate_from_dict(row) for row in raw_rows if isinstance(row, dict)]
+
+
+def save_discovery_chapter_state(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+    input_hash: str,
+    status: str,
+    raw_candidates: Sequence[RawCandidate],
+    skip_reason: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO glossary_discovery_chapter_state(
+            release_id, run_id, chapter_number, chapter_source_hash, input_hash,
+            status, skip_reason, raw_candidates_json, candidate_count, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(release_id, run_id, chapter_number)
+        DO UPDATE SET
+            chapter_source_hash = excluded.chapter_source_hash,
+            input_hash = excluded.input_hash,
+            status = excluded.status,
+            skip_reason = excluded.skip_reason,
+            raw_candidates_json = excluded.raw_candidates_json,
+            candidate_count = excluded.candidate_count,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            release_id,
+            run_id,
+            chapter_number,
+            chapter_source_hash,
+            input_hash,
+            status,
+            skip_reason,
+            serialize_raw_candidates(raw_candidates),
+            len(raw_candidates),
+        ),
+    )
+
+
+def load_valid_discovery_chapter_state(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    chapter_source_hash: str,
+    input_hash: str,
+) -> GlossaryDiscoveryChapterState | None:
+    row = conn.execute(
+        """
+        SELECT release_id, run_id, chapter_number, chapter_source_hash, input_hash,
+               status, skip_reason, raw_candidates_json, candidate_count
+        FROM glossary_discovery_chapter_state
+        WHERE release_id = ?
+          AND run_id = ?
+          AND chapter_number = ?
+          AND chapter_source_hash = ?
+          AND input_hash = ?
+          AND status IN ('completed', 'skipped')
+        """,
+        (release_id, run_id, chapter_number, chapter_source_hash, input_hash),
+    ).fetchone()
+    if row is None:
+        return None
+    return GlossaryDiscoveryChapterState(
+        release_id=str(row["release_id"]),
+        run_id=str(row["run_id"]),
+        chapter_number=int(row["chapter_number"]),
+        chapter_source_hash=str(row["chapter_source_hash"]),
+        input_hash=str(row["input_hash"]),
+        status=str(row["status"]),
+        skip_reason=(None if row["skip_reason"] is None else str(row["skip_reason"])),
+        raw_candidates=deserialize_raw_candidates(str(row["raw_candidates_json"])),
+        candidate_count=int(row["candidate_count"]),
+    )
+
+
+def list_reusable_discovery_chapter_states(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+) -> list[GlossaryDiscoveryChapterState]:
+    rows = conn.execute(
+        """
+        SELECT release_id, run_id, chapter_number, chapter_source_hash, input_hash,
+               status, skip_reason, raw_candidates_json, candidate_count
+        FROM glossary_discovery_chapter_state
+        WHERE release_id = ?
+          AND run_id = ?
+          AND status IN ('completed', 'skipped')
+        ORDER BY chapter_number
+        """,
+        (release_id, run_id),
+    ).fetchall()
+    return [
+        GlossaryDiscoveryChapterState(
+            release_id=str(row["release_id"]),
+            run_id=str(row["run_id"]),
+            chapter_number=int(row["chapter_number"]),
+            chapter_source_hash=str(row["chapter_source_hash"]),
+            input_hash=str(row["input_hash"]),
+            status=str(row["status"]),
+            skip_reason=(None if row["skip_reason"] is None else str(row["skip_reason"])),
+            raw_candidates=deserialize_raw_candidates(str(row["raw_candidates_json"])),
+            candidate_count=int(row["candidate_count"]),
+        )
+        for row in rows
+    ]
+
+
+def clear_discovery_chapter_state(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    run_id: str,
+) -> None:
+    conn.execute(
+        "DELETE FROM glossary_discovery_chapter_state WHERE release_id = ? AND run_id = ?",
+        (release_id, run_id),
     )
 
 
@@ -744,17 +967,19 @@ def set_checkpoint(
     release_id: str,
     run_id: str,
     stage_name: str,
+    input_hash: str = "",
 ) -> None:
     """Record that a stage completed successfully."""
     conn.execute(
         """
-        INSERT INTO glossary_checkpoints(release_id, run_id, stage_name, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO glossary_checkpoints(release_id, run_id, stage_name, input_hash, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(release_id, run_id) DO UPDATE SET
             stage_name = excluded.stage_name,
+            input_hash = excluded.input_hash,
             updated_at = CURRENT_TIMESTAMP
         """,
-        (release_id, run_id, stage_name),
+        (release_id, run_id, stage_name, input_hash),
     )
 
 
@@ -763,13 +988,18 @@ def get_checkpoint(
     *,
     release_id: str,
     run_id: str,
+    input_hash: str | None = None,
 ) -> str | None:
     """Return the last completed stage name, or None if no checkpoint."""
     row = conn.execute(
-        "SELECT stage_name FROM glossary_checkpoints WHERE release_id = ? AND run_id = ?",
+        "SELECT stage_name, input_hash FROM glossary_checkpoints WHERE release_id = ? AND run_id = ?",
         (release_id, run_id),
     ).fetchone()
-    return str(row["stage_name"]) if row else None
+    if row is None:
+        return None
+    if input_hash is not None and str(row["input_hash"]) != input_hash:
+        return None
+    return str(row["stage_name"])
 
 
 def list_alias_clusters(
