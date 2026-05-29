@@ -47,7 +47,8 @@
 
 **Cause:** Corpus scoring can be CPU-heavy on large candidate sets. This happens after
 `preprocess-glossary.discover.chapter_completed` events and before
-`preprocess-glossary.discover.filter_completed`.
+`preprocess-glossary.discover.filter.completed` (legacy:
+`preprocess-glossary.discover.filter_completed`).
 
 **Check:** Look for `preprocess-glossary.discover.scoring.progress` events or messages like
 `Scoring glossary candidates: c_value 4200/18000`. If those counts are moving, the run is slow

@@ -219,6 +219,36 @@ def _insert_glossary_candidate(
         conn.close()
 
 
+def _discovery_candidate(
+    *,
+    release_id: str,
+    run_id: str,
+    source_term: str = "青云门",
+) -> GlossaryCandidate:
+    return GlossaryCandidate(
+        candidate_id=f"gcan_{normalize_term(source_term)}",
+        release_id=release_id,
+        source_term=source_term,
+        normalized_source_term=normalize_term(source_term),
+        category="faction",
+        source_language="zh",
+        first_seen_chapter=1,
+        last_seen_chapter=1,
+        appearance_count=2,
+        evidence_snippet=source_term,
+        candidate_translation_en=None,
+        normalized_target_term=None,
+        discovery_run_id=run_id,
+        translation_run_id=None,
+        candidate_status="discovered",
+        validation_status="pending",
+        conflict_reason=None,
+        type_prior="faction",
+        chapter_coverage=1,
+        corpus_score=1.0,
+    )
+
+
 def test_discovery_writes_candidates_only(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _extract_one_chapter(
@@ -746,13 +776,21 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.discover.started" in event_types
     assert "preprocess-glossary.discover.chapter_started" in event_types
     assert "preprocess-glossary.discover.chapter_completed" in event_types
+    assert "preprocess-glossary.discover.prefilter.started" in event_types
+    assert "preprocess-glossary.discover.prefilter.completed" in event_types
     assert "preprocess-glossary.discover.scoring.started" in event_types
     assert "preprocess-glossary.discover.scoring.progress" in event_types
     assert "preprocess-glossary.discover.scoring.completed" in event_types
+    assert "preprocess-glossary.discover.filter.started" in event_types
+    assert "preprocess-glossary.discover.filter.completed" in event_types
+    assert "preprocess-glossary.discover.filter.persisted" in event_types
     assert "preprocess-glossary.discover.dedup.started" in event_types
     assert "preprocess-glossary.discover.dedup.completed" in event_types
     assert "preprocess-glossary.discover.dedup.persisted" in event_types
     assert "preprocess-glossary.discover.checkpoint.completed" in event_types
+    assert "preprocess-glossary.discover.eval.started" in event_types
+    assert "preprocess-glossary.discover.eval.completed" in event_types
+    assert "preprocess-glossary.discover.eval.persisted" in event_types
     assert "preprocess-glossary.discover.snapshot.artifact_written" in event_types
     assert "preprocess-glossary.discover.completed" in event_types
     assert "preprocess-glossary.translate.started" in event_types
@@ -767,14 +805,42 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.promote.started" in event_types
     assert "preprocess-glossary.promote.completed" in event_types
     assert event_types[-1] == "preprocess-glossary.completed"
-    chapter_completed_index = event_types.index("preprocess-glossary.discover.chapter_completed")
+    def event_index(event_type: str, checkpoint_stage: str | None = None) -> int:
+        for index, event in enumerate(received):
+            if event.event_type != event_type:
+                continue
+            if checkpoint_stage is not None and event.payload.get("checkpoint_stage") != checkpoint_stage:
+                continue
+            return index
+        raise AssertionError(f"missing event {event_type} {checkpoint_stage or ''}")
+
+    chapter_completed_index = event_index("preprocess-glossary.discover.chapter_completed")
+    prefilter_started_index = event_index("preprocess-glossary.discover.prefilter.started")
+    prefilter_completed_index = event_index("preprocess-glossary.discover.prefilter.completed")
     scoring_started_index = event_types.index("preprocess-glossary.discover.scoring.started")
     scoring_completed_index = event_types.index("preprocess-glossary.discover.scoring.completed")
     filter_completed_index = event_types.index("preprocess-glossary.discover.filter_completed")
+    filter_started_index = event_index("preprocess-glossary.discover.filter.started")
+    scoped_filter_completed_index = event_index("preprocess-glossary.discover.filter.completed")
+    filter_persisted_index = event_index("preprocess-glossary.discover.filter.persisted")
+    filtered_checkpoint_index = event_index(
+        "preprocess-glossary.discover.checkpoint.completed",
+        "filtered",
+    )
+    eval_started_index = event_index("preprocess-glossary.discover.eval.started")
+    eval_completed_index = event_index("preprocess-glossary.discover.eval.completed")
+    eval_persisted_index = event_index("preprocess-glossary.discover.eval.persisted")
+    eval_checkpoint_index = event_index(
+        "preprocess-glossary.discover.checkpoint.completed",
+        "eval_completed",
+    )
     dedup_started_index = event_types.index("preprocess-glossary.discover.dedup.started")
     dedup_completed_index = event_types.index("preprocess-glossary.discover.dedup.completed")
     dedup_persisted_index = event_types.index("preprocess-glossary.discover.dedup.persisted")
-    checkpoint_completed_index = event_types.index("preprocess-glossary.discover.checkpoint.completed")
+    dedup_checkpoint_index = event_index(
+        "preprocess-glossary.discover.checkpoint.completed",
+        "dedup_completed",
+    )
     snapshot_written_index = event_types.index("preprocess-glossary.discover.snapshot.artifact_written")
     discover_completed_index = event_types.index("preprocess-glossary.discover.completed")
     translate_started_index = event_types.index("preprocess-glossary.translate.started")
@@ -786,13 +852,25 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     resolution_completed_index = event_types.index("preprocess-glossary.translate.resolution.completed")
     translate_snapshot_written_index = event_types.index("preprocess-glossary.translate.snapshot.artifact_written")
     translate_completed_index = event_types.index("preprocess-glossary.translate.completed")
-    assert chapter_completed_index < scoring_started_index < scoring_completed_index < filter_completed_index
     assert (
-        filter_completed_index
+        chapter_completed_index
+        < prefilter_started_index
+        < prefilter_completed_index
+        < scoring_started_index
+        < scoring_completed_index
+        < filter_started_index
+        < scoped_filter_completed_index
+        < filter_completed_index
+        < filter_persisted_index
+        < filtered_checkpoint_index
+        < eval_started_index
+        < eval_completed_index
+        < eval_persisted_index
+        < eval_checkpoint_index
         < dedup_started_index
         < dedup_completed_index
         < dedup_persisted_index
-        < checkpoint_completed_index
+        < dedup_checkpoint_index
         < snapshot_written_index
         < discover_completed_index
     )
@@ -875,6 +953,165 @@ def test_glossary_pipeline_emits_finalization_events_with_no_candidates(
         event for event in received if event.event_type == "preprocess-glossary.discover.snapshot.artifact_written"
     )
     assert snapshot_written.payload["candidate_count"] == 0
+
+
+def test_glossary_discovery_resume_emits_checkpoint_reuse_events(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m60-discover-resume-events"
+    run_id = "glossary-resume-events"
+    _extract_one_chapter(
+        tmp_path,
+        release_id=release_id,
+        source_text="青云门弟子张三来到青云山。",
+    )
+    monkeypatch.setattr("resemantica.glossary.pipeline.evaluate_candidate_batch", _eval_all_keep)
+    monkeypatch.setattr("resemantica.glossary.pipeline.deduplicate_and_cluster", _dedup_noop)
+    discover_glossary_candidates(
+        release_id=release_id,
+        run_id=run_id,
+        llm_client=ScriptedGlossaryLLM({}),
+    )
+
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == run_id:
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        result = discover_glossary_candidates(
+            release_id=release_id,
+            run_id=run_id,
+            llm_client=ScriptedGlossaryLLM({}),
+            resume=True,
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result["status"] == "success"
+    checkpoint_events = [
+        event
+        for event in received
+        if event.event_type == "preprocess-glossary.discover.checkpoint.completed"
+    ]
+    by_stage = {event.payload["checkpoint_stage"]: event for event in checkpoint_events}
+    assert by_stage["filtered"].payload["skipped"] is True
+    assert by_stage["filtered"].payload["reason"] == "resume_checkpoint"
+    assert by_stage["eval_completed"].payload["skipped"] is True
+    assert by_stage["eval_completed"].payload["reason"] == "resume_checkpoint"
+    filter_completed = next(
+        event for event in received if event.event_type == "preprocess-glossary.discover.filter.completed"
+    )
+    assert filter_completed.payload["skipped"] is True
+    eval_completed = next(
+        event for event in received if event.event_type == "preprocess-glossary.discover.eval.completed"
+    )
+    assert eval_completed.payload["skipped"] is True
+
+
+def test_glossary_discovery_eval_batch_failure_emits_warning_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m60-eval-warning"
+    run_id = "glossary-eval-warning"
+    _extract_one_chapter(
+        tmp_path,
+        release_id=release_id,
+        source_text="青云门弟子张三来到青云山。",
+    )
+
+    class _InvalidEvalLLM:
+        def generate_text(self, *, prompt: str, model_name: str) -> str:  # noqa: ARG002
+            return "not json"
+
+    monkeypatch.setattr(
+        "resemantica.glossary.pipeline.discover_candidates_from_extracted",
+        lambda **kwargs: [_discovery_candidate(release_id=release_id, run_id=run_id)],
+    )
+    monkeypatch.setattr("resemantica.glossary.pipeline.deduplicate_and_cluster", _dedup_noop)
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == run_id:
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        result = discover_glossary_candidates(
+            release_id=release_id,
+            run_id=run_id,
+            llm_client=_InvalidEvalLLM(),
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result["status"] == "success"
+    failed = next(
+        event for event in received if event.event_type == "preprocess-glossary.discover.eval.batch_failed"
+    )
+    assert failed.severity == "warning"
+    assert failed.payload["error"]
+    assert failed.payload["batch_index"] == 1
+    legacy_failed = next(
+        event for event in received if event.event_type == "preprocess-glossary.eval.eval_batch_error"
+    )
+    assert legacy_failed.severity == "warning"
+
+
+def test_glossary_discovery_failure_emits_phase_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m60-discover-failed"
+    run_id = "glossary-discover-failed"
+    _extract_one_chapter(
+        tmp_path,
+        release_id=release_id,
+        source_text="青云门弟子张三来到青云山。",
+    )
+    monkeypatch.setattr(
+        "resemantica.glossary.pipeline.discover_candidates_from_extracted",
+        lambda **kwargs: [_discovery_candidate(release_id=release_id, run_id=run_id)],
+    )
+
+    def raise_filter(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("filter exploded")
+
+    monkeypatch.setattr("resemantica.glossary.pipeline.apply_deterministic_filter", raise_filter)
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == run_id:
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        with pytest.raises(RuntimeError, match="filter exploded"):
+            discover_glossary_candidates(
+                release_id=release_id,
+                run_id=run_id,
+                llm_client=ScriptedGlossaryLLM({}),
+            )
+    finally:
+        unsubscribe("*", callback)
+
+    failed = next(event for event in received if event.event_type == "preprocess-glossary.discover.failed")
+    assert failed.severity == "error"
+    assert failed.payload["phase"] == "filter"
+    assert failed.payload["error"] == "filter exploded"
 
 
 def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch) -> None:

@@ -317,6 +317,18 @@ def discover_candidates_from_extracted(
     # Summary-seeded terms are exempted — a rare term flagged by the LLM as
     # "new" is more valuable than a random n-gram appearing in only 1 chapter.
     pre_filter_count = len(global_raw)
+    if event_callback:
+        event_callback(
+            "prefilter.started",
+            None,
+            {
+                "message": f"Glossary pre-score filter started: {pre_filter_count} candidates",
+                "candidate_count": pre_filter_count,
+                "pre_filter_count": pre_filter_count,
+                "total_chapters": total_chapters,
+                "phase": "prefilter",
+            },
+        )
     if total_chapters >= 2:
         global_raw = [
             rc for rc in global_raw
@@ -329,6 +341,27 @@ def discover_candidates_from_extracted(
                 len(global_raw), pre_filter_count,
                 (1 - len(global_raw) / pre_filter_count) * 100,
             )
+
+    prefilter_filtered_count = pre_filter_count - len(global_raw)
+    if event_callback:
+        event_callback(
+            "prefilter.completed",
+            None,
+            {
+                "message": (
+                    "Glossary pre-score filter completed: "
+                    f"{len(global_raw)} kept, {prefilter_filtered_count} filtered"
+                ),
+                "candidate_count": len(global_raw),
+                "pre_filter_count": pre_filter_count,
+                "kept_count": len(global_raw),
+                "filtered_count": prefilter_filtered_count,
+                "total_chapters": total_chapters,
+                "phase": "prefilter",
+                "skipped": total_chapters < 2,
+                "reason": "single_chapter" if total_chapters < 2 else None,
+            },
+        )
 
     logger.debug(
         "Corpus aggregation: {} unique terms across {} chapters, scoring...",

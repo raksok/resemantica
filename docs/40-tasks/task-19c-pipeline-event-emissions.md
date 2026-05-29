@@ -55,6 +55,15 @@ Story summary generation emits per-summary-type started/completed events for `st
 | `preprocess-glossary.started` | Pipeline begins |
 | `preprocess-glossary.discover.chapter_started/completed` | Per chapter in discovery |
 | `preprocess-glossary.discover.term_found` | New term discovered |
+| `preprocess-glossary.discover.prefilter.started/completed` | Pre-score df>=2 filter |
+| `preprocess-glossary.discover.scoring.started/progress/completed` | Corpus scoring |
+| `preprocess-glossary.discover.filter.started/completed/persisted` | Deterministic filter and candidate save |
+| `preprocess-glossary.discover.eval.started/completed/persisted` | LLM candidate evaluation phase |
+| `preprocess-glossary.discover.eval.batch_started/completed/cached/failed` | LLM evaluation batches |
+| `preprocess-glossary.discover.dedup.started/completed/persisted` | Alias clustering and persistence |
+| `preprocess-glossary.discover.checkpoint.completed` | Filter/eval/dedup checkpoint saved or reused |
+| `preprocess-glossary.discover.snapshot.artifact_written` | Discovery candidate snapshot written |
+| `preprocess-glossary.discover.failed` | Fatal discovery subphase failure |
 | `preprocess-glossary.translate.model_started/completed` | Per translator model vote batch |
 | `preprocess-glossary.translate.resolution.started/completed` | Vote resolution and canonical save phase |
 | `preprocess-glossary.translate.chapter_started/completed` | Per chapter during translation resolution/save |
@@ -64,7 +73,7 @@ Story summary generation emits per-summary-type started/completed events for `st
 | `preprocess-glossary.promote.started/completed` | Promotion phase |
 | `preprocess-glossary.completed` | Pipeline ends |
 
-Glossary translation keeps model-first vote generation order. Chapter `started`/`completed` events are emitted when resolution and canonical saves begin and finish for a chapter, after all model vote batches complete.
+Glossary discovery keeps legacy `filter_completed`, `dedup_started`, `dedup_completed`, and `preprocess-glossary.eval.eval_batch_*` events for compatibility while adding scoped discover events for current operators. Glossary translation keeps model-first vote generation order. Chapter `started`/`completed` events are emitted when resolution and canonical saves begin and finish for a chapter, after all model vote batches complete.
 
 ### Idioms pipeline (`preprocess-idioms`)
 

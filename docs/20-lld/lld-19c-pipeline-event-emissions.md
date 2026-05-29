@@ -66,6 +66,15 @@ The `summary_generation_completed` payload must include enough identity to audit
 | `preprocess-glossary.started` | Pipeline begins | `total_chapters: int` |
 | `preprocess-glossary.discover.chapter_started/completed` | Per chapter in discovery | `chapter_number` |
 | `preprocess-glossary.discover.term_found` | New term discovered | `term: str`, `chapter_number` |
+| `preprocess-glossary.discover.prefilter.started/completed` | Pre-score df>=2 filter | candidate/filter counts |
+| `preprocess-glossary.discover.scoring.started/progress/completed` | Corpus scoring | candidate/progress/score summary payloads |
+| `preprocess-glossary.discover.filter.started/completed/persisted` | Deterministic filter and candidate save | candidate/filter counts, skip metadata on resume |
+| `preprocess-glossary.discover.eval.started/completed/persisted` | LLM candidate evaluation phase | model, candidate, pending, kept/rejected counts |
+| `preprocess-glossary.discover.eval.batch_started/completed/cached/failed` | LLM evaluation batches | batch index/counts, warning severity on failed batches |
+| `preprocess-glossary.discover.dedup.started/completed/persisted` | Alias clustering and persistence | candidate, cluster, alias counts |
+| `preprocess-glossary.discover.checkpoint.completed` | Filter/eval/dedup checkpoint saved or reused | `checkpoint_stage`, input hash, candidate count, skip metadata |
+| `preprocess-glossary.discover.snapshot.artifact_written` | Discovery candidate snapshot written | `artifact_path`, `candidate_count` |
+| `preprocess-glossary.discover.failed` | Fatal discovery subphase failure | severity `error`, `phase`, `error` |
 | `preprocess-glossary.translate.model_started/completed` | Per translator model vote batch | `model_name`, `pending_count`, `candidate_count` |
 | `preprocess-glossary.translate.resolution.started/completed` | Vote resolution and canonical save phase | `pending_count`, `candidate_count`, translated/unresolved counts on completed |
 | `preprocess-glossary.translate.chapter_started/completed` | Per chapter during vote resolution and canonical save | `chapter_number`, counts on completed |
@@ -76,6 +85,7 @@ The `summary_generation_completed` payload must include enough identity to audit
 | `preprocess-glossary.completed` | Pipeline ends | `discovered: int`, `translated: int`, `promoted: int` |
 
 The glossary pipeline has 3 distinct phases. Each phase emits its own `chapter_started`/`chapter_completed` events under the phase namespace so the subscriber can distinguish them.
+Glossary discovery keeps legacy `preprocess-glossary.discover.filter_completed`, `dedup_started`, `dedup_completed`, and `preprocess-glossary.eval.eval_batch_*` events for compatibility; scoped `discover.*` events are the preferred operator-visible boundaries.
 For glossary translation, chapter events belong to the resolution/save phase. Model vote generation is model-first and emits per-model start/completion events before resolution begins.
 
 #### Idioms pipeline — stage name: `preprocess-idioms`

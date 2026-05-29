@@ -47,7 +47,7 @@ from resemantica.glossary.validators import (
 )
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
-from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
+from resemantica.orchestration.stop import StopRequested, StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.utils import _build_llm_client, _write_json
 from resemantica.utils import _emit as _emit_shared
@@ -287,6 +287,80 @@ def discover_glossary_candidates(
                 input_hash=expected_hash,
             )
 
+    discovered: list[GlossaryCandidate] = []
+    current_phase = "discovery"
+
+    def _emit_discover_failed(exc: Exception) -> None:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.failed",
+            severity="error",
+            phase=current_phase,
+            error=str(exc),
+            message=f"Glossary discovery failed during {current_phase}: {exc}",
+        )
+
+    def _emit_checkpoint_completed(
+        *,
+        checkpoint_stage: str,
+        input_hash: str,
+        skipped: bool,
+        reason: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "message": (
+                f"Glossary discovery checkpoint {'reused' if skipped else 'set'}: "
+                f"{checkpoint_stage}"
+            ),
+            "checkpoint_stage": checkpoint_stage,
+            "input_hash": input_hash,
+            "candidate_count": len(discovered),
+            "skipped": skipped,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        _emit(run_id, release_id, f"{_STAGE_NAME}.discover.checkpoint.completed", **payload)
+
+    def _emit_discovery_event(
+        event_name: str,
+        chapter_number: int | None,
+        payload: dict[str, object],
+    ) -> None:
+        nonlocal current_phase
+        if event_name.startswith("prefilter."):
+            current_phase = "prefilter"
+        elif event_name.startswith("scoring."):
+            current_phase = "scoring"
+        else:
+            current_phase = "extraction"
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.{event_name}",
+            chapter_number=chapter_number,
+            **payload,
+        )
+
+    def _emit_eval_event(event_name: str, payload: dict[str, object]) -> None:
+        legacy_payload = dict(payload)
+        if event_name == "eval_batch_error":
+            legacy_payload.setdefault("severity", "warning")
+        _emit(run_id, release_id, f"{_STAGE_NAME}.eval.{event_name}", **legacy_payload)
+
+        mapped = {
+            "eval_batch_start": "batch_started",
+            "eval_batch_success": "batch_completed",
+            "eval_batch_cached": "batch_cached",
+            "eval_batch_error": "batch_failed",
+        }.get(event_name)
+        if mapped is None:
+            return
+        scoped_payload = dict(payload)
+        if mapped == "batch_failed":
+            scoped_payload.setdefault("severity", "warning")
+        _emit(run_id, release_id, f"{_STAGE_NAME}.discover.eval.{mapped}", **scoped_payload)
+
     try:
         _emit(
             run_id,
@@ -297,6 +371,7 @@ def discover_glossary_candidates(
 
         # --- Stage 1-2: Discovery + Filter ---
         if resume_stage is None:
+            current_phase = "extraction"
             _emit(
                 run_id,
                 release_id,
@@ -309,13 +384,7 @@ def discover_glossary_candidates(
                 chapter_refs=chapter_refs,
                 skip_chapters=skip_chapters or None,
                 chapter_summaries=chapter_summaries or None,
-                event_callback=lambda event_name, chapter_number, payload: _emit(
-                    run_id,
-                    release_id,
-                    f"{_STAGE_NAME}.discover.{event_name}",
-                    chapter_number=chapter_number,
-                    **payload,
-                ),
+                event_callback=_emit_discovery_event,
                 stop_token=stop_token,
                 conn=conn,
                 resume=resume and not force,
@@ -323,7 +392,17 @@ def discover_glossary_candidates(
             )
             logger.info("Discovery: {} raw candidates from {} chapters", len(discovered), len(chapter_refs))
 
+            current_phase = "filter"
             pre_filter_count = len(discovered)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.filter.started",
+                message=f"Deterministic filter started: {pre_filter_count} candidates",
+                candidate_count=pre_filter_count,
+                pre_filter_count=pre_filter_count,
+                phase="filter",
+            )
             discovered = apply_deterministic_filter(
                 discovered,
                 config=config_obj.glossary,
@@ -331,6 +410,21 @@ def discover_glossary_candidates(
             )
             filtered_count_stage3 = sum(1 for c in discovered if c.candidate_status == "filtered")
             kept_after_filter = pre_filter_count - filtered_count_stage3
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.filter.completed",
+                message=(
+                    "Deterministic filter completed: "
+                    f"{kept_after_filter} kept, {filtered_count_stage3} filtered"
+                ),
+                candidate_count=len(discovered),
+                pre_filter_count=pre_filter_count,
+                kept_count=kept_after_filter,
+                filtered_count=filtered_count_stage3,
+                phase="filter",
+                skipped=False,
+            )
             _emit(
                 run_id,
                 release_id,
@@ -345,7 +439,21 @@ def discover_glossary_candidates(
             )
 
             # Checkpoint after discovery + filter
+            current_phase = "filter_persist"
             replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.filter.persisted",
+                message=f"Deterministic filter persisted: {len(discovered)} candidates",
+                candidate_count=len(discovered),
+                pre_filter_count=pre_filter_count,
+                kept_count=kept_after_filter,
+                filtered_count=filtered_count_stage3,
+                phase="filter",
+                skipped=False,
+            )
+            logger.info("Filter persistence: {} candidates", len(discovered))
             set_checkpoint(
                 conn,
                 release_id=release_id,
@@ -353,6 +461,12 @@ def discover_glossary_candidates(
                 stage_name="filtered",
                 input_hash=discover_input_hash,
             )
+            _emit_checkpoint_completed(
+                checkpoint_stage="filtered",
+                input_hash=discover_input_hash,
+                skipped=False,
+            )
+            logger.info("Checkpoint set: filtered")
             resume_stage = "filtered"
         else:
             logger.info("Resuming from checkpoint stage: {}", resume_stage)
@@ -361,12 +475,97 @@ def discover_glossary_candidates(
                 for candidate in list_candidates(conn, release_id=release_id)
                 if candidate.discovery_run_id == run_id
             ]
+            if resume_stage in ("filtered", "eval_completed", "dedup_completed"):
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.discover.filter.completed",
+                    message=f"Deterministic filter skipped: {resume_stage} checkpoint already exists",
+                    candidate_count=len(discovered),
+                    pre_filter_count=len(discovered),
+                    kept_count=sum(1 for c in discovered if c.candidate_status != "filtered"),
+                    filtered_count=sum(1 for c in discovered if c.candidate_status == "filtered"),
+                    phase="filter",
+                    skipped=True,
+                    reason="resume_checkpoint",
+                )
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.discover.filter.persisted",
+                    message=f"Deterministic filter persistence skipped: {resume_stage} checkpoint already exists",
+                    candidate_count=len(discovered),
+                    phase="filter",
+                    skipped=True,
+                    reason="resume_checkpoint",
+                )
+                _emit_checkpoint_completed(
+                    checkpoint_stage="filtered",
+                    input_hash=discover_input_hash,
+                    skipped=True,
+                    reason="resume_checkpoint",
+                )
+                logger.info("Checkpoint reused: filtered")
+            if resume_stage in ("eval_completed", "dedup_completed"):
+                _emit_checkpoint_completed(
+                    checkpoint_stage="eval_completed",
+                    input_hash=eval_input_hash,
+                    skipped=True,
+                    reason="resume_checkpoint",
+                )
+                logger.info("Checkpoint reused: eval_completed")
 
         raise_if_stop_requested(stop_token)
 
         # --- Stage 4: LLM Batch Evaluation ---
-        if not skip_llm_eval:
-            pending_eval = [c for c in discovered if c.candidate_status == "discovered" and c.llm_confidence is None]
+        pending_eval = [
+            c for c in discovered
+            if c.candidate_status == "discovered" and c.llm_confidence is None
+        ]
+        eval_candidate_count = sum(1 for c in discovered if c.candidate_status == "discovered")
+        current_phase = "eval"
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.eval.started",
+            message=f"Glossary LLM evaluation started: {len(pending_eval)} pending candidates",
+            candidate_count=eval_candidate_count,
+            pending_count=len(pending_eval),
+            model_name=config_obj.models.eval_name,
+            skipped=skip_llm_eval or resume_stage in ("eval_completed", "dedup_completed"),
+            reason="skip_llm_eval" if skip_llm_eval else (
+                "resume_checkpoint" if resume_stage in ("eval_completed", "dedup_completed") else None
+            ),
+        )
+        if resume_stage in ("eval_completed", "dedup_completed"):
+            reason = "resume_checkpoint"
+            checkpoint_label = str(resume_stage)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.eval.completed",
+                message=f"Glossary LLM evaluation skipped: {checkpoint_label} checkpoint already exists",
+                candidate_count=eval_candidate_count,
+                pending_count=len(pending_eval),
+                kept_count=0,
+                rejected_count=0,
+                model_name=config_obj.models.eval_name,
+                skipped=True,
+                reason=reason,
+            )
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.eval.persisted",
+                message=(
+                    "Glossary LLM evaluation persistence skipped: "
+                    f"{checkpoint_label} checkpoint already exists"
+                ),
+                candidate_count=len(discovered),
+                skipped=True,
+                reason=reason,
+            )
+        elif not skip_llm_eval:
             if pending_eval:
                 eval_prompt = load_prompt("glossary_evaluate.txt")
                 batch_sz = (
@@ -394,9 +593,7 @@ def discover_glossary_candidates(
                     prompt_version=eval_prompt.version,
                     batch_size=batch_sz,
                     cache_root=paths.release_root / "cache" / "llm",
-                    event_callback=lambda event, payload: _emit(
-                        run_id, release_id, f"{_STAGE_NAME}.eval.{event}", **payload
-                    ),
+                    event_callback=_emit_eval_event,
                     persist_callback=_persist_eval_batch,
                 )
 
@@ -413,10 +610,34 @@ def discover_glossary_candidates(
 
                 llm_kept = sum(1 for c in pending_eval if c.candidate_status == "discovered")
                 llm_rejected = sum(1 for c in pending_eval if c.candidate_status == "llm_rejected")
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.discover.eval.completed",
+                    message=f"Glossary LLM evaluation completed: {llm_kept} kept, {llm_rejected} rejected",
+                    candidate_count=eval_candidate_count,
+                    pending_count=len(pending_eval),
+                    kept_count=llm_kept,
+                    rejected_count=llm_rejected,
+                    model_name=config_obj.models.eval_name,
+                    skipped=False,
+                )
                 logger.info("LLM eval: {} kept, {} rejected", llm_kept, llm_rejected)
 
                 # Checkpoint after LLM eval
+                current_phase = "eval_persist"
                 replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.discover.eval.persisted",
+                    message=f"Glossary LLM evaluation persisted: {len(discovered)} candidates",
+                    candidate_count=len(discovered),
+                    kept_count=llm_kept,
+                    rejected_count=llm_rejected,
+                    skipped=False,
+                )
+                logger.info("LLM eval persistence: {} candidates", len(discovered))
                 set_checkpoint(
                     conn,
                     release_id=release_id,
@@ -424,8 +645,38 @@ def discover_glossary_candidates(
                     stage_name="eval_completed",
                     input_hash=eval_input_hash,
                 )
+                _emit_checkpoint_completed(
+                    checkpoint_stage="eval_completed",
+                    input_hash=eval_input_hash,
+                    skipped=False,
+                )
+                logger.info("Checkpoint set: eval_completed")
                 resume_stage = "eval_completed"
-            elif resume_stage == "filtered":
+            else:
+                reason = "no_pending_candidates"
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.discover.eval.completed",
+                    message="Glossary LLM evaluation skipped: no pending candidates",
+                    candidate_count=eval_candidate_count,
+                    pending_count=0,
+                    kept_count=0,
+                    rejected_count=0,
+                    model_name=config_obj.models.eval_name,
+                    skipped=True,
+                    reason=reason,
+                )
+                current_phase = "eval_persist"
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.discover.eval.persisted",
+                    message="Glossary LLM evaluation persistence skipped: no pending candidates",
+                    candidate_count=len(discovered),
+                    skipped=True,
+                    reason=reason,
+                )
                 set_checkpoint(
                     conn,
                     release_id=release_id,
@@ -433,11 +684,43 @@ def discover_glossary_candidates(
                     stage_name="eval_completed",
                     input_hash=eval_input_hash,
                 )
+                _emit_checkpoint_completed(
+                    checkpoint_stage="eval_completed",
+                    input_hash=eval_input_hash,
+                    skipped=False,
+                )
+                logger.info("Checkpoint set: eval_completed")
                 resume_stage = "eval_completed"
+        else:
+            reason = "skip_llm_eval"
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.eval.completed",
+                message="Glossary LLM evaluation skipped: --skip-llm-eval",
+                candidate_count=eval_candidate_count,
+                pending_count=len(pending_eval),
+                kept_count=0,
+                rejected_count=0,
+                model_name=config_obj.models.eval_name,
+                skipped=True,
+                reason=reason,
+            )
+            current_phase = "eval_persist"
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.eval.persisted",
+                message="Glossary LLM evaluation persistence skipped: --skip-llm-eval",
+                candidate_count=len(discovered),
+                skipped=True,
+                reason=reason,
+            )
 
         raise_if_stop_requested(stop_token)
 
         # --- Stage 5: Embedding-based Dedup / Alias Clustering ---
+        current_phase = "dedup"
         to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
         clusters: list[AliasCluster] = []
         alias_merged = sum(1 for c in discovered if c.candidate_status == "alias_merged")
@@ -527,6 +810,7 @@ def discover_glossary_candidates(
             )
             logger.info("Dedup: {} clusters formed, {} aliases merged", len(clusters), alias_merged)
 
+            current_phase = "dedup_persist"
             clear_alias_clusters_for_run(conn, release_id=release_id, discovery_run_id=run_id)
             if clusters:
                 upsert_alias_clusters(
@@ -579,6 +863,7 @@ def discover_glossary_candidates(
                 skipped=True,
                 reason="no_candidates",
             )
+            current_phase = "dedup_persist"
             clear_alias_clusters_for_run(conn, release_id=release_id, discovery_run_id=run_id)
             replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
             _emit(
@@ -610,6 +895,7 @@ def discover_glossary_candidates(
             logger.info("Checkpoint set: dedup_completed")
 
         # --- Final snapshot write ---
+        current_phase = "snapshot"
         snapshot_count = _write_candidate_snapshot(
             conn,
             release_id=release_id,
@@ -629,6 +915,16 @@ def discover_glossary_candidates(
             paths.glossary_candidates_path,
         )
 
+    except StopRequested:
+        raise
+    except Exception as exc:
+        _emit_discover_failed(exc)
+        logger.opt(exception=True).error(
+            "Glossary discovery failed during {}: {}",
+            current_phase,
+            exc,
+        )
+        raise
     finally:
         conn.close()
 

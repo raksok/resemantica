@@ -51,9 +51,11 @@ def evaluate_candidate_batch(
     Error handling: per-batch try/except, skip failed batches.
     """
     results: list[EvalResult] = []
+    total_batches = (len(candidates) + batch_size - 1) // batch_size if batch_size > 0 else 0
 
     for i in range(0, len(candidates), batch_size):
         batch = candidates[i:i + batch_size]
+        batch_index = i // batch_size + 1
         batch_hash = _hash_batch(batch, prompt_version)
 
         cache_file = None
@@ -72,12 +74,15 @@ def evaluate_candidate_batch(
                         persist_callback(batch_results)
                     if event_callback:
                         event_callback("eval_batch_cached", {
+                            "batch_index": batch_index,
+                            "total_batches": total_batches,
                             "batch_size": len(batch),
-                            "message": f"Eval batch {i // batch_size + 1}: {len(batch)} candidates (cached)",
+                            "candidate_count": len(batch),
+                            "message": f"Eval batch {batch_index}: {len(batch)} candidates (cached)",
                         })
                     logger.debug(
                         "Eval batch {}: {} candidates loaded from cache",
-                        i // batch_size + 1,
+                        batch_index,
                         len(batch),
                     )
                     continue
@@ -106,12 +111,15 @@ def evaluate_candidate_batch(
 
         if event_callback:
             event_callback("eval_batch_start", {
+                "batch_index": batch_index,
+                "total_batches": total_batches,
                 "batch_size": len(batch),
-                "message": f"Evaluating batch {i // batch_size + 1}: {len(batch)} candidates",
+                "candidate_count": len(batch),
+                "message": f"Evaluating batch {batch_index}: {len(batch)} candidates",
             })
         logger.info(
             "Eval batch {}: sending {} candidates to LLM",
-            i // batch_size + 1,
+            batch_index,
             len(batch),
         )
 
@@ -159,12 +167,16 @@ def evaluate_candidate_batch(
 
             if event_callback:
                 event_callback("eval_batch_success", {
+                    "batch_index": batch_index,
+                    "total_batches": total_batches,
                     "batch_size": len(batch),
-                    "message": f"Eval batch {i // batch_size + 1}: {len(batch_results)} results",
+                    "candidate_count": len(batch),
+                    "result_count": len(batch_results),
+                    "message": f"Eval batch {batch_index}: {len(batch_results)} results",
                 })
             logger.debug(
                 "Eval batch {}: {} results (kept={}, rejected={})",
-                i // batch_size + 1,
+                batch_index,
                 len(batch_results),
                 sum(1 for r in batch_results if r.keep),
                 sum(1 for r in batch_results if not r.keep),
@@ -173,13 +185,16 @@ def evaluate_candidate_batch(
         except Exception as e:
             if event_callback:
                 event_callback("eval_batch_error", {
+                    "batch_index": batch_index,
+                    "total_batches": total_batches,
                     "error": str(e),
                     "batch_size": len(batch),
-                    "message": f"Eval batch {i // batch_size + 1} failed: {e}",
+                    "candidate_count": len(batch),
+                    "message": f"Eval batch {batch_index} failed: {e}",
                 })
             logger.warning(
                 "Eval batch {} failed ({}), defaulting {} candidates to rejected",
-                i // batch_size + 1,
+                batch_index,
                 e,
                 len(batch),
             )
