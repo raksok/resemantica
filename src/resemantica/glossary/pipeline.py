@@ -156,7 +156,7 @@ def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> No
     _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
 
 
-def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
+def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> int:
     candidates = [candidate.to_json_dict() for candidate in list_candidates(conn, release_id=release_id)]
     _write_json(
         output_path,
@@ -166,6 +166,7 @@ def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) 
             "candidates": candidates,
         },
     )
+    return len(candidates)
 
 
 def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
@@ -439,8 +440,48 @@ def discover_glossary_candidates(
         # --- Stage 5: Embedding-based Dedup / Alias Clustering ---
         to_dedup = [c for c in discovered if c.candidate_status == "discovered"]
         clusters: list[AliasCluster] = []
+        alias_merged = sum(1 for c in discovered if c.candidate_status == "alias_merged")
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.dedup.started",
+            message=f"Alias clustering started: {len(to_dedup)} candidates",
+            candidate_count=len(to_dedup),
+        )
         if resume_stage == "dedup_completed":
             logger.info("Resuming glossary: skipping dedup phase")
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.dedup.completed",
+                message="Alias clustering skipped: dedup_completed checkpoint already exists",
+                candidate_count=len(to_dedup),
+                cluster_count=0,
+                alias_merged_count=alias_merged,
+                skipped=True,
+                reason="resume_checkpoint",
+            )
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.dedup.persisted",
+                message="Alias clustering persistence skipped: dedup_completed checkpoint already exists",
+                cluster_count=0,
+                candidate_count=len(discovered),
+                alias_merged_count=alias_merged,
+                skipped=True,
+                reason="resume_checkpoint",
+            )
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.checkpoint.completed",
+                message="Glossary discovery checkpoint reused: dedup_completed",
+                checkpoint_stage="dedup_completed",
+                input_hash=dedup_input_hash,
+                skipped=True,
+                reason="resume_checkpoint",
+            )
         elif to_dedup:
             _emit(
                 run_id,
@@ -469,6 +510,16 @@ def discover_glossary_candidates(
             _emit(
                 run_id,
                 release_id,
+                f"{_STAGE_NAME}.discover.dedup.completed",
+                message=f"Alias clustering complete: {len(clusters)} clusters, {alias_merged} aliases merged",
+                candidate_count=len(to_dedup),
+                cluster_count=len(clusters),
+                alias_merged_count=alias_merged,
+                skipped=False,
+            )
+            _emit(
+                run_id,
+                release_id,
                 f"{_STAGE_NAME}.discover.dedup_completed",
                 message=f"Clustering complete: {len(clusters)} clusters, {alias_merged} aliases merged",
                 cluster_count=len(clusters),
@@ -485,6 +536,20 @@ def discover_glossary_candidates(
                     discovery_run_id=run_id,
                 )
             replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.dedup.persisted",
+                message=f"Alias clustering persisted: {len(clusters)} clusters, {len(discovered)} candidates",
+                cluster_count=len(clusters),
+                candidate_count=len(discovered),
+                alias_merged_count=alias_merged,
+            )
+            logger.info(
+                "Dedup persistence: {} clusters, {} candidates",
+                len(clusters),
+                len(discovered),
+            )
             set_checkpoint(
                 conn,
                 release_id=release_id,
@@ -492,9 +557,40 @@ def discover_glossary_candidates(
                 stage_name="dedup_completed",
                 input_hash=dedup_input_hash,
             )
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.checkpoint.completed",
+                message="Glossary discovery checkpoint set: dedup_completed",
+                checkpoint_stage="dedup_completed",
+                input_hash=dedup_input_hash,
+                skipped=False,
+            )
+            logger.info("Checkpoint set: dedup_completed")
         elif resume_stage != "dedup_completed":
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.dedup.completed",
+                message="Alias clustering skipped: no discovered candidates",
+                candidate_count=0,
+                cluster_count=0,
+                alias_merged_count=0,
+                skipped=True,
+                reason="no_candidates",
+            )
             clear_alias_clusters_for_run(conn, release_id=release_id, discovery_run_id=run_id)
             replace_candidates(conn, release_id=release_id, discovery_run_id=run_id, candidates=discovered)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.dedup.persisted",
+                message=f"Alias clustering persisted: 0 clusters, {len(discovered)} candidates",
+                cluster_count=0,
+                candidate_count=len(discovered),
+                alias_merged_count=0,
+            )
+            logger.info("Dedup persistence: 0 clusters, {} candidates", len(discovered))
             set_checkpoint(
                 conn,
                 release_id=release_id,
@@ -502,12 +598,35 @@ def discover_glossary_candidates(
                 stage_name="dedup_completed",
                 input_hash=dedup_input_hash,
             )
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.discover.checkpoint.completed",
+                message="Glossary discovery checkpoint set: dedup_completed",
+                checkpoint_stage="dedup_completed",
+                input_hash=dedup_input_hash,
+                skipped=False,
+            )
+            logger.info("Checkpoint set: dedup_completed")
 
         # --- Final snapshot write ---
-        _write_candidate_snapshot(
+        snapshot_count = _write_candidate_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.glossary_candidates_path,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.discover.snapshot.artifact_written",
+            message=f"Glossary candidate snapshot written: {paths.glossary_candidates_path}",
+            artifact_path=str(paths.glossary_candidates_path),
+            candidate_count=snapshot_count,
+        )
+        logger.info(
+            "Candidate snapshot written: {} candidates to {}",
+            snapshot_count,
+            paths.glossary_candidates_path,
         )
 
     finally:

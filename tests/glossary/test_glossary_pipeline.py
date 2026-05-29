@@ -20,7 +20,7 @@ from resemantica.db.glossary_repo import (
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.extractor import extract_epub
 from resemantica.glossary.evaluator import EvalResult
-from resemantica.glossary.models import GlossaryCandidate, LockedGlossaryEntry
+from resemantica.glossary.models import AliasCluster, GlossaryCandidate, LockedGlossaryEntry
 from resemantica.glossary.pipeline import (
     discover_glossary_candidates,
     promote_glossary_candidates,
@@ -59,6 +59,14 @@ def _eval_all_keep(*, candidates, **kwargs) -> list:
         )
         for c in candidates
     ]
+
+
+def _dedup_noop(
+    *,
+    candidates: list[GlossaryCandidate],
+    **kwargs: object,  # noqa: ARG001
+) -> tuple[list[GlossaryCandidate], list[AliasCluster]]:
+    return candidates, []
 
 
 def _write_fixture_epub(epub_path: Path, chapter_xhtml: str) -> None:
@@ -645,6 +653,7 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
             received.append(event)
 
     monkeypatch.setattr("resemantica.glossary.pipeline.evaluate_candidate_batch", _eval_all_keep)
+    monkeypatch.setattr("resemantica.glossary.pipeline.deduplicate_and_cluster", _dedup_noop)
     subscribe("*", callback)
     try:
         discover_glossary_candidates(
@@ -672,6 +681,11 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.discover.scoring.started" in event_types
     assert "preprocess-glossary.discover.scoring.progress" in event_types
     assert "preprocess-glossary.discover.scoring.completed" in event_types
+    assert "preprocess-glossary.discover.dedup.started" in event_types
+    assert "preprocess-glossary.discover.dedup.completed" in event_types
+    assert "preprocess-glossary.discover.dedup.persisted" in event_types
+    assert "preprocess-glossary.discover.checkpoint.completed" in event_types
+    assert "preprocess-glossary.discover.snapshot.artifact_written" in event_types
     assert "preprocess-glossary.discover.completed" in event_types
     assert "preprocess-glossary.translate.started" in event_types
     assert "preprocess-glossary.translate.chapter_started" in event_types
@@ -683,7 +697,22 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     scoring_started_index = event_types.index("preprocess-glossary.discover.scoring.started")
     scoring_completed_index = event_types.index("preprocess-glossary.discover.scoring.completed")
     filter_completed_index = event_types.index("preprocess-glossary.discover.filter_completed")
+    dedup_started_index = event_types.index("preprocess-glossary.discover.dedup.started")
+    dedup_completed_index = event_types.index("preprocess-glossary.discover.dedup.completed")
+    dedup_persisted_index = event_types.index("preprocess-glossary.discover.dedup.persisted")
+    checkpoint_completed_index = event_types.index("preprocess-glossary.discover.checkpoint.completed")
+    snapshot_written_index = event_types.index("preprocess-glossary.discover.snapshot.artifact_written")
+    discover_completed_index = event_types.index("preprocess-glossary.discover.completed")
     assert chapter_completed_index < scoring_started_index < scoring_completed_index < filter_completed_index
+    assert (
+        filter_completed_index
+        < dedup_started_index
+        < dedup_completed_index
+        < dedup_persisted_index
+        < checkpoint_completed_index
+        < snapshot_written_index
+        < discover_completed_index
+    )
     scoring_completed = received[scoring_completed_index]
     assert {
         "candidate_count",
@@ -697,6 +726,60 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
         for event in received
         if event.event_type.startswith("preprocess-glossary") and ".eval." not in event.event_type
     )
+
+
+def test_glossary_pipeline_emits_finalization_events_with_no_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m60-empty-finalization"
+    run_id = "glossary-empty-finalization"
+    _extract_one_chapter(
+        tmp_path,
+        release_id=release_id,
+        source_text="。",
+    )
+    llm = ScriptedGlossaryLLM({1: []})
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == run_id:
+            received.append(event)
+
+    monkeypatch.setattr(
+        "resemantica.glossary.discovery.generate_chapter_candidates",
+        lambda text, summary_data=None: [],  # noqa: ARG005
+    )
+    subscribe("*", callback)
+    try:
+        result = discover_glossary_candidates(
+            release_id=release_id,
+            run_id=run_id,
+            llm_client=llm,
+            skip_llm_eval=True,
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result["status"] == "success"
+    assert result["candidates_written"] == 0
+    event_types = [event.event_type for event in received]
+    assert "preprocess-glossary.discover.dedup.completed" in event_types
+    assert "preprocess-glossary.discover.dedup.persisted" in event_types
+    assert "preprocess-glossary.discover.checkpoint.completed" in event_types
+    assert "preprocess-glossary.discover.snapshot.artifact_written" in event_types
+    dedup_completed = next(
+        event for event in received if event.event_type == "preprocess-glossary.discover.dedup.completed"
+    )
+    assert dedup_completed.payload["skipped"] is True
+    assert dedup_completed.payload["reason"] == "no_candidates"
+    snapshot_written = next(
+        event for event in received if event.event_type == "preprocess-glossary.discover.snapshot.artifact_written"
+    )
+    assert snapshot_written.payload["candidate_count"] == 0
 
 
 def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch) -> None:
