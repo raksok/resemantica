@@ -55,9 +55,16 @@ Story summary generation emits per-summary-type started/completed events for `st
 | `preprocess-glossary.started` | Pipeline begins |
 | `preprocess-glossary.discover.chapter_started/completed` | Per chapter in discovery |
 | `preprocess-glossary.discover.term_found` | New term discovered |
-| `preprocess-glossary.translate.chapter_started/completed` | Per chapter in translation |
+| `preprocess-glossary.translate.model_started/completed` | Per translator model vote batch |
+| `preprocess-glossary.translate.resolution.started/completed` | Vote resolution and canonical save phase |
+| `preprocess-glossary.translate.chapter_started/completed` | Per chapter during translation resolution/save |
+| `preprocess-glossary.translate.unresolved` | Candidate translation votes did not resolve |
+| `preprocess-glossary.translate.failed` | Model voting or resolution failed |
+| `preprocess-glossary.translate.snapshot.artifact_written` | Translation candidate snapshot written |
 | `preprocess-glossary.promote.started/completed` | Promotion phase |
 | `preprocess-glossary.completed` | Pipeline ends |
+
+Glossary translation keeps model-first vote generation order. Chapter `started`/`completed` events are emitted when resolution and canonical saves begin and finish for a chapter, after all model vote batches complete.
 
 ### Idioms pipeline (`preprocess-idioms`)
 

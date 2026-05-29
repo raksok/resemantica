@@ -725,116 +725,223 @@ def translate_glossary_candidates(
             release_id,
             f"{_STAGE_NAME}.translate.started",
             total_chapters=len(chapters_with_pending),
+            pending_count=len(pending),
+            candidate_count=len(pending),
+            model_count=len(translator_names),
         )
         logger.info(
             "Translation started: {} candidates pending across {} chapters",
             len(pending), len(chapters_with_pending),
         )
-        active_chapter: int | None = None
-        chapter_usage_before = capture_usage_snapshot(client)
-        completed_chapters: list[int] = []
-        for candidate in pending:
-            chapter = candidate.first_seen_chapter
-            if active_chapter != chapter:
-                if active_chapter is not None:
-                    _emit(
-                        run_id,
-                        release_id,
-                        f"{_STAGE_NAME}.translate.chapter_completed",
-                        chapter_number=active_chapter,
-                        candidate_count=sum(
-                            1
-                            for row in pending
-                            if row.first_seen_chapter == active_chapter
-                        ),
-                        **usage_payload_delta(client, chapter_usage_before),
-                    )
-                    completed_chapters.append(active_chapter)
-                    raise_if_stop_requested(
-                        stop_token,
-                        checkpoint={"translate_completed_chapters": completed_chapters},
-                        message=f"Glossary translation stopped after chapter {active_chapter}",
-                    )
-                raise_if_stop_requested(
-                    stop_token,
-                    checkpoint={"translate_completed_chapters": completed_chapters},
-                    message="Glossary translation stopped before next chapter",
-                )
-                active_chapter = chapter
-                chapter_usage_before = capture_usage_snapshot(client)
+        current_model_name = ""
+        current_candidate_id = ""
+        try:
+            for model_name in translator_names:
+                current_model_name = model_name
                 _emit(
                     run_id,
                     release_id,
-                    f"{_STAGE_NAME}.translate.chapter_started",
-                    chapter_number=chapter,
-                )
-        for model_name in translator_names:
-            prompt_template = model_prompts.get(model_name, model_prompts.get(translator_names[0], ""))
-            prompt_version = model_prompt_versions.get(model_name, "unknown")
-            for candidate in pending:
-                translated = client.translate_glossary_candidate(
+                    f"{_STAGE_NAME}.translate.model_started",
                     model_name=model_name,
-                    prompt_template=prompt_template,
-                    source_term=candidate.source_term,
-                    category=candidate.category,
-                    evidence_snippet=candidate.evidence_snippet,
+                    pending_count=len(pending),
+                    candidate_count=len(pending),
+                    message=f"Glossary translation model {model_name} started: {len(pending)} candidates",
                 )
-                upsert_translation_vote(
-                    conn,
-                    candidate_id=candidate.candidate_id,
-                    release_id=release_id,
-                    translation_run_id=run_id,
+                prompt_template = model_prompts.get(model_name, model_prompts.get(translator_names[0], ""))
+                prompt_version = model_prompt_versions.get(model_name, "unknown")
+                for candidate in pending:
+                    current_candidate_id = candidate.candidate_id
+                    translated = client.translate_glossary_candidate(
+                        model_name=model_name,
+                        prompt_template=prompt_template,
+                        source_term=candidate.source_term,
+                        category=candidate.category,
+                        evidence_snippet=candidate.evidence_snippet,
+                    )
+                    upsert_translation_vote(
+                        conn,
+                        candidate_id=candidate.candidate_id,
+                        release_id=release_id,
+                        translation_run_id=run_id,
+                        model_name=model_name,
+                        prompt_version=prompt_version,
+                        raw_output=translated,
+                        cleaned_output=translated,
+                        normalized_output=normalize_term(translated),
+                    )
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.translate.model_completed",
                     model_name=model_name,
-                    prompt_version=prompt_version,
-                    raw_output=translated,
-                    cleaned_output=translated,
-                    normalized_output=normalize_term(translated),
+                    pending_count=len(pending),
+                    candidate_count=len(pending),
+                    message=f"Glossary translation model {model_name} completed: {len(pending)} candidates",
                 )
+                logger.info(
+                    "Translation model {} complete: {} votes generated",
+                    model_name,
+                    len(pending),
+                )
+        except Exception as exc:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.translate.failed",
+                severity="error",
+                model_name=current_model_name,
+                candidate_id=current_candidate_id,
+                phase="vote_generation",
+                error=str(exc),
+                message=(
+                    "Glossary translation failed"
+                    f" for model {current_model_name}, candidate {current_candidate_id}: {exc}"
+                ),
+            )
+            logger.opt(exception=True).error(
+                "Glossary translation failed for model {} candidate {}: {}",
+                current_model_name,
+                current_candidate_id,
+                exc,
+            )
+            raise
 
         translated_count = 0
         unresolved_count = 0
-        for candidate in pending:
-            votes = list_translation_votes(
-                conn,
-                release_id=release_id,
-                candidate_id=candidate.candidate_id,
-            )
-            votes = [vote for vote in votes if vote.translation_run_id == run_id]
-            resolution = _resolve_translation_votes(votes, translator_names)
-            set_translation_vote_resolution(
-                conn,
-                candidate_id=candidate.candidate_id,
-                translation_run_id=run_id,
-                resolution_status=resolution["status"],
-            )
-            if resolution["target_term"]:
-                save_candidate_translation(
+        active_chapter: int | None = None
+        chapter_usage_before = capture_usage_snapshot(client)
+        chapter_candidate_count = 0
+        chapter_translated_count = 0
+        chapter_unresolved_count = 0
+        completed_chapters: list[int] = []
+        resolution_model_name = ""
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.translate.resolution.started",
+            pending_count=len(pending),
+            candidate_count=len(pending),
+            model_count=len(translator_names),
+        )
+        try:
+            for candidate in pending:
+                current_candidate_id = candidate.candidate_id
+                chapter = candidate.first_seen_chapter
+                if active_chapter != chapter:
+                    if active_chapter is not None:
+                        _emit(
+                            run_id,
+                            release_id,
+                            f"{_STAGE_NAME}.translate.chapter_completed",
+                            chapter_number=active_chapter,
+                            candidate_count=chapter_candidate_count,
+                            translated_count=chapter_translated_count,
+                            unresolved_count=chapter_unresolved_count,
+                            **usage_payload_delta(client, chapter_usage_before),
+                        )
+                        completed_chapters.append(active_chapter)
+                        raise_if_stop_requested(
+                            stop_token,
+                            checkpoint={"translate_completed_chapters": completed_chapters},
+                            message=f"Glossary translation stopped after chapter {active_chapter}",
+                        )
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint={"translate_completed_chapters": completed_chapters},
+                        message="Glossary translation stopped before next chapter",
+                    )
+                    active_chapter = chapter
+                    chapter_usage_before = capture_usage_snapshot(client)
+                    chapter_candidate_count = 0
+                    chapter_translated_count = 0
+                    chapter_unresolved_count = 0
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.translate.chapter_started",
+                        chapter_number=chapter,
+                    )
+                chapter_candidate_count += 1
+                votes = list_translation_votes(
+                    conn,
+                    release_id=release_id,
+                    candidate_id=candidate.candidate_id,
+                )
+                votes = [vote for vote in votes if vote.translation_run_id == run_id]
+                resolution = _resolve_translation_votes(votes, translator_names)
+                resolution_model_name = resolution.get("model_name", "")
+                set_translation_vote_resolution(
                     conn,
                     candidate_id=candidate.candidate_id,
                     translation_run_id=run_id,
-                    target_term=resolution["target_term"],
-                    normalized_target_term=resolution["normalized_target_term"],
-                    translator_model_name=resolution["model_name"],
-                    translator_prompt_version=model_prompt_versions.get(resolution.get("model_name", ""), "unknown"),
+                    resolution_status=resolution["status"],
                 )
-                translated_count += 1
-            else:
-                unresolved_count += 1
-                logger.warning(
-                    "Translation unresolved for candidate {} (no majority vote)",
-                    candidate.candidate_id,
-                )
+                if resolution["target_term"]:
+                    save_candidate_translation(
+                        conn,
+                        candidate_id=candidate.candidate_id,
+                        translation_run_id=run_id,
+                        target_term=resolution["target_term"],
+                        normalized_target_term=resolution["normalized_target_term"],
+                        translator_model_name=resolution["model_name"],
+                        translator_prompt_version=model_prompt_versions.get(
+                            resolution.get("model_name", ""),
+                            "unknown",
+                        ),
+                    )
+                    translated_count += 1
+                    chapter_translated_count += 1
+                else:
+                    unresolved_count += 1
+                    chapter_unresolved_count += 1
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.translate.unresolved",
+                        severity="warning",
+                        candidate_id=candidate.candidate_id,
+                        source_term=candidate.source_term,
+                        chapter_number=candidate.first_seen_chapter,
+                        unresolved_count=unresolved_count,
+                        message=(
+                            "Glossary translation unresolved for candidate "
+                            f"{candidate.candidate_id}: no majority vote"
+                        ),
+                    )
+                    logger.warning(
+                        "Translation unresolved for candidate {} (no majority vote)",
+                        candidate.candidate_id,
+                    )
+        except Exception as exc:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.translate.failed",
+                severity="error",
+                model_name=resolution_model_name,
+                candidate_id=current_candidate_id,
+                phase="resolution",
+                error=str(exc),
+                message=(
+                    "Glossary translation failed"
+                    f" while resolving candidate {current_candidate_id}: {exc}"
+                ),
+            )
+            logger.opt(exception=True).error(
+                "Glossary translation failed while resolving candidate {}: {}",
+                current_candidate_id,
+                exc,
+            )
+            raise
         if active_chapter is not None:
             _emit(
                 run_id,
                 release_id,
                 f"{_STAGE_NAME}.translate.chapter_completed",
                 chapter_number=active_chapter,
-                candidate_count=sum(
-                    1
-                    for row in pending
-                    if row.first_seen_chapter == active_chapter
-                ),
+                candidate_count=chapter_candidate_count,
+                translated_count=chapter_translated_count,
+                unresolved_count=chapter_unresolved_count,
                 **usage_payload_delta(client, chapter_usage_before),
             )
             completed_chapters.append(active_chapter)
@@ -843,11 +950,37 @@ def translate_glossary_candidates(
                 checkpoint={"translate_completed_chapters": completed_chapters},
                 message=f"Glossary translation stopped after chapter {active_chapter}",
             )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.translate.resolution.completed",
+            pending_count=len(pending),
+            candidate_count=len(pending),
+            translated_count=translated_count,
+            unresolved_count=unresolved_count,
+        )
+        logger.info(
+            "Translation resolution complete: {} translated, {} unresolved",
+            translated_count,
+            unresolved_count,
+        )
 
-        _write_candidate_snapshot(
+        snapshot_count = _write_candidate_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.glossary_candidates_path,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.translate.snapshot.artifact_written",
+            artifact_path=str(paths.glossary_candidates_path),
+            candidate_count=snapshot_count,
+        )
+        logger.info(
+            "Translation candidate snapshot written: {} candidates -> {}",
+            snapshot_count,
+            paths.glossary_candidates_path,
         )
     finally:
         conn.close()

@@ -166,6 +166,19 @@ class ModelMappedGlossaryTranslator:
         return self.outputs[(model_name, source_term)]
 
 
+class RaisingGlossaryTranslator:
+    def translate_glossary_candidate(
+        self,
+        *,
+        model_name: str,  # noqa: ARG002
+        prompt_template: str,  # noqa: ARG002
+        source_term: str,  # noqa: ARG002
+        category: str,  # noqa: ARG002
+        evidence_snippet: str,  # noqa: ARG002
+    ) -> str:
+        raise RuntimeError("translator exploded")
+
+
 def _insert_glossary_candidate(
     *,
     release_id: str,
@@ -269,13 +282,24 @@ def test_multi_model_glossary_translation_majority_and_review_alternatives(
     )
     config = AppConfig()
     config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    from resemantica.orchestration.events import subscribe, unsubscribe
 
-    result = translate_glossary_candidates(
-        release_id=release_id,
-        run_id="translate-001",
-        config=config,
-        llm_client=translator,
-    )
+    received = []
+
+    def callback(event):
+        if event.run_id == "translate-001":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        result = translate_glossary_candidates(
+            release_id=release_id,
+            run_id="translate-001",
+            config=config,
+            llm_client=translator,
+        )
+    finally:
+        unsubscribe("*", callback)
 
     assert result["translated_count"] == 1
     assert result["unresolved_count"] == 1
@@ -331,6 +355,50 @@ def test_multi_model_glossary_translation_majority_and_review_alternatives(
         "Azure Cloud Sect",
         "Blue Cloud Gate",
     ]
+    unresolved_events = [
+        event for event in received if event.event_type == "preprocess-glossary.translate.unresolved"
+    ]
+    assert len(unresolved_events) == 1
+    assert unresolved_events[0].severity == "warning"
+    assert unresolved_events[0].payload["candidate_id"] == ids_by_source["苍云门"]
+    assert unresolved_events[0].payload["source_term"] == "苍云门"
+
+
+def test_glossary_translation_failure_emits_model_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-failed"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a"]
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "translate-failed":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        with pytest.raises(RuntimeError, match="translator exploded"):
+            translate_glossary_candidates(
+                release_id=release_id,
+                run_id="translate-failed",
+                config=config,
+                llm_client=RaisingGlossaryTranslator(),
+            )
+    finally:
+        unsubscribe("*", callback)
+
+    failed = next(event for event in received if event.event_type == "preprocess-glossary.translate.failed")
+    assert failed.severity == "error"
+    assert failed.payload["model_name"] == "model-a"
+    assert failed.payload["candidate_id"] == "gcan_青云门"
+    assert failed.payload["phase"] == "vote_generation"
+    assert failed.payload["error"] == "translator exploded"
 
 
 def test_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:
@@ -688,7 +756,13 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.discover.snapshot.artifact_written" in event_types
     assert "preprocess-glossary.discover.completed" in event_types
     assert "preprocess-glossary.translate.started" in event_types
+    assert "preprocess-glossary.translate.model_started" in event_types
+    assert "preprocess-glossary.translate.model_completed" in event_types
+    assert "preprocess-glossary.translate.resolution.started" in event_types
     assert "preprocess-glossary.translate.chapter_started" in event_types
+    assert "preprocess-glossary.translate.chapter_completed" in event_types
+    assert "preprocess-glossary.translate.resolution.completed" in event_types
+    assert "preprocess-glossary.translate.snapshot.artifact_written" in event_types
     assert "preprocess-glossary.translate.completed" in event_types
     assert "preprocess-glossary.promote.started" in event_types
     assert "preprocess-glossary.promote.completed" in event_types
@@ -703,6 +777,15 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     checkpoint_completed_index = event_types.index("preprocess-glossary.discover.checkpoint.completed")
     snapshot_written_index = event_types.index("preprocess-glossary.discover.snapshot.artifact_written")
     discover_completed_index = event_types.index("preprocess-glossary.discover.completed")
+    translate_started_index = event_types.index("preprocess-glossary.translate.started")
+    model_started_index = event_types.index("preprocess-glossary.translate.model_started")
+    model_completed_index = event_types.index("preprocess-glossary.translate.model_completed")
+    resolution_started_index = event_types.index("preprocess-glossary.translate.resolution.started")
+    translate_chapter_started_index = event_types.index("preprocess-glossary.translate.chapter_started")
+    translate_chapter_completed_index = event_types.index("preprocess-glossary.translate.chapter_completed")
+    resolution_completed_index = event_types.index("preprocess-glossary.translate.resolution.completed")
+    translate_snapshot_written_index = event_types.index("preprocess-glossary.translate.snapshot.artifact_written")
+    translate_completed_index = event_types.index("preprocess-glossary.translate.completed")
     assert chapter_completed_index < scoring_started_index < scoring_completed_index < filter_completed_index
     assert (
         filter_completed_index
@@ -712,6 +795,18 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
         < checkpoint_completed_index
         < snapshot_written_index
         < discover_completed_index
+    )
+    assert (
+        discover_completed_index
+        < translate_started_index
+        < model_started_index
+        < model_completed_index
+        < resolution_started_index
+        < translate_chapter_started_index
+        < translate_chapter_completed_index
+        < resolution_completed_index
+        < translate_snapshot_written_index
+        < translate_completed_index
     )
     scoring_completed = received[scoring_completed_index]
     assert {

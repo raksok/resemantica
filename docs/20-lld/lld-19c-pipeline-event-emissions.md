@@ -66,11 +66,17 @@ The `summary_generation_completed` payload must include enough identity to audit
 | `preprocess-glossary.started` | Pipeline begins | `total_chapters: int` |
 | `preprocess-glossary.discover.chapter_started/completed` | Per chapter in discovery | `chapter_number` |
 | `preprocess-glossary.discover.term_found` | New term discovered | `term: str`, `chapter_number` |
-| `preprocess-glossary.translate.chapter_started/completed` | Per chapter in translation | `chapter_number` |
+| `preprocess-glossary.translate.model_started/completed` | Per translator model vote batch | `model_name`, `pending_count`, `candidate_count` |
+| `preprocess-glossary.translate.resolution.started/completed` | Vote resolution and canonical save phase | `pending_count`, `candidate_count`, translated/unresolved counts on completed |
+| `preprocess-glossary.translate.chapter_started/completed` | Per chapter during vote resolution and canonical save | `chapter_number`, counts on completed |
+| `preprocess-glossary.translate.unresolved` | Candidate vote did not resolve | severity `warning`, `candidate_id`, `source_term`, `unresolved_count` |
+| `preprocess-glossary.translate.failed` | Model voting or resolution failed | severity `error`, `model_name`, `candidate_id`, `phase`, `error` |
+| `preprocess-glossary.translate.snapshot.artifact_written` | Translation candidate snapshot written | `artifact_path`, `candidate_count` |
 | `preprocess-glossary.promote.started/completed` | Promotion phase | `promoted_count: int` (on completed) |
 | `preprocess-glossary.completed` | Pipeline ends | `discovered: int`, `translated: int`, `promoted: int` |
 
 The glossary pipeline has 3 distinct phases. Each phase emits its own `chapter_started`/`chapter_completed` events under the phase namespace so the subscriber can distinguish them.
+For glossary translation, chapter events belong to the resolution/save phase. Model vote generation is model-first and emits per-model start/completion events before resolution begins.
 
 #### Idioms pipeline — stage name: `preprocess-idioms`
 
@@ -112,7 +118,7 @@ Emission points in `packets/builder.py`:
 - The existing `EventBus.publish` already catches subscriber exceptions and logs warnings.
 - No new EventBus subscriptions are added in this task — only emissions.
 - Any run-context pipeline warning or error must be paired with `emit_event()`, a local `_emit()` wrapper, or a helper callback that emits in the caller. Loguru-only warning/error diagnostics are allowed only for helpers without run context or explicitly allowlisted low-level diagnostics.
-- Repair/fallback/failure events are first-class operational signals. Current additions are `preprocess-summaries.story_compact_repaired`, `preprocess-summaries.story_compact_repair_failed`, `preprocess-graph.validation_failed`, `preprocess-continuity.chapter_failed`, `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, `translate-chapter.pass3.failed`, and `translate-chapter.bundle_context_missing`.
+- Repair/fallback/failure events are first-class operational signals. Current additions are `preprocess-summaries.story_compact_repaired`, `preprocess-summaries.story_compact_repair_failed`, `preprocess-glossary.translate.unresolved`, `preprocess-glossary.translate.failed`, `preprocess-graph.validation_failed`, `preprocess-continuity.chapter_failed`, `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, `translate-chapter.pass3.failed`, and `translate-chapter.bundle_context_missing`.
 
 ## Data Flow
 1. Pipeline function receives `run_id`, `release_id` from caller.

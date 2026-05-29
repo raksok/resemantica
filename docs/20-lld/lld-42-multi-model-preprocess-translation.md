@@ -80,6 +80,15 @@ Glossary translation:
 5. Write the canonical translation only for resolved candidates.
 6. Leave unresolved candidates for review.
 
+Glossary translation events are scoped to the real work boundaries:
+- `preprocess-glossary.translate.started` after pending candidates are loaded.
+- `preprocess-glossary.translate.model_started` and `.model_completed` around each model's full pending-candidate vote batch, with `model_name`, `pending_count`, and `candidate_count`.
+- `preprocess-glossary.translate.resolution.started` before vote resolution begins.
+- `preprocess-glossary.translate.chapter_started` and `.chapter_completed` during resolution/save, not during vote generation.
+- `preprocess-glossary.translate.unresolved` with severity `warning` for each candidate without a resolvable vote.
+- `preprocess-glossary.translate.failed` with severity `error`, `model_name`, `candidate_id`, `phase`, and `error` for model voting or resolution failures.
+- `preprocess-glossary.translate.resolution.completed`, `.snapshot.artifact_written`, and `.completed` after resolution, `candidates.json` write, and phase completion respectively.
+
 Idiom translation:
 1. Load pending idiom candidates after detection.
 2. For each model, translate every candidate's rendering and meaning.
