@@ -147,6 +147,14 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             UNIQUE (candidate_id, translation_run_id, model_name)
         );
 
+        CREATE INDEX IF NOT EXISTS idx_glossary_translation_votes_resume
+            ON glossary_translation_votes (
+                release_id,
+                translation_run_id,
+                model_name,
+                candidate_id
+            );
+
         CREATE TABLE IF NOT EXISTS locked_glossary (
             glossary_entry_id TEXT PRIMARY KEY,
             release_id TEXT NOT NULL,

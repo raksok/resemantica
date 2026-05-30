@@ -88,8 +88,15 @@ Resume is the default. Discovery reuses completed per-chapter raw candidate stat
 Translate candidates to provisional English.
 
 ```bash
-uv run rsem preprocess glossary-translate -r <release> [options]
+uv run rsem preprocess glossary-translate -r <release> [-R <run>] [options]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `-R, --run ID` | Vote/checkpoint scope (default: `glossary-translate`) |
+| `-f, --force` | Regenerate votes instead of skipping existing per-model votes |
+
+Resume is the default. Glossary translation skips existing votes for the same release, run, and configured model, so rerunning after a local model-server crash continues from the first missing vote. Use the same `-r`, same `-R`, and same config without `--force` to resume. Change the configured model list only when intentionally abandoning a crashing model.
 
 ### `glossary-review` (alias: `gls-review`)
 

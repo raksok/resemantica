@@ -11,11 +11,14 @@ import pytest
 
 from resemantica.db.glossary_repo import (
     ensure_glossary_schema,
+    list_candidates_for_translation_from_votes,
     list_conflicts,
     list_locked_entries,
+    list_translation_vote_candidate_ids,
     list_translation_votes,
     promote_locked_entries,
     upsert_discovered_candidates,
+    upsert_translation_vote,
 )
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.extractor import extract_epub
@@ -217,6 +220,55 @@ def _insert_glossary_candidate(
         )
     finally:
         conn.close()
+
+
+def _insert_translation_vote(
+    *,
+    release_id: str,
+    run_id: str,
+    source_term: str,
+    model_name: str,
+    target_term: str,
+) -> None:
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        upsert_translation_vote(
+            conn,
+            candidate_id=f"gcan_{normalize_term(source_term)}",
+            release_id=release_id,
+            translation_run_id=run_id,
+            model_name=model_name,
+            prompt_version="test",
+            raw_output=target_term,
+            cleaned_output=target_term,
+            normalized_output=normalize_term(target_term),
+        )
+    finally:
+        conn.close()
+
+
+def _emit_translate_started_event(
+    *,
+    release_id: str,
+    run_id: str,
+    pending_count: int,
+) -> None:
+    from resemantica.orchestration.events import emit_event
+
+    emit_event(
+        run_id=run_id,
+        release_id=release_id,
+        event_type="preprocess-glossary.translate.started",
+        stage_name="preprocess-glossary",
+        payload={
+            "total_chapters": 1,
+            "pending_count": pending_count,
+            "candidate_count": pending_count,
+            "model_count": 2,
+        },
+    )
 
 
 def _discovery_candidate(
@@ -429,6 +481,326 @@ def test_glossary_translation_failure_emits_model_context(
     assert failed.payload["candidate_id"] == "gcan_青云门"
     assert failed.payload["phase"] == "vote_generation"
     assert failed.payload["error"] == "translator exploded"
+
+
+def test_glossary_translation_skips_existing_model_votes_on_rerun(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-resume-skip"
+    run_id = "translate-001"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="hy",
+        target_term="Azure Sect",
+    )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="苍云门",
+        model_name="hy",
+        target_term="Cangyun Gate",
+    )
+    translator = ModelMappedGlossaryTranslator({
+        ("gemma", "青云门"): "Azure Sect",
+        ("gemma", "苍云门"): "Cangyun Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == run_id:
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        result = translate_glossary_candidates(
+            release_id=release_id,
+            run_id=run_id,
+            config=config,
+            llm_client=translator,
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result["translated_count"] == 2
+    assert translator.calls == [("gemma", "苍云门"), ("gemma", "青云门")]
+    model_completed = [
+        event for event in received
+        if event.event_type == "preprocess-glossary.translate.model_completed"
+    ]
+    assert [
+        (event.payload["model_name"], event.payload["candidate_count"], event.payload["skipped_count"])
+        for event in model_completed
+    ] == [("hy", 0, 2), ("gemma", 2, 0)]
+
+
+def test_glossary_translation_resumes_partial_model_votes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-resume-partial"
+    run_id = "translate-001"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    for source_term, target_term in [("青云门", "Azure Sect"), ("苍云门", "Cangyun Gate")]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term=source_term,
+            model_name="hy",
+            target_term=target_term,
+        )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="gemma",
+        target_term="Azure Sect",
+    )
+    translator = ModelMappedGlossaryTranslator({
+        ("gemma", "苍云门"): "Cangyun Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+
+    result = translate_glossary_candidates(
+        release_id=release_id,
+        run_id=run_id,
+        config=config,
+        llm_client=translator,
+    )
+
+    assert result["translated_count"] == 2
+    assert translator.calls == [("gemma", "苍云门")]
+
+
+def test_glossary_translation_uses_vote_resume_candidate_loading(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-vote-resume-load"
+    run_id = "translate-001"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    _emit_translate_started_event(release_id=release_id, run_id=run_id, pending_count=2)
+    for source_term, target_term in [("青云门", "Azure Sect"), ("苍云门", "Cangyun Gate")]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term=source_term,
+            model_name="hy",
+            target_term=target_term,
+        )
+
+    def fail_canonical_scan(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        raise AssertionError("canonical pending scan should not run")
+
+    monkeypatch.setattr(
+        "resemantica.glossary.pipeline.list_candidates_for_translation",
+        fail_canonical_scan,
+    )
+    translator = ModelMappedGlossaryTranslator({
+        ("gemma", "青云门"): "Azure Sect",
+        ("gemma", "苍云门"): "Cangyun Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == run_id:
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        result = translate_glossary_candidates(
+            release_id=release_id,
+            run_id=run_id,
+            config=config,
+            llm_client=translator,
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result["translated_count"] == 2
+    assert translator.calls == [("gemma", "苍云门"), ("gemma", "青云门")]
+    loading_completed = [
+        event for event in received
+        if event.event_type == "preprocess-glossary.translate.loading_completed"
+    ][-1]
+    assert loading_completed.payload["load_strategy"] == "vote_resume"
+    assert loading_completed.payload["resume_vote_model"] == "hy"
+
+
+def test_glossary_translation_falls_back_when_votes_are_incomplete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-vote-resume-incomplete"
+    run_id = "translate-001"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    _emit_translate_started_event(release_id=release_id, run_id=run_id, pending_count=2)
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="hy",
+        target_term="Azure Sect",
+    )
+
+    import resemantica.glossary.pipeline as pipeline_mod
+
+    original_scan = pipeline_mod.list_candidates_for_translation
+    scan_called = False
+
+    def wrapped_scan(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal scan_called
+        scan_called = True
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "list_candidates_for_translation", wrapped_scan)
+    translator = ModelMappedGlossaryTranslator({
+        ("hy", "苍云门"): "Cangyun Gate",
+        ("gemma", "青云门"): "Azure Sect",
+        ("gemma", "苍云门"): "Cangyun Gate",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+
+    result = translate_glossary_candidates(
+        release_id=release_id,
+        run_id=run_id,
+        config=config,
+        llm_client=translator,
+    )
+
+    assert result["translated_count"] == 2
+    assert scan_called is True
+    assert translator.calls == [
+        ("hy", "苍云门"),
+        ("gemma", "苍云门"),
+        ("gemma", "青云门"),
+    ]
+
+
+def test_glossary_translation_force_regenerates_existing_votes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-resume-force"
+    run_id = "translate-001"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="hy",
+        target_term="Old Sect",
+    )
+    translator = ModelMappedGlossaryTranslator({
+        ("hy", "青云门"): "Azure Sect",
+    })
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy"]
+
+    result = translate_glossary_candidates(
+        release_id=release_id,
+        run_id=run_id,
+        config=config,
+        llm_client=translator,
+        force=True,
+    )
+
+    assert result["translated_count"] == 1
+    assert translator.calls == [("hy", "青云门")]
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+    assert len(votes) == 1
+    assert votes[0].cleaned_output == "Azure Sect"
+
+
+def test_glossary_translation_vote_candidate_id_lookup_is_scoped(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-vote-lookup"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id="run-a",
+        source_term="青云门",
+        model_name="hy",
+        target_term="Azure Sect",
+    )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id="run-a",
+        source_term="苍云门",
+        model_name="gemma",
+        target_term="Cangyun Gate",
+    )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id="run-b",
+        source_term="苍云门",
+        model_name="hy",
+        target_term="Cangyun Gate",
+    )
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        assert list_translation_vote_candidate_ids(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+            model_name="hy",
+        ) == {"gcan_青云门"}
+        indexes = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA index_list(glossary_translation_votes)").fetchall()
+        }
+        conn.execute(
+            """
+            UPDATE glossary_candidates
+            SET candidate_translation_en = ?
+            WHERE release_id = ?
+              AND source_term = ?
+            """,
+            ("Azure Sect", release_id, "青云门"),
+        )
+        candidates = list_candidates_for_translation_from_votes(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+        )
+    finally:
+        conn.close()
+    assert "idx_glossary_translation_votes_resume" in indexes
+    assert [candidate.source_term for candidate in candidates] == ["苍云门"]
 
 
 def test_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:
@@ -793,6 +1165,8 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     assert "preprocess-glossary.discover.eval.persisted" in event_types
     assert "preprocess-glossary.discover.snapshot.artifact_written" in event_types
     assert "preprocess-glossary.discover.completed" in event_types
+    assert "preprocess-glossary.translate.loading_started" in event_types
+    assert "preprocess-glossary.translate.loading_completed" in event_types
     assert "preprocess-glossary.translate.started" in event_types
     assert "preprocess-glossary.translate.model_started" in event_types
     assert "preprocess-glossary.translate.model_completed" in event_types
@@ -843,6 +1217,8 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     )
     snapshot_written_index = event_types.index("preprocess-glossary.discover.snapshot.artifact_written")
     discover_completed_index = event_types.index("preprocess-glossary.discover.completed")
+    translate_loading_started_index = event_types.index("preprocess-glossary.translate.loading_started")
+    translate_loading_completed_index = event_types.index("preprocess-glossary.translate.loading_completed")
     translate_started_index = event_types.index("preprocess-glossary.translate.started")
     model_started_index = event_types.index("preprocess-glossary.translate.model_started")
     model_completed_index = event_types.index("preprocess-glossary.translate.model_completed")
@@ -876,6 +1252,8 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
     )
     assert (
         discover_completed_index
+        < translate_loading_started_index
+        < translate_loading_completed_index
         < translate_started_index
         < model_started_index
         < model_completed_index
@@ -887,6 +1265,8 @@ def test_glossary_pipeline_emits_phase_events(tmp_path: Path, monkeypatch) -> No
         < translate_completed_index
     )
     scoring_completed = received[scoring_completed_index]
+    loading_completed = received[translate_loading_completed_index]
+    assert loading_completed.payload["load_strategy"] == "canonical_pending_scan"
     assert {
         "candidate_count",
         "duration_ms",

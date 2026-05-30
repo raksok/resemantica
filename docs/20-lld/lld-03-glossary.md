@@ -15,7 +15,7 @@ Post-MVP additions: deterministic candidate filtering, `BAAI/bge-m3` embedding-b
 CLI:
 
 - `uv run python -m resemantica.cli preprocess glossary-discover --release <release_id> [--pruning-threshold <float>]`
-- `uv run python -m resemantica.cli preprocess glossary-translate --release <release_id>`
+- `uv run python -m resemantica.cli preprocess glossary-translate --release <release_id> [--run <run_id>]`
 - `uv run python -m resemantica.cli preprocess glossary-promote --release <release_id> [--review-file <path>]`
 - `uv run python -m resemantica.cli preprocess glossary-review --release <release_id>`
 
@@ -29,6 +29,7 @@ Python modules:
 SQLite datasets:
 
 - `glossary_candidates` (includes `critic_score REAL` column)
+- `glossary_translation_votes`
 - `locked_glossary`
 - `glossary_conflicts`
 
@@ -193,6 +194,8 @@ Without `--review-file`, behavior is identical to the original MVP flow.
 - discovery uses the durable phase checkpoint `filtered`, `eval_completed`, and `dedup_completed`
 - interrupted LLM evaluation resumes by evaluating candidates that still lack LLM fields
 - translate/promote reruns are state-driven: untranslated or unpromoted candidates are processed by default
+- glossary translation reruns skip existing per-model votes for `(release_id, run_id, model_name)` unless `--force` is used
+- interrupted glossary translation can resume from saved votes; when one configured model has a complete vote set matching prior run telemetry, candidate loading may use saved votes instead of the canonical pending scan
 - `--force` reruns discovery, translation, or promotion for the requested scope instead of honoring phase checkpoints or already translated/promoted state
 - `run retry-failed --stage preprocess-glossary` retries incomplete translation or promotion state without forcing promoted candidates. Candidates in `conflict` state and rows in `glossary_conflicts` are reported as review-required, not retried.
 - promotion never mutates historical candidate evidence

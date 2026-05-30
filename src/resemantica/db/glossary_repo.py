@@ -281,6 +281,39 @@ def list_candidates_for_translation(
     return [_candidate_from_row(row) for row in rows]
 
 
+def list_candidates_for_translation_from_votes(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> list[GlossaryCandidate]:
+    rows = conn.execute(
+        """
+        SELECT candidate_id, release_id, source_term, normalized_source_term, category,
+               source_language, first_seen_chapter, last_seen_chapter, appearance_count,
+               evidence_snippet, candidate_translation_en, normalized_target_term,
+               discovery_run_id, translation_run_id, candidate_status, validation_status,
+               conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
+               translator_model_name, translator_prompt_version, schema_version,
+               pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+               corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
+        FROM glossary_candidates
+        WHERE release_id = ?
+          AND (candidate_translation_en IS NULL OR candidate_translation_en = '')
+          AND llm_keep = 1
+          AND candidate_id IN (
+              SELECT DISTINCT candidate_id
+              FROM glossary_translation_votes
+              WHERE release_id = ?
+                AND translation_run_id = ?
+          )
+        ORDER BY first_seen_chapter, normalized_source_term, category
+        """,
+        (release_id, release_id, translation_run_id),
+    ).fetchall()
+    return [_candidate_from_row(row) for row in rows]
+
+
 def list_candidates_for_promotion(
     conn: sqlite3.Connection,
     *,
@@ -429,6 +462,45 @@ def list_translation_votes(
         params,
     ).fetchall()
     return [_vote_from_row(row) for row in rows]
+
+
+def list_translation_vote_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    model_name: str,
+) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT candidate_id
+        FROM glossary_translation_votes
+        WHERE release_id = ?
+          AND translation_run_id = ?
+          AND model_name = ?
+        """,
+        (release_id, translation_run_id, model_name),
+    ).fetchall()
+    return {str(row["candidate_id"]) for row in rows}
+
+
+def count_translation_votes_by_model(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT model_name, COUNT(*) AS vote_count
+        FROM glossary_translation_votes
+        WHERE release_id = ?
+          AND translation_run_id = ?
+        GROUP BY model_name
+        """,
+        (release_id, translation_run_id),
+    ).fetchall()
+    return {str(row["model_name"]): int(row["vote_count"]) for row in rows}
 
 
 def save_candidate_translation(

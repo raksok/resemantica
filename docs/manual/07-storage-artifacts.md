@@ -63,7 +63,7 @@ All SQLite connections use WAL mode. The `ensure_full_schema()` function creates
 |-------|-------------|-------------|
 | `glossary_candidates` | `candidate_id` | `release_id`, `source_term`, `candidate_translation_en`, `candidate_status`, `llm_keep`; UNIQUE `(release_id, normalized_source_term, category)` |
 | `glossary_alias_clusters` | `cluster_id` | `release_id`, `canonical_candidate_id`, `aliases_json`, `similarity_score` |
-| `glossary_translation_votes` | `vote_id` | `candidate_id`, `model_name`, `cleaned_output`, `resolution_status`; UNIQUE `(candidate_id, translation_run_id, model_name)` |
+| `glossary_translation_votes` | `vote_id` | `release_id`, `translation_run_id`, `candidate_id`, `model_name`, `cleaned_output`, `resolution_status`; UNIQUE `(candidate_id, translation_run_id, model_name)`, indexed for resume on `(release_id, translation_run_id, model_name, candidate_id)` |
 | `locked_glossary` | `glossary_entry_id` | `release_id`, `source_term`, `target_term`, `category`; UNIQUE `(release_id, normalized_source_term, category)` and `(release_id, normalized_target_term, category)` |
 | `glossary_conflicts` | `conflict_id` | `release_id`, `candidate_id`, `conflict_type`, `conflict_reason` |
 | `glossary_checkpoints` | `(release_id, run_id)` | `stage_name` |

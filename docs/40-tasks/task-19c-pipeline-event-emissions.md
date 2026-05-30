@@ -64,7 +64,8 @@ Story summary generation emits per-summary-type started/completed events for `st
 | `preprocess-glossary.discover.checkpoint.completed` | Filter/eval/dedup checkpoint saved or reused |
 | `preprocess-glossary.discover.snapshot.artifact_written` | Discovery candidate snapshot written |
 | `preprocess-glossary.discover.failed` | Fatal discovery subphase failure |
-| `preprocess-glossary.translate.model_started/completed` | Per translator model vote batch |
+| `preprocess-glossary.translate.loading_started/completed` | Translation DB prepare and pending-candidate load |
+| `preprocess-glossary.translate.model_started/completed` | Per translator model missing-vote batch |
 | `preprocess-glossary.translate.resolution.started/completed` | Vote resolution and canonical save phase |
 | `preprocess-glossary.translate.chapter_started/completed` | Per chapter during translation resolution/save |
 | `preprocess-glossary.translate.unresolved` | Candidate translation votes did not resolve |
@@ -73,7 +74,9 @@ Story summary generation emits per-summary-type started/completed events for `st
 | `preprocess-glossary.promote.started/completed` | Promotion phase |
 | `preprocess-glossary.completed` | Pipeline ends |
 
-Glossary discovery keeps legacy `filter_completed`, `dedup_started`, `dedup_completed`, and `preprocess-glossary.eval.eval_batch_*` events for compatibility while adding scoped discover events for current operators. Glossary translation keeps model-first vote generation order. Chapter `started`/`completed` events are emitted when resolution and canonical saves begin and finish for a chapter, after all model vote batches complete.
+Glossary discovery keeps legacy `filter_completed`, `dedup_started`, `dedup_completed`, and `preprocess-glossary.eval.eval_batch_*` events for compatibility while adding scoped discover events for current operators. Glossary translation keeps model-first vote generation order and skips existing votes for the same release, run, and model unless forced. Interrupted reruns may use `vote_resume` loading when prior run telemetry and complete model votes prove the pending set. Chapter `started`/`completed` events are emitted when resolution and canonical saves begin and finish for a chapter, after all model vote batches complete.
+
+Operator note: `preprocess-glossary.translate.failed` during a model batch may be caused by an external local model server crash, such as a llama.cpp Gemma process exit. The event marks the run as failed, but votes already written before the crash remain durable. Rerunning with the same `-r`, same `-R`, the same config, and no `--force` skips completed votes and resumes from the first missing vote for the interrupted model. Change the configured model list only when intentionally abandoning the crashing model's missing votes.
 
 ### Idioms pipeline (`preprocess-idioms`)
 

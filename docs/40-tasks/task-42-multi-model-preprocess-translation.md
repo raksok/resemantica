@@ -42,6 +42,10 @@ Reduce glossary and idiom pollution risk by translating preprocess candidates wi
 - Glossary exact consensus resolves to `translated`.
 - Glossary majority consensus resolves to `translated`.
 - Glossary disagreement remains unpromotable and appears in review alternatives.
+- Glossary rerun skips existing per-model votes for the same release, run, and model.
+- Glossary rerun resumes a partially completed model by translating only missing votes.
+- Glossary translation can use `vote_resume` loading when prior telemetry and complete saved votes prove the pending set.
+- `--force` regenerates existing glossary votes instead of skipping them.
 - Idiom rendering and meaning votes are stored per model.
 - Idiom disagreement blocks promotion until review override.
 - Model calls are batched by model first, then candidate.

@@ -64,6 +64,9 @@ COMMANDS
 
         glossary-translate (gls-translate)
             Translate candidates via translator LLM.
+            Resume skips existing per-model votes for the same release,
+            run, and config. Re-run without --force after a local
+            model-server crash to continue from missing votes.
 
         glossary-review (gls-review)
             Generate review.json + review.csv for human editing. See

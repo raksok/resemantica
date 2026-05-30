@@ -33,9 +33,15 @@ Implemented package layout (M2 slice):
 Implemented package layout (M3 slice):
 
 - `src/resemantica/glossary/`: candidate discovery, filter/eval/scoring/dedup/finalization events, translation vote/finalization events, review CSV/JSON export/import, promotion validators, and glossary pipeline orchestration
-- `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, translation votes, locked glossary, and conflicts
+- `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, translation votes, vote-resume lookup helpers, locked glossary, and conflicts
 - `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`: M3 glossary prompt files
 - `tests/glossary/`: glossary discovery, conflict, transaction, and precedence tests
+
+### Glossary translate resume
+
+Glossary translation votes are durable per model. Reruns with the same `-r`, same `-R`, and same model configuration skip existing votes for `(release_id, run_id, model_name)` and continue from missing votes unless `--force` is used. If a local model server crashes during one model batch, completed votes from earlier batches remain saved.
+
+For operator recovery, rerun the same command without `--force`. Keep the model list unchanged when the goal is to let the interrupted model continue from its first missing vote. Change `models.preprocess_translator_names` only when intentionally abandoning a crashing model and resolving from the remaining configured model votes.
 
 Implemented package layout (M4 slice):
 
