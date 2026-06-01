@@ -96,7 +96,7 @@ uv run rsem preprocess glossary-translate -r <release> [-R <run>] [options]
 | `-R, --run ID` | Vote/checkpoint scope (default: `glossary-translate`) |
 | `-f, --force` | Regenerate votes instead of skipping existing per-model votes |
 
-Resume is the default. Glossary translation skips existing votes for the same release, run, and configured model, so rerunning after a local model-server crash continues from the first missing vote. Use the same `-r`, same `-R`, and same config without `--force` to resume. Change the configured model list only when intentionally abandoning a crashing model.
+Resume is the default. Glossary translation skips existing votes for the same release, run, and configured model, so rerunning after a local model-server crash continues from the first missing vote. Use the same `-r`, same `-R`, and same config without `--force` to resume. When a complete seed model vote set exists, resume avoids a full candidate-table scan and loads candidate rows later by `candidate_id` primary key. Change the configured model list only when intentionally abandoning a crashing model.
 
 ### `glossary-review` (alias: `gls-review`)
 

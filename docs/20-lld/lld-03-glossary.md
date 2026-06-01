@@ -195,7 +195,8 @@ Without `--review-file`, behavior is identical to the original MVP flow.
 - interrupted LLM evaluation resumes by evaluating candidates that still lack LLM fields
 - translate/promote reruns are state-driven: untranslated or unpromoted candidates are processed by default
 - glossary translation reruns skip existing per-model votes for `(release_id, run_id, model_name)` unless `--force` is used
-- interrupted glossary translation can resume from saved votes; when one configured model has a complete vote set matching prior run telemetry, candidate loading may use saved votes instead of the canonical pending scan
+- interrupted glossary translation can resume from saved votes; when one configured model has a complete vote set matching prior run telemetry, candidate loading may use saved vote IDs instead of the canonical pending scan
+- this vote resume path avoids a full candidate-table scan when a complete seed model vote set exists, then fetches candidate rows later by `candidate_id` primary key
 - `--force` reruns discovery, translation, or promotion for the requested scope instead of honoring phase checkpoints or already translated/promoted state
 - `run retry-failed --stage preprocess-glossary` retries incomplete translation or promotion state without forcing promoted candidates. Candidates in `conflict` state and rows in `glossary_conflicts` are reported as review-required, not retried.
 - promotion never mutates historical candidate evidence

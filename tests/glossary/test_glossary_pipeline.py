@@ -11,9 +11,11 @@ import pytest
 
 from resemantica.db.glossary_repo import (
     ensure_glossary_schema,
-    list_candidates_for_translation_from_votes,
+    list_candidates_by_ids,
     list_conflicts,
+    list_existing_translation_vote_candidate_ids,
     list_locked_entries,
+    list_translation_resume_candidate_ids,
     list_translation_vote_candidate_ids,
     list_translation_votes,
     promote_locked_entries,
@@ -298,6 +300,52 @@ def _discovery_candidate(
         type_prior="faction",
         chapter_coverage=1,
         corpus_score=1.0,
+    )
+
+
+class CapturingLookupConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        super().__init__(*args, **kwargs)
+        self.candidate_lookup_sql: str = ""
+        self.candidate_lookup_params: tuple[object, ...] = ()
+
+    def execute(self, sql: str, parameters=(), /):  # noqa: ANN001
+        if (
+            sql.lstrip().upper().startswith("SELECT")
+            and "FROM glossary_candidates" in sql
+            and "candidate_id IN" in sql
+        ):
+            self.candidate_lookup_sql = sql
+            self.candidate_lookup_params = tuple(parameters)
+        return super().execute(sql, parameters)
+
+
+def _lookup_candidate(
+    *,
+    release_id: str,
+    index: int,
+    translated: bool = False,
+) -> GlossaryCandidate:
+    source_term = f"term {index:04d}"
+    return GlossaryCandidate(
+        candidate_id=f"gcan_lookup_{index:04d}",
+        release_id=release_id,
+        source_term=source_term,
+        normalized_source_term=normalize_term(source_term),
+        category="generic_role",
+        source_language="zh",
+        first_seen_chapter=index,
+        last_seen_chapter=index,
+        appearance_count=1,
+        evidence_snippet=source_term,
+        candidate_translation_en="Translated" if translated else None,
+        normalized_target_term="translated" if translated else None,
+        discovery_run_id="seed",
+        translation_run_id=None,
+        candidate_status="translated" if translated else "discovered",
+        validation_status="pending",
+        conflict_reason=None,
+        llm_keep=1,
     )
 
 
@@ -619,11 +667,25 @@ def test_glossary_translation_uses_vote_resume_candidate_loading(
     from resemantica.orchestration.events import subscribe, unsubscribe
 
     received = []
+    row_fetch_event_count: list[int] = []
 
     def callback(event):
         if event.run_id == run_id:
             received.append(event)
 
+    import resemantica.glossary.pipeline as pipeline_mod
+
+    original_fetch_by_ids = pipeline_mod.list_candidates_by_ids
+
+    def wrapped_fetch_by_ids(*args, **kwargs):  # noqa: ANN002, ANN003
+        row_fetch_event_count.append(len(received))
+        assert any(
+            event.event_type == "preprocess-glossary.translate.loading_completed"
+            for event in received
+        )
+        return original_fetch_by_ids(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "list_candidates_by_ids", wrapped_fetch_by_ids)
     subscribe("*", callback)
     try:
         result = translate_glossary_candidates(
@@ -637,12 +699,17 @@ def test_glossary_translation_uses_vote_resume_candidate_loading(
 
     assert result["translated_count"] == 2
     assert translator.calls == [("gemma", "苍云门"), ("gemma", "青云门")]
+    assert row_fetch_event_count
     loading_completed = [
         event for event in received
         if event.event_type == "preprocess-glossary.translate.loading_completed"
     ][-1]
+    first_fetch_index = row_fetch_event_count[0]
+    event_types_before_first_fetch = [event.event_type for event in received[:first_fetch_index]]
     assert loading_completed.payload["load_strategy"] == "vote_resume"
     assert loading_completed.payload["resume_vote_model"] == "hy"
+    assert "preprocess-glossary.translate.loading_completed" in event_types_before_first_fetch
+    assert "preprocess-glossary.translate.model_started" in event_types_before_first_fetch
 
 
 def test_glossary_translation_falls_back_when_votes_are_incomplete(
@@ -779,6 +846,17 @@ def test_glossary_translation_vote_candidate_id_lookup_is_scoped(
             translation_run_id="run-a",
             model_name="hy",
         ) == {"gcan_青云门"}
+        assert list_existing_translation_vote_candidate_ids(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+            model_name="hy",
+        ) == {"gcan_青云门"}
+        assert list_translation_resume_candidate_ids(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+        ) == ["gcan_苍云门", "gcan_青云门"]
         indexes = {
             str(row["name"])
             for row in conn.execute("PRAGMA index_list(glossary_translation_votes)").fetchall()
@@ -792,15 +870,73 @@ def test_glossary_translation_vote_candidate_id_lookup_is_scoped(
             """,
             ("Azure Sect", release_id, "青云门"),
         )
-        candidates = list_candidates_for_translation_from_votes(
+        candidates = list_candidates_by_ids(
             conn,
             release_id=release_id,
-            translation_run_id="run-a",
+            candidate_ids=["gcan_青云门", "gcan_苍云门"],
+            untranslated_only=True,
+        )
+        all_candidates = list_candidates_by_ids(
+            conn,
+            release_id=release_id,
+            candidate_ids=["gcan_青云门", "gcan_苍云门"],
         )
     finally:
         conn.close()
     assert "idx_glossary_translation_votes_resume" in indexes
     assert [candidate.source_term for candidate in candidates] == ["苍云门"]
+    assert [(candidate.source_term, candidate.evidence_snippet) for candidate in all_candidates] == [
+        ("青云门", "青云门"),
+        ("苍云门", "苍云门"),
+    ]
+
+
+def test_glossary_candidate_id_batch_lookup_uses_primary_key_plan() -> None:
+    release_id = "m42-candidate-id-batch"
+    conn = sqlite3.connect(":memory:", factory=CapturingLookupConnection)
+    conn.row_factory = sqlite3.Row
+    ensure_glossary_schema(conn)
+    try:
+        translated_ids = {"gcan_lookup_0123", "gcan_lookup_0400"}
+        upsert_discovered_candidates(
+            conn,
+            candidates=[
+                _lookup_candidate(
+                    release_id=release_id,
+                    index=index,
+                    translated=f"gcan_lookup_{index:04d}" in translated_ids,
+                )
+                for index in range(650)
+            ],
+        )
+        requested_ids = [f"gcan_lookup_{index:04d}" for index in range(499, -1, -1)]
+
+        all_candidates = list_candidates_by_ids(
+            conn,
+            release_id=release_id,
+            candidate_ids=requested_ids,
+        )
+        untranslated_candidates = list_candidates_by_ids(
+            conn,
+            release_id=release_id,
+            candidate_ids=requested_ids,
+            untranslated_only=True,
+        )
+        plan_rows = conn.execute(
+            f"EXPLAIN QUERY PLAN {conn.candidate_lookup_sql}",
+            conn.candidate_lookup_params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert [candidate.candidate_id for candidate in all_candidates] == requested_ids
+    assert [candidate.candidate_id for candidate in untranslated_candidates] == [
+        candidate_id for candidate_id in requested_ids if candidate_id not in translated_ids
+    ]
+    plan_detail = " ".join(str(row["detail"]) for row in plan_rows).lower()
+    assert "candidate_id" in plan_detail
+    assert "normalized_source_term" not in plan_detail
+    assert "release_id" not in plan_detail
 
 
 def test_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:

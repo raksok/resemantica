@@ -16,6 +16,17 @@ from resemantica.glossary.models import (
     LockedGlossaryEntry,
 )
 
+_CANDIDATE_ROW_COLUMNS = """
+    candidate_id, release_id, source_term, normalized_source_term, category,
+    source_language, first_seen_chapter, last_seen_chapter, appearance_count,
+    evidence_snippet, candidate_translation_en, normalized_target_term,
+    discovery_run_id, translation_run_id, candidate_status, validation_status,
+    conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
+    translator_model_name, translator_prompt_version, schema_version,
+    pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
+    corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class GlossaryDiscoveryChapterState:
@@ -312,6 +323,81 @@ def list_candidates_for_translation_from_votes(
         (release_id, release_id, translation_run_id),
     ).fetchall()
     return [_candidate_from_row(row) for row in rows]
+
+
+def list_translation_resume_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT candidate_id
+        FROM glossary_translation_votes
+        WHERE release_id = ?
+          AND translation_run_id = ?
+        ORDER BY candidate_id
+        """,
+        (release_id, translation_run_id),
+    ).fetchall()
+    return [str(row["candidate_id"]) for row in rows]
+
+
+def list_existing_translation_vote_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    model_name: str,
+) -> set[str]:
+    return list_translation_vote_candidate_ids(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+        model_name=model_name,
+    )
+
+
+def list_candidates_by_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    candidate_ids: Sequence[str],
+    untranslated_only: bool = False,
+    preserve_input_order: bool = True,
+) -> list[GlossaryCandidate]:
+    if not candidate_ids:
+        return []
+    placeholders = ",".join("?" for _ in candidate_ids)
+    untranslated_clause = ""
+    if untranslated_only:
+        untranslated_clause = "AND (candidate_translation_en IS NULL OR candidate_translation_en = '')"
+    rows = conn.execute(
+        f"""
+        SELECT {_CANDIDATE_ROW_COLUMNS}
+        FROM glossary_candidates
+        WHERE candidate_id IN ({placeholders})
+          -- Keep vote_resume hydration on primary-key lookups; large releases can otherwise scan by release_id.
+          AND +release_id = ?
+          AND +llm_keep = 1
+          {untranslated_clause}
+        """,
+        (*candidate_ids, release_id),
+    ).fetchall()
+    candidates = [_candidate_from_row(row) for row in rows]
+    if preserve_input_order:
+        order = {candidate_id: index for index, candidate_id in enumerate(candidate_ids)}
+        candidates.sort(key=lambda candidate: order.get(candidate.candidate_id, len(order)))
+    else:
+        candidates.sort(
+            key=lambda candidate: (
+                candidate.first_seen_chapter,
+                candidate.normalized_source_term,
+                candidate.category,
+            )
+        )
+    return candidates
 
 
 def list_candidates_for_promotion(

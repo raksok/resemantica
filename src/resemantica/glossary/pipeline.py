@@ -20,13 +20,14 @@ from resemantica.db.glossary_repo import (
     get_checkpoint,
     insert_conflicts,
     list_candidates,
+    list_candidates_by_ids,
     list_candidates_for_promotion,
     list_candidates_for_review,
     list_candidates_for_translation,
-    list_candidates_for_translation_from_votes,
     list_conflicts,
+    list_existing_translation_vote_candidate_ids,
     list_locked_entries,
-    list_translation_vote_candidate_ids,
+    list_translation_resume_candidate_ids,
     list_translation_votes,
     mark_candidate_conflict,
     mark_candidate_promoted,
@@ -58,6 +59,7 @@ from resemantica.utils import _build_llm_client, _write_json
 from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-glossary"
+_TRANSLATION_RESUME_FETCH_CHUNK_SIZE = 500
 
 
 def _stable_json_hash(payload: object) -> str:
@@ -983,6 +985,10 @@ def _prompt_name_for_model(model_name: str) -> str:
     return "glossary_translate.txt"
 
 
+def _chunks(values: list[str], chunk_size: int) -> list[list[str]]:
+    return [values[index:index + chunk_size] for index in range(0, len(values), chunk_size)]
+
+
 def _previous_translate_pending_count(
     *,
     tracking_db_path: Path,
@@ -1082,6 +1088,7 @@ def translate_glossary_candidates(
         pending_load_started_at = time.perf_counter()
         previous_pending_count: int | None = None
         resume_vote_model = ""
+        resume_candidate_ids: list[str] = []
         vote_counts_by_model: dict[str, int] = {}
         load_strategy = "canonical_pending_scan"
         if force:
@@ -1112,15 +1119,17 @@ def translate_glossary_candidates(
                 "",
             )
             if resume_vote_model:
-                pending = list_candidates_for_translation_from_votes(
+                resume_candidate_ids = list_translation_resume_candidate_ids(
                     conn,
                     release_id=release_id,
                     translation_run_id=run_id,
                 )
+                pending = []
                 load_strategy = "vote_resume"
             else:
                 pending = list_candidates_for_translation(conn, release_id=release_id)
         pending_load_seconds = time.perf_counter() - pending_load_started_at
+        pending_count = len(resume_candidate_ids) if load_strategy == "vote_resume" else len(pending)
         chapters_with_pending = {candidate.first_seen_chapter for candidate in pending}
         loading_seconds = time.perf_counter() - loading_started_at
         _emit(
@@ -1128,8 +1137,8 @@ def translate_glossary_candidates(
             release_id,
             f"{_STAGE_NAME}.translate.loading_completed",
             force=force,
-            pending_count=len(pending),
-            candidate_count=len(pending),
+            pending_count=pending_count,
+            candidate_count=pending_count,
             total_chapters=len(chapters_with_pending),
             model_count=len(translator_names),
             load_strategy=load_strategy,
@@ -1139,13 +1148,13 @@ def translate_glossary_candidates(
             elapsed_seconds=round(loading_seconds, 3),
             db_prepare_seconds=round(db_prepare_seconds, 3),
             pending_load_seconds=round(pending_load_seconds, 3),
-            message=f"Glossary translation loading completed: {len(pending)} candidates",
+            message=f"Glossary translation loading completed: {pending_count} candidates",
         )
         logger.info(
             "Translation loading completed in {:.3f}s: {} candidates across {} chapters "
             "(strategy={}, db_prepare={:.3f}s, pending_load={:.3f}s, resume_vote_model={})",
             loading_seconds,
-            len(pending),
+            pending_count,
             len(chapters_with_pending),
             load_strategy,
             db_prepare_seconds,
@@ -1157,13 +1166,13 @@ def translate_glossary_candidates(
             release_id,
             f"{_STAGE_NAME}.translate.started",
             total_chapters=len(chapters_with_pending),
-            pending_count=len(pending),
-            candidate_count=len(pending),
+            pending_count=pending_count,
+            candidate_count=pending_count,
             model_count=len(translator_names),
         )
         logger.info(
             "Translation started: {} candidates pending across {} chapters",
-            len(pending), len(chapters_with_pending),
+            pending_count, len(chapters_with_pending),
         )
         current_model_name = ""
         current_candidate_id = ""
@@ -1174,7 +1183,7 @@ def translate_glossary_candidates(
                 existing_vote_candidate_ids = (
                     set()
                     if force
-                    else list_translation_vote_candidate_ids(
+                    else list_existing_translation_vote_candidate_ids(
                         conn,
                         release_id=release_id,
                         translation_run_id=run_id,
@@ -1182,66 +1191,111 @@ def translate_glossary_candidates(
                     )
                 )
                 vote_lookup_seconds = time.perf_counter() - vote_lookup_started_at
-                model_pending = [
-                    candidate
-                    for candidate in pending
-                    if candidate.candidate_id not in existing_vote_candidate_ids
-                ]
-                skipped_count = len(pending) - len(model_pending)
+                if load_strategy == "vote_resume":
+                    model_pending_ids = [
+                        candidate_id
+                        for candidate_id in resume_candidate_ids
+                        if candidate_id not in existing_vote_candidate_ids
+                    ]
+                    model_pending = []
+                    model_candidate_count = len(model_pending_ids)
+                else:
+                    model_pending = [
+                        candidate
+                        for candidate in pending
+                        if candidate.candidate_id not in existing_vote_candidate_ids
+                    ]
+                    model_pending_ids = []
+                    model_candidate_count = len(model_pending)
+                skipped_count = pending_count - model_candidate_count
                 logger.info(
                     "Translation model {} resume lookup in {:.3f}s: {} existing votes, {} candidates pending",
                     model_name,
                     vote_lookup_seconds,
                     len(existing_vote_candidate_ids),
-                    len(model_pending),
+                    model_candidate_count,
                 )
                 _emit(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.translate.model_started",
                     model_name=model_name,
-                    pending_count=len(pending),
-                    candidate_count=len(model_pending),
+                    pending_count=pending_count,
+                    candidate_count=model_candidate_count,
                     skipped_count=skipped_count,
                     vote_lookup_seconds=round(vote_lookup_seconds, 3),
-                    message=f"Glossary translation model {model_name} started: {len(model_pending)} candidates",
+                    message=f"Glossary translation model {model_name} started: {model_candidate_count} candidates",
                 )
                 prompt_template = model_prompts.get(model_name, model_prompts.get(translator_names[0], ""))
                 prompt_version = model_prompt_versions.get(model_name, "unknown")
-                for candidate in model_pending:
-                    current_candidate_id = candidate.candidate_id
-                    translated = client.translate_glossary_candidate(
-                        model_name=model_name,
-                        prompt_template=prompt_template,
-                        source_term=candidate.source_term,
-                        category=candidate.category,
-                        evidence_snippet=candidate.evidence_snippet,
-                    )
-                    upsert_translation_vote(
-                        conn,
-                        candidate_id=candidate.candidate_id,
-                        release_id=release_id,
-                        translation_run_id=run_id,
-                        model_name=model_name,
-                        prompt_version=prompt_version,
-                        raw_output=translated,
-                        cleaned_output=translated,
-                        normalized_output=normalize_term(translated),
-                    )
+                generated_count = 0
+                if load_strategy == "vote_resume":
+                    for candidate_id_batch in _chunks(
+                        model_pending_ids,
+                        _TRANSLATION_RESUME_FETCH_CHUNK_SIZE,
+                    ):
+                        candidate_batch = list_candidates_by_ids(
+                            conn,
+                            release_id=release_id,
+                            candidate_ids=candidate_id_batch,
+                        )
+                        for candidate in candidate_batch:
+                            current_candidate_id = candidate.candidate_id
+                            translated = client.translate_glossary_candidate(
+                                model_name=model_name,
+                                prompt_template=prompt_template,
+                                source_term=candidate.source_term,
+                                category=candidate.category,
+                                evidence_snippet=candidate.evidence_snippet,
+                            )
+                            upsert_translation_vote(
+                                conn,
+                                candidate_id=candidate.candidate_id,
+                                release_id=release_id,
+                                translation_run_id=run_id,
+                                model_name=model_name,
+                                prompt_version=prompt_version,
+                                raw_output=translated,
+                                cleaned_output=translated,
+                                normalized_output=normalize_term(translated),
+                            )
+                            generated_count += 1
+                else:
+                    for candidate in model_pending:
+                        current_candidate_id = candidate.candidate_id
+                        translated = client.translate_glossary_candidate(
+                            model_name=model_name,
+                            prompt_template=prompt_template,
+                            source_term=candidate.source_term,
+                            category=candidate.category,
+                            evidence_snippet=candidate.evidence_snippet,
+                        )
+                        upsert_translation_vote(
+                            conn,
+                            candidate_id=candidate.candidate_id,
+                            release_id=release_id,
+                            translation_run_id=run_id,
+                            model_name=model_name,
+                            prompt_version=prompt_version,
+                            raw_output=translated,
+                            cleaned_output=translated,
+                            normalized_output=normalize_term(translated),
+                        )
+                        generated_count += 1
                 _emit(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.translate.model_completed",
                     model_name=model_name,
-                    pending_count=len(pending),
-                    candidate_count=len(model_pending),
+                    pending_count=pending_count,
+                    candidate_count=generated_count,
                     skipped_count=skipped_count,
-                    message=f"Glossary translation model {model_name} completed: {len(model_pending)} candidates",
+                    message=f"Glossary translation model {model_name} completed: {generated_count} candidates",
                 )
                 logger.info(
                     "Translation model {} complete: {} votes generated, {} existing votes skipped",
                     model_name,
-                    len(model_pending),
+                    generated_count,
                     skipped_count,
                 )
         except Exception as exc:
@@ -1280,12 +1334,35 @@ def translate_glossary_candidates(
             run_id,
             release_id,
             f"{_STAGE_NAME}.translate.resolution.started",
-            pending_count=len(pending),
-            candidate_count=len(pending),
+            pending_count=pending_count,
+            candidate_count=pending_count,
             model_count=len(translator_names),
         )
         try:
-            for candidate in pending:
+            if load_strategy == "vote_resume":
+                resolution_candidates = [
+                    candidate
+                    for candidate_id_batch in _chunks(
+                        resume_candidate_ids,
+                        _TRANSLATION_RESUME_FETCH_CHUNK_SIZE,
+                    )
+                    for candidate in list_candidates_by_ids(
+                        conn,
+                        release_id=release_id,
+                        candidate_ids=candidate_id_batch,
+                        preserve_input_order=False,
+                    )
+                ]
+                resolution_candidates.sort(
+                    key=lambda candidate: (
+                        candidate.first_seen_chapter,
+                        candidate.normalized_source_term,
+                        candidate.category,
+                    )
+                )
+            else:
+                resolution_candidates = pending
+            for candidate in resolution_candidates:
                 current_candidate_id = candidate.candidate_id
                 chapter = candidate.first_seen_chapter
                 if active_chapter != chapter:
@@ -1415,8 +1492,8 @@ def translate_glossary_candidates(
             run_id,
             release_id,
             f"{_STAGE_NAME}.translate.resolution.completed",
-            pending_count=len(pending),
-            candidate_count=len(pending),
+            pending_count=pending_count,
+            candidate_count=pending_count,
             translated_count=translated_count,
             unresolved_count=unresolved_count,
         )

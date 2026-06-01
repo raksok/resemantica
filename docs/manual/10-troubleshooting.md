@@ -58,7 +58,7 @@ rather than stuck.
 
 **Cause:** The external llama.cpp model server can exit or drop the request during one model's glossary vote batch. Resemantica emits `preprocess-glossary.translate.failed`, but votes saved before the crash remain in SQLite.
 
-**Fix:** Restart the model server and rerun the same command with the same `-r`, same `-R`, and same config, without `--force`. Existing per-model votes are skipped and the interrupted model continues from its first missing vote. Change the configured model list only when intentionally abandoning the crashing model.
+**Fix:** Restart the model server and rerun the same command with the same `-r`, same `-R`, and same config, without `--force`. Existing per-model votes are skipped and the interrupted model continues from its first missing vote. When a complete seed model vote set exists, resume avoids a full candidate-table scan and loads candidate rows later by `candidate_id` primary key. Change the configured model list only when intentionally abandoning the crashing model.
 
 ### Checkpoint mismatch after config change
 

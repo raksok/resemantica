@@ -66,7 +66,10 @@ COMMANDS
             Translate candidates via translator LLM.
             Resume skips existing per-model votes for the same release,
             run, and config. Re-run without --force after a local
-            model-server crash to continue from missing votes.
+            model-server crash to continue from missing votes. With a
+            complete seed model vote set, resume avoids a full
+            candidate-table scan and fetches rows later by candidate_id
+            primary key.
 
         glossary-review (gls-review)
             Generate review.json + review.csv for human editing. See

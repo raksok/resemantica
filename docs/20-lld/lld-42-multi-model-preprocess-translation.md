@@ -37,7 +37,7 @@ Glossary vote fields:
 - `normalized_output`
 - `resolution_status`
 
-Glossary vote lookup is indexed for resume with `(release_id, translation_run_id, model_name, candidate_id)`. The repository exposes scoped helpers to list candidate IDs that already have votes for a model, count votes by model, and reconstruct the pending candidate set from saved votes during `vote_resume` loading.
+Glossary vote lookup is indexed for resume with `(release_id, translation_run_id, model_name, candidate_id)`. The repository exposes scoped helpers to list candidate IDs that already have votes for a model, count votes by model, and reconstruct the resume candidate ID set from saved votes during `vote_resume` loading.
 
 Idiom vote fields:
 - `candidate_id`
@@ -84,13 +84,13 @@ Glossary translation:
 
 Vote-level resume is keyed by `(release_id, translation_run_id, model_name)`. On rerun, each configured model receives only candidates that do not already have a vote for that release, run, and model. Completed votes from earlier model batches remain valid durable state and are not discarded by later failures.
 
-When rerunning an interrupted translation run, the loader may use `vote_resume` instead of the canonical pending scan if a prior `translate.started` event has a pending count and one configured model already has exactly that many votes. The `vote_resume` strategy reconstructs the candidate list from saved votes, then the per-model loop still skips votes that already exist for each model. This avoids scanning very large `glossary_candidates` tables before per-model resume can skip completed votes.
+When rerunning an interrupted translation run, the loader may use `vote_resume` instead of the canonical pending scan if a prior `translate.started` event has a pending count and one configured model already has exactly that many votes. The `vote_resume` strategy reconstructs the candidate ID universe from saved votes, emits loading completion after that indexed ID work, and fetches candidate rows lazily in `candidate_id` primary-key chunks during missing-vote generation and resolution. Lazy hydration must stay ID-first; it must not devolve into release-wide `glossary_candidates` scans before per-model resume can skip completed votes.
 
 If a local model server crashes during a model batch, for example a llama.cpp-backed Gemma process exit, the pipeline emits `preprocess-glossary.translate.failed` and stops the current run. Votes saved before the crash remain in SQLite. Operators can rerun with the same release, run, and configuration, without `--force`, and the crashed model resumes from its first missing vote. Removing the crashing model from `models.preprocess_translator_names` is an intentional configuration change that abandons that model's missing votes and resolves from the remaining configured model votes.
 
 Glossary translation events are scoped to the real work boundaries:
 - `preprocess-glossary.translate.loading_started` before opening/preparing the release DB and loading pending candidates.
-- `preprocess-glossary.translate.loading_completed` after pending candidates are loaded, with elapsed load timings and `load_strategy`.
+- `preprocess-glossary.translate.loading_completed` after pending candidates are loaded, with elapsed load timings and `load_strategy`; for `vote_resume`, this means the candidate ID universe is loaded, not that every candidate row has been hydrated.
 - `preprocess-glossary.translate.started` after pending candidates are loaded.
 - `preprocess-glossary.translate.model_started` and `.model_completed` around each model's missing-vote batch, with `model_name`, `pending_count`, `candidate_count`, and `skipped_count`.
 - `preprocess-glossary.translate.resolution.started` before vote resolution begins.
