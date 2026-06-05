@@ -81,7 +81,8 @@ def test_wizard_factory_in_scopes():
     assert "factory" in SCOPES
     assert SCOPES[-1] == "factory"
     assert "keep-extracted" in SCOPES
-    assert len(SCOPES) == 7
+    assert "last-good-chunk" in SCOPES
+    assert len(SCOPES) == 8
 
 
 def test_wizard_scope_cycle_resets_to_step_1():
@@ -176,6 +177,7 @@ def test_settings_screen_still_works():
     assert "Paths" in result
     assert "Budget" in result
     assert "Translation" in result
+    assert "throttle_groups" in result
 
 
 def test_mounted_wizard_renders_step_1():
@@ -230,6 +232,10 @@ def test_mounted_wizard_scope_cycle_updates_display():
             await pilot.press("s")
             await pilot.pause()
             assert "keep-extracted" in str(scope_info.content)
+
+            await pilot.press("s")
+            await pilot.pause()
+            assert "last-good-chunk" in str(scope_info.content)
 
             await pilot.press("s")
             await pilot.pause()
@@ -365,8 +371,9 @@ def test_mounted_wizard_factory_shows_warning_on_step_1():
             await pilot.press("7")
             await pilot.pause()
 
-            # Cycle to factory (6 presses: trans, preprocess, cache, keep-extracted, all, factory)
-            for _ in range(6):
+            # Cycle to factory (7 presses: trans, preprocess, cache, keep-extracted,
+            # last-good-chunk, all, factory)
+            for _ in range(7):
                 await pilot.press("s")
                 await pilot.pause()
 
@@ -391,7 +398,7 @@ def test_mounted_wizard_factory_confirm_shows_warning():
             await pilot.pause()
 
             # Cycle to factory then advance to confirm
-            for _ in range(6):
+            for _ in range(7):
                 await pilot.press("s")
                 await pilot.pause()
 

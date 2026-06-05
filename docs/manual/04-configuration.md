@@ -27,6 +27,17 @@ Configuration is via a TOML file loaded from `./resemantica.toml` by default. Ov
 | `context_window` | int | `65536` | Global context window (per-model overrides available) |
 | `max_concurrent_requests_per_model` | int | `1` | Concurrency limit per model |
 
+Optional throttle groups let exact model IDs share one process-local concurrency limit:
+
+```toml
+[llm.throttle_groups.qwen]
+model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+max_concurrent_requests = 1
+system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+```
+
+Grouped models share the group's semaphore. If `system_prompt` is set, matching grouped models receive it as a stateless `system` message on every request. Ungrouped models continue using `max_concurrent_requests_per_model` and keep user-only requests.
+
 ## `[paths]` — Storage Paths
 
 | Key | Type | Default | Description |
@@ -146,6 +157,9 @@ The system validates configuration at startup (`settings.py:475-539`). Key rules
 | `timeout_seconds` | Must be > 0 |
 | `max_retries` | Must be >= 0 |
 | `max_concurrent_requests_per_model` | Must be >= 1 |
+| `llm.throttle_groups.<group>.model_names` | Must be non-empty; a model can appear in only one group |
+| `llm.throttle_groups.<group>.max_concurrent_requests` | Must be >= 1 |
+| `llm.throttle_groups.<group>.system_prompt` | Must be a string when set |
 | `risk_threshold_high` | Must be in [0.0, 1.0] |
 | `persistence_mode` | Must be `"normal"` or `"reduced"` |
 | `chapter_concurrency` | Must be in [1, 5] |
@@ -178,6 +192,12 @@ base_url = "http://127.0.0.1:8080"
 timeout_seconds = 1800
 max_retries = 3
 context_window = 65000
+max_concurrent_requests_per_model = 1
+
+[llm.throttle_groups.qwen]
+model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+max_concurrent_requests = 1
+system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
 [models]
 translator_name = "HY-MT1.5-7B"

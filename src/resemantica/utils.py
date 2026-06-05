@@ -40,6 +40,7 @@ def _build_llm_client(config: AppConfig, llm_client: LLMClient | None) -> LLMCli
         timeout_seconds=config.llm.timeout_seconds,
         max_retries=config.llm.max_retries,
         max_concurrent_requests_per_model=config.llm.max_concurrent_requests_per_model,
+        throttle_groups=config.llm.throttle_groups,
     )
 
 

@@ -84,12 +84,13 @@ class LLMClient:
     timeout_seconds: int
     max_retries: int = 2
     max_concurrent_requests_per_model: int = 1
+    throttle_groups: dict[str, Any] = field(default_factory=dict)
     generation_hook: GenerationHook | None = None
     _openai_client: Any | None = field(default=None, init=False, repr=False)
     openai_request_count: int = field(default=0, init=False)
     _usage_totals: LLMUsageTotals = field(default_factory=LLMUsageTotals, init=False, repr=False)
 
-    def generate_text(self, *, model_name: str, prompt: str) -> str:
+    def generate_text(self, *, model_name: str, prompt: str, max_tokens: int | None = None) -> str:
         if self.generation_hook is not None:
             return self.generation_hook(model_name, prompt)
 
@@ -97,18 +98,29 @@ class LLMClient:
         last_error: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
-            semaphore = _model_semaphore(
+            throttle = _throttle_for_model(
                 model_name,
                 self.max_concurrent_requests_per_model,
+                self.throttle_groups,
+            )
+            semaphore = _model_semaphore(
+                throttle.key,
+                throttle.limit,
             )
             semaphore.acquire()
             try:
                 self.openai_request_count += 1
                 self._usage_totals.llm_request_count += 1
-                response: Any = client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                messages = [{"role": "user", "content": prompt}]
+                if throttle.system_prompt:
+                    messages.insert(0, {"role": "system", "content": throttle.system_prompt})
+                request_kwargs: dict[str, Any] = {
+                    "model": model_name,
+                    "messages": messages,
+                }
+                if max_tokens is not None:
+                    request_kwargs["max_tokens"] = max_tokens
+                response: Any = client.chat.completions.create(**request_kwargs)
                 self._record_response_usage(response)
                 content = response.choices[0].message.content
                 return content if isinstance(content, str) else ""
@@ -246,3 +258,39 @@ def _model_semaphore(model_name: str, limit: int) -> threading.BoundedSemaphore:
         semaphore = threading.BoundedSemaphore(limit)
         _MODEL_SEMAPHORES[model_name] = (limit, semaphore)
         return semaphore
+
+
+@dataclass(frozen=True, slots=True)
+class _Throttle:
+    key: str
+    limit: int
+    system_prompt: str = ""
+
+
+def _throttle_for_model(
+    model_name: str,
+    default_limit: int,
+    throttle_groups: dict[str, Any],
+) -> _Throttle:
+    for group_name, group in throttle_groups.items():
+        model_names = (
+            group.get("model_names", [])
+            if isinstance(group, dict)
+            else getattr(group, "model_names", [])
+        )
+        if model_name not in model_names:
+            continue
+        limit = (
+            group.get("max_concurrent_requests", 1)
+            if isinstance(group, dict)
+            else getattr(group, "max_concurrent_requests", 1)
+        )
+        system_prompt = (
+            group.get("system_prompt", "")
+            if isinstance(group, dict)
+            else getattr(group, "system_prompt", "")
+        )
+        if not isinstance(system_prompt, str):
+            system_prompt = ""
+        return _Throttle(f"group:{group_name}", int(limit), system_prompt)
+    return _Throttle(f"model:{model_name}", default_limit)

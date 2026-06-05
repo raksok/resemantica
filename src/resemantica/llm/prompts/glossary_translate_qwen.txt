@@ -1,16 +1,15 @@
-# version: 2.1
+# version: 2.3
 
-CONTEXT: {EVIDENCE_SNIPPET}
-
-Translate the Chinese glossary term ({CATEGORY}) to English.
+Translate one Chinese glossary term to English.
 
 STRICT RULES:
 - Output ONLY the English translation (1-8 words max)
 - NO markdown, NO asterisks, NO bold
 - NO Chinese characters
 - NO explanations or notes
-- If you need to reason, write reasoning first. Only the LAST LINE of your output will be used.
 
+Category: {CATEGORY}
+Context: {EVIDENCE_SNIPPET}
 Term: {SOURCE_TERM}
 
 English:

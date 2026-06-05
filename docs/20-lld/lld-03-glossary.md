@@ -138,7 +138,7 @@ This is text of {CATEGORY}, Translate the following `zh` into `en` with no extra
 {SOURCE_TERM}
 ```
 
-Response post-processing strips label prefixes (`Category:`, `Translation:`, etc.) and takes only the last non-empty line as defense against chain-of-thought leakage.
+Response post-processing strips label prefixes (`Category:`, `Translation:`, etc.) and takes only the last non-empty line as defense against chain-of-thought leakage. Glossary translation requests do not set a glossary-specific completion cap.
 
 ## Review Workflow
 

@@ -43,6 +43,23 @@
 2. Increase `pass2_concurrency` in `[translation]`
 3. Break the chapter range into smaller batches
 
+### Qwen overloads when multiple Qwen model IDs are configured
+
+**Cause:** Different configured Qwen names can still route to the same local backend. Without a throttle group, exact model names use independent semaphores and may issue concurrent requests to that shared backend.
+
+**Fix:** Put those exact model IDs in one `[llm.throttle_groups.<name>]` table:
+
+```toml
+[llm.throttle_groups.qwen]
+model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+max_concurrent_requests = 1
+system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+```
+
+This serializes those Qwen calls inside one process while leaving unrelated model IDs on their own per-model limits. The system prompt is sent as a fresh `system` message for every matching Qwen request.
+
+Existing malformed Qwen glossary votes are already persisted. Regenerate them with `--force` or delete the targeted vote rows before rerunning glossary translation.
+
 ### Glossary discovery appears stuck after chapters finish
 
 **Cause:** Corpus scoring can be CPU-heavy on large candidate sets. This happens after

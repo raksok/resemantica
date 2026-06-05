@@ -486,6 +486,7 @@ def test_settings_presenter_builds_config():
     assert "Paths" in result
     assert "Budget" in result
     assert "Translation" in result
+    assert "throttle_groups" in result
 
 
 def test_preprocessing_presenter_builds_stages():
@@ -700,6 +701,7 @@ def test_preprocessing_launch_workflow_chains_stages():
         "preprocess-glossary",
         "preprocess-idioms",
         "preprocess-graph",
+        "preprocess-continuity",
         "packets-build",
     ]
 

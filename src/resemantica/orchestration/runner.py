@@ -517,6 +517,7 @@ class OrchestrationRunner:
                 timeout_seconds=self.config.llm.timeout_seconds,
                 max_retries=self.config.llm.max_retries,
                 max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
+                throttle_groups=self.config.llm.throttle_groups,
             )
 
             discover_glossary_candidates(
@@ -741,6 +742,7 @@ class OrchestrationRunner:
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
             max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
+            throttle_groups=self.config.llm.throttle_groups,
         )
         usage_before = capture_usage_snapshot(shared_client)
 
@@ -871,6 +873,7 @@ class OrchestrationRunner:
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
             max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
+            throttle_groups=self.config.llm.throttle_groups,
         )
         usage_before = capture_usage_snapshot(client)
         completed: list[int] = []
@@ -968,6 +971,7 @@ class OrchestrationRunner:
             timeout_seconds=self.config.llm.timeout_seconds,
             max_retries=self.config.llm.max_retries,
             max_concurrent_requests_per_model=self.config.llm.max_concurrent_requests_per_model,
+            throttle_groups=self.config.llm.throttle_groups,
         )
         usage_before = capture_usage_snapshot(client)
         chapter_usage_before = {

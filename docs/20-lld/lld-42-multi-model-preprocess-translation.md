@@ -22,6 +22,7 @@ Rules:
 - If omitted or empty, effective preprocess translators are `[models.translator_name]`.
 - Names are runtime model IDs only; code must not hard-code HY-MT, TranslateGemma, Qwen, or Mistral.
 - The same list is used for glossary translation and idiom translation unless a later task introduces per-stage override lists.
+- Glossary translation vote calls do not set a glossary-specific completion cap.
 
 ## Storage
 Add vote tables that preserve model alternatives without changing canonical candidate fields.
@@ -77,10 +78,11 @@ Tie-breaking:
 Glossary translation:
 1. Load pending candidates using the existing translation query.
 2. For each model in effective preprocess translator order, translate pending candidates without an existing vote for the same release, run, and model unless `force=True`.
-3. Save or replace that model's vote for the candidate.
-4. Resolve each candidate from its votes.
-5. Write the canonical translation only for resolved candidates.
-6. Leave unresolved candidates for review.
+3. Generate each glossary vote without a glossary-specific `max_tokens` cap.
+4. Save or replace that model's vote for the candidate.
+5. Resolve each candidate from its votes.
+6. Write the canonical translation only for resolved candidates.
+7. Leave unresolved candidates for review.
 
 Vote-level resume is keyed by `(release_id, translation_run_id, model_name)`. On rerun, each configured model receives only candidates that do not already have a vote for that release, run, and model. Completed votes from earlier model batches remain valid durable state and are not discarded by later failures.
 

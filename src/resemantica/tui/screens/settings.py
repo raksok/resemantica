@@ -63,6 +63,12 @@ class SettingsScreen(BaseScreen):
             lines.append(f"  max_retries: {config.llm.max_retries}")
             lines.append(f"  context_win: {config.llm.context_window}")
             lines.append(f"  per_model_concurrency: {config.llm.max_concurrent_requests_per_model}")
+            if config.llm.throttle_groups:
+                groups = ", ".join(
+                    f"{name}={group.max_concurrent_requests}"
+                    for name, group in config.llm.throttle_groups.items()
+                )
+                lines.append(f"  throttle_groups: {groups}")
 
             lines.append("")
             lines.append("[bold]Paths[/bold]")

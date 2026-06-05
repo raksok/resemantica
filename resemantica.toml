@@ -5,6 +5,11 @@ max_retries = 3
 context_window = 65000
 max_concurrent_requests_per_model = 1
 
+[llm.throttle_groups.qwen]
+model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+max_concurrent_requests = 1
+system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+
 [models]
 translator_name = "HY-MT1.5-7B"
 preprocess_translator_names = [

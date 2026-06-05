@@ -48,12 +48,20 @@ class ModelsConfig:
 
 
 @dataclass(slots=True)
+class LLMThrottleGroupConfig:
+    model_names: list[str] = field(default_factory=list)
+    max_concurrent_requests: int = 1
+    system_prompt: str = ""
+
+
+@dataclass(slots=True)
 class LLMConfig:
     base_url: str = "http://localhost:8080"
     timeout_seconds: int = 300
     max_retries: int = 2
     context_window: int = 65536
     max_concurrent_requests_per_model: int = 1
+    throttle_groups: dict[str, LLMThrottleGroupConfig] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -233,6 +241,36 @@ def _as_str_list(value: object, field_name: str) -> list[str]:
     raise ValueError(f"{field_name} must be a list of strings.")
 
 
+def _parse_llm_throttle_groups(llm: dict[str, object]) -> dict[str, LLMThrottleGroupConfig]:
+    raw_groups = llm.get("throttle_groups", {})
+    if not isinstance(raw_groups, dict):
+        raise ValueError("llm.throttle_groups must be a table.")
+    parsed: dict[str, LLMThrottleGroupConfig] = {}
+    for group_name, raw_group in raw_groups.items():
+        if not isinstance(group_name, str) or not group_name.strip():
+            raise ValueError("llm.throttle_groups keys must be non-empty strings.")
+        if not isinstance(raw_group, dict):
+            raise ValueError(f"llm.throttle_groups.{group_name} must be a table.")
+        parsed[group_name] = LLMThrottleGroupConfig(
+            model_names=_as_str_list(
+                raw_group.get("model_names", LLMThrottleGroupConfig().model_names),
+                f"llm.throttle_groups.{group_name}.model_names",
+            ),
+            max_concurrent_requests=_as_int(
+                raw_group.get(
+                    "max_concurrent_requests",
+                    LLMThrottleGroupConfig().max_concurrent_requests,
+                ),
+                f"llm.throttle_groups.{group_name}.max_concurrent_requests",
+            ),
+            system_prompt=_as_str(
+                raw_group.get("system_prompt", LLMThrottleGroupConfig().system_prompt),
+                f"llm.throttle_groups.{group_name}.system_prompt",
+            ),
+        )
+    return parsed
+
+
 def load_config(config_path: Path | None = None) -> AppConfig:
     resolved_path = config_path or Path.cwd() / "resemantica.toml"
     raw = _read_toml(resolved_path)
@@ -315,6 +353,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 ),
                 "llm.max_concurrent_requests_per_model",
             ),
+            throttle_groups=_parse_llm_throttle_groups(llm),
         ),
         paths=PathsConfig(
             artifact_root=_as_str(
@@ -494,6 +533,26 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("llm.max_retries must be >= 0.")
     if config.llm.max_concurrent_requests_per_model < 1:
         raise ValueError("llm.max_concurrent_requests_per_model must be >= 1.")
+    seen_throttle_models: dict[str, str] = {}
+    for group_name, group in config.llm.throttle_groups.items():
+        if group.max_concurrent_requests < 1:
+            raise ValueError(
+                f"llm.throttle_groups.{group_name}.max_concurrent_requests must be >= 1."
+            )
+        normalized_models = [model.strip() for model in group.model_names if model.strip()]
+        if not normalized_models:
+            raise ValueError(f"llm.throttle_groups.{group_name}.model_names must not be empty.")
+        if len(normalized_models) != len(set(normalized_models)):
+            raise ValueError(f"llm.throttle_groups.{group_name}.model_names contains duplicates.")
+        group.model_names = normalized_models
+        for model_name in normalized_models:
+            existing_group = seen_throttle_models.get(model_name)
+            if existing_group is not None:
+                raise ValueError(
+                    f"llm.throttle_groups model {model_name!r} appears in both "
+                    f"{existing_group!r} and {group_name!r}."
+                )
+            seen_throttle_models[model_name] = group_name
     if config.translation.risk_threshold_high < 0 or config.translation.risk_threshold_high > 1:
         raise ValueError("translation.risk_threshold_high must be in [0.0, 1.0].")
     if config.events.persistence_mode not in {"normal", "reduced"}:

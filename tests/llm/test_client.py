@@ -113,6 +113,82 @@ def test_generate_text_reuses_openai_client_and_keeps_requests_stateless(monkeyp
     assert client.openai_request_count == 2
 
 
+def test_generate_text_forwards_max_tokens_when_set(monkeypatch) -> None:
+    built: list[_FakeOpenAIClient] = []
+
+    def build_client(self: LLMClient) -> _FakeOpenAIClient:  # noqa: ARG001
+        client = _FakeOpenAIClient()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(LLMClient, "_build_openai_client", build_client)
+    client = LLMClient(base_url="http://local", timeout_seconds=30)
+
+    assert client.generate_text(model_name="model-a", prompt="first", max_tokens=64) == "ok"
+    assert client.generate_text(model_name="model-a", prompt="second") == "ok"
+
+    calls = built[0].completions.calls
+    assert calls[0]["max_tokens"] == 64
+    assert "max_tokens" not in calls[1]
+
+
+def test_generate_text_adds_system_prompt_for_grouped_model(monkeypatch) -> None:
+    built: list[_FakeOpenAIClient] = []
+
+    def build_client(self: LLMClient) -> _FakeOpenAIClient:  # noqa: ARG001
+        client = _FakeOpenAIClient()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(LLMClient, "_build_openai_client", build_client)
+    client = LLMClient(
+        base_url="http://local",
+        timeout_seconds=30,
+        throttle_groups={
+            "qwen": {
+                "model_names": ["qwen-thinking"],
+                "max_concurrent_requests": 1,
+                "system_prompt": "Qwen system",
+            },
+        },
+    )
+
+    assert client.generate_text(model_name="qwen-thinking", prompt="user prompt") == "ok"
+
+    assert built[0].completions.calls[0]["messages"] == [
+        {"role": "system", "content": "Qwen system"},
+        {"role": "user", "content": "user prompt"},
+    ]
+
+
+def test_generate_text_ungrouped_model_keeps_user_only_request(monkeypatch) -> None:
+    built: list[_FakeOpenAIClient] = []
+
+    def build_client(self: LLMClient) -> _FakeOpenAIClient:  # noqa: ARG001
+        client = _FakeOpenAIClient()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(LLMClient, "_build_openai_client", build_client)
+    client = LLMClient(
+        base_url="http://local",
+        timeout_seconds=30,
+        throttle_groups={
+            "qwen": {
+                "model_names": ["qwen-thinking"],
+                "max_concurrent_requests": 1,
+                "system_prompt": "Qwen system",
+            },
+        },
+    )
+
+    assert client.generate_text(model_name="other-model", prompt="user prompt") == "ok"
+
+    assert built[0].completions.calls[0]["messages"] == [
+        {"role": "user", "content": "user prompt"},
+    ]
+
+
 def test_generation_hook_bypasses_openai_client(monkeypatch) -> None:
     def fail_build(self: LLMClient) -> None:  # noqa: ARG001
         raise AssertionError("OpenAI client should not be built")
@@ -239,6 +315,32 @@ def test_different_models_have_independent_concurrency_keys() -> None:
 
     assert results == ["ok", "ok"]
     assert openai_client.completions.max_active_total == 2
+
+
+def test_throttle_group_serializes_different_model_names() -> None:
+    openai_client = _ConcurrentOpenAIClient()
+    client = LLMClient(
+        base_url="http://local",
+        timeout_seconds=30,
+        max_concurrent_requests_per_model=4,
+        throttle_groups={
+            "qwen": {
+                "model_names": ["qwen-thinking", "qwen-nonthinking"],
+                "max_concurrent_requests": 1,
+            },
+        },
+    )
+    client._openai_client = openai_client
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(client.generate_text, model_name="qwen-thinking", prompt="p"),
+            executor.submit(client.generate_text, model_name="qwen-nonthinking", prompt="p"),
+        ]
+        results = [future.result(timeout=1) for future in futures]
+
+    assert results == ["ok", "ok"]
+    assert openai_client.completions.max_active_total == 1
 
 
 def test_model_semaphore_releases_after_exception() -> None:

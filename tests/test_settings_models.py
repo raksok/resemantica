@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.settings import AppConfig, LLMThrottleGroupConfig, derive_paths, load_config
+
+QWEN_SYSTEM_PROMPT = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
 
 def _config_with_custom_models(**kwargs) -> AppConfig:
@@ -449,6 +451,148 @@ db_filename = "test.db"
         config = load_config(config_path)
 
         assert config.llm.max_concurrent_requests_per_model == 3
+
+    def test_llm_throttle_groups_default_empty(self) -> None:
+        config = AppConfig()
+
+        assert config.llm.throttle_groups == {}
+        assert LLMThrottleGroupConfig().system_prompt == ""
+
+    def test_accepts_llm_throttle_groups(self, tmp_path) -> None:
+        toml_content = """
+[llm]
+max_concurrent_requests_per_model = 2
+
+[llm.throttle_groups.qwen]
+model_names = ["qwen-a", "qwen-b"]
+max_concurrent_requests = 1
+system_prompt = "Qwen system"
+
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.llm.throttle_groups == {
+            "qwen": LLMThrottleGroupConfig(
+                model_names=["qwen-a", "qwen-b"],
+                max_concurrent_requests=1,
+                system_prompt="Qwen system",
+            )
+        }
+
+    def test_checked_in_config_groups_qwen_models_with_system_prompt(self) -> None:
+        config_path = Path(__file__).resolve().parents[1] / "resemantica.toml"
+
+        config = load_config(config_path)
+
+        assert config.llm.throttle_groups["qwen"].model_names == [
+            "Qwen3.5-9B-GLM5.1",
+            "Qwen3.5-9B-NonThinking-unsloth",
+        ]
+        assert config.llm.throttle_groups["qwen"].max_concurrent_requests == 1
+        assert config.llm.throttle_groups["qwen"].system_prompt == QWEN_SYSTEM_PROMPT
+
+    @pytest.mark.parametrize(
+        ("group_body", "match"),
+        [
+            (
+                """
+model_names = []
+max_concurrent_requests = 1
+""",
+                "model_names",
+            ),
+            (
+                """
+model_names = ["qwen-a"]
+max_concurrent_requests = 0
+""",
+                "max_concurrent_requests",
+            ),
+            (
+                """
+model_names = ["qwen-a", "qwen-a"]
+max_concurrent_requests = 1
+""",
+                "duplicates",
+            ),
+        ],
+    )
+    def test_rejects_invalid_llm_throttle_group(self, tmp_path, group_body: str, match: str) -> None:
+        toml_content = f"""
+[llm.throttle_groups.qwen]
+{group_body}
+
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match=match):
+            load_config(config_path)
+
+    def test_rejects_duplicate_llm_throttle_group_model_membership(self, tmp_path) -> None:
+        toml_content = """
+[llm.throttle_groups.qwen]
+model_names = ["shared-model"]
+max_concurrent_requests = 1
+
+[llm.throttle_groups.other]
+model_names = ["shared-model"]
+max_concurrent_requests = 1
+
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match="appears in both"):
+            load_config(config_path)
+
+    def test_rejects_non_string_llm_throttle_group_system_prompt(self, tmp_path) -> None:
+        toml_content = """
+[llm.throttle_groups.qwen]
+model_names = ["qwen-a"]
+max_concurrent_requests = 1
+system_prompt = 123
+
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match="llm.throttle_groups.qwen.system_prompt"):
+            load_config(config_path)
 
     def test_rejects_invalid_llm_per_model_concurrency(self, tmp_path) -> None:
         toml_content = """
