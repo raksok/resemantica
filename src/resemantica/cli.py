@@ -939,7 +939,9 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
+                    stop_token=stop_token,
                 ),
+                stop_token=stop_token,
                 verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if result is _INTERRUPTED_STOP:
@@ -1026,7 +1028,9 @@ def main(argv: list[str] | None = None) -> int:
                     release_id=args.release,
                     run_id=args.run,
                     config=config,
+                    stop_token=stop_token,
                 ),
+                stop_token=stop_token,
                 verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if result is _INTERRUPTED_STOP:

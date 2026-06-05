@@ -55,7 +55,7 @@ Failure events use `severity = "error"` and include `phase`, `error`, and a huma
 
 ## Stop Boundary
 
-`StopRequested` remains separate from failure handling. Review/promote failure events are for unexpected exceptions; stop handling remains owned by the current CLI/orchestration stop path.
+`StopRequested` remains separate from failure handling. Review/promote failure events are for unexpected exceptions. Glossary and idiom review/promote commands use the shared `StopToken` path and poll at review-file, validation, durable-write, and artifact-write boundaries. Graceful stops do not emit `.failed`.
 
 ## Validation
 

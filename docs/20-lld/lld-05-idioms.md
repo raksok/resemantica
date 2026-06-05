@@ -94,11 +94,15 @@ Production gates also generate `review.json` and `review.csv` automatically when
 
 The command emits `preprocess-idioms.review.started`, one `review.*.artifact_written` event for each generated review file, and `preprocess-idioms.review.completed`. Unexpected generation errors emit `preprocess-idioms.review.failed` with `severity = "error"`, `phase`, and `error`.
 
+Ctrl+C uses the shared `StopToken` path. Review checks for graceful stop before generation, after candidate/vote load, before writing `review.json`, after writing `review.json`, and after writing `review.csv`.
+
 ### `idiom-promote --review-file`
 
 If `--review-file` is provided, the command applies user edits from either `review.json` or `review.csv`, then runs standard validation + promotion.
 
 Promotion emits `preprocess-idioms.promote.started`, artifact events for candidate, policy, and conflict snapshots, and `preprocess-idioms.promote.completed` with promotion/conflict counts. Unexpected promotion errors emit `preprocess-idioms.promote.failed` with `severity = "error"`, `phase`, and `error`.
+
+Promotion checks for graceful stop around review-file reads, review overrides, validation, policy writes, and promotion snapshot writes. Graceful stops raise `StopRequested` and do not emit `preprocess-idioms.promote.failed`.
 
 ## Cross-Chapter Deduplication
 

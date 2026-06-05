@@ -518,8 +518,10 @@ class TestCliDispatch:
 
     def test_glossary_review_prints_json_and_csv_paths(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
+        captured = {}
 
         def fake_review(**kwargs):
+            captured["review_stop_token"] = kwargs.get("stop_token")
             return {
                 "status": "success",
                 "entries_written": 2,
@@ -528,7 +530,11 @@ class TestCliDispatch:
                 "review_csv_path": "artifacts/releases/r1/glossary/review.csv",
             }
 
-        monkeypatch.setattr(cli_mod, "_with_cli_progress", lambda fn, **kwargs: fn())
+        def fake_progress(fn, **kwargs):
+            captured["progress_stop_token"] = kwargs.get("stop_token")
+            return fn()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", fake_progress)
         monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
         monkeypatch.setattr("resemantica.glossary.pipeline.review_glossary_candidates", fake_review)
 
@@ -538,11 +544,15 @@ class TestCliDispatch:
         assert result == 0
         assert "review_json_path=artifacts/releases/r1/glossary/review.json" in out
         assert "review_csv_path=artifacts/releases/r1/glossary/review.csv" in out
+        assert captured["progress_stop_token"] is not None
+        assert captured["review_stop_token"] is captured["progress_stop_token"]
 
     def test_idiom_review_prints_json_and_csv_paths(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
+        captured = {}
 
         def fake_review(**kwargs):
+            captured["review_stop_token"] = kwargs.get("stop_token")
             return {
                 "status": "success",
                 "entries_written": 2,
@@ -551,7 +561,11 @@ class TestCliDispatch:
                 "review_csv_path": "artifacts/releases/r1/idioms/review.csv",
             }
 
-        monkeypatch.setattr(cli_mod, "_with_cli_progress", lambda fn, **kwargs: fn())
+        def fake_progress(fn, **kwargs):
+            captured["progress_stop_token"] = kwargs.get("stop_token")
+            return fn()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", fake_progress)
         monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
         monkeypatch.setattr("resemantica.idioms.pipeline.review_idiom_candidates", fake_review)
 
@@ -561,6 +575,8 @@ class TestCliDispatch:
         assert result == 0
         assert "review_json_path=artifacts/releases/r1/idioms/review.json" in out
         assert "review_csv_path=artifacts/releases/r1/idioms/review.csv" in out
+        assert captured["progress_stop_token"] is not None
+        assert captured["review_stop_token"] is captured["progress_stop_token"]
 
     def test_main_forwards_chapter_scope_to_stage_commands(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

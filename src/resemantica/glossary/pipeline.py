@@ -1621,8 +1621,18 @@ def promote_glossary_candidates(
             if not review_file_path.exists():
                 raise FileNotFoundError(f"Review file not found: {review_file_path}")
             review_data = _read_review_data(review_file_path)
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"phase": "review_file_loaded"},
+                message="Glossary promotion stopped after reading review file",
+            )
             promotable_candidates = _apply_review_overrides(
                 conn, release_id=release_id, review_data=review_data
+            )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"phase": "review_overrides_applied"},
+                message="Glossary promotion stopped after applying review overrides",
             )
         else:
             phase = "load_candidates"
@@ -1635,13 +1645,32 @@ def promote_glossary_candidates(
                 if force
                 else list_candidates_for_promotion(conn, release_id=release_id)
             )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"phase": "candidates_loaded"},
+                message="Glossary promotion stopped after loading candidates",
+            )
 
         phase = "validation"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "validation_pending"},
+            message="Glossary promotion stopped before validation",
+        )
         existing_entries = list_locked_entries(conn, release_id=release_id)
         promotion_entries, conflicts = validate_candidates_for_promotion(
             candidates=promotable_candidates,
             existing_entries=existing_entries,
             approval_run_id=run_id,
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "validation_completed",
+                "candidate_count": len(promotable_candidates),
+                "conflict_count": len(conflicts),
+            },
+            message="Glossary promotion stopped after validation",
         )
 
         # Wipe old conflicts for all candidates — only current results appear
@@ -1666,11 +1695,34 @@ def promote_glossary_candidates(
             for entry in promotion_entries
             if entry.source_candidate_id not in reasons_by_candidate
         ]
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "promotion_pending",
+                "promoted_count": len(promotable_without_conflicts),
+                "conflict_count": len(conflicts),
+            },
+            message="Glossary promotion stopped before writing locked glossary",
+        )
         promote_locked_entries(conn, entries=promotable_without_conflicts)
         for entry in promotable_without_conflicts:
             mark_candidate_promoted(conn, candidate_id=entry.source_candidate_id)
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "promotion_written",
+                "promoted_count": len(promotable_without_conflicts),
+                "conflict_count": len(conflicts),
+            },
+            message="Glossary promotion stopped after writing locked glossary",
+        )
 
         phase = "write_candidates_snapshot"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_snapshot_pending"},
+            message="Glossary promotion stopped before candidate snapshot",
+        )
         candidate_snapshot_count = _write_candidate_snapshot(
             conn,
             release_id=release_id,
@@ -1685,6 +1737,14 @@ def promote_glossary_candidates(
             candidate_count=candidate_snapshot_count,
         )
         phase = "write_conflicts_snapshot"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "candidates_snapshot_written",
+                "candidates_artifact": str(paths.glossary_candidates_path),
+            },
+            message="Glossary promotion stopped after candidate snapshot",
+        )
         conflict_snapshot_count = _write_conflict_snapshot(
             conn,
             release_id=release_id,
@@ -1697,6 +1757,15 @@ def promote_glossary_candidates(
             artifact_path=str(paths.glossary_conflicts_path),
             artifact_format="json",
             conflict_count=conflict_snapshot_count,
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "conflicts_snapshot_written",
+                "candidates_artifact": str(paths.glossary_candidates_path),
+                "conflicts_artifact": str(paths.glossary_conflicts_path),
+            },
+            message="Glossary promotion stopped after conflict snapshot",
         )
         _emit(
             run_id,
@@ -1945,12 +2014,18 @@ def review_glossary_candidates(
     run_id: str,
     config: AppConfig | None = None,
     project_root: Path | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     phase = "load_candidates"
 
     try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"review_completed": False},
+            message="Glossary review stopped before starting",
+        )
         _emit(run_id, release_id, f"{_STAGE_NAME}.review.started")
         conn = open_connection(paths.db_path)
         ensure_schema(conn, "glossary")
@@ -1959,6 +2034,11 @@ def review_glossary_candidates(
             votes = list_translation_votes(conn, release_id=release_id)
         finally:
             conn.close()
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_loaded", "candidate_count": len(candidates)},
+            message="Glossary review stopped after loading candidates",
+        )
 
         phase = "build_review"
         model_order = {
@@ -2004,6 +2084,11 @@ def review_glossary_candidates(
         }
         review_csv_path = paths.glossary_review_path.with_suffix(".csv")
         phase = "write_review_json"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "review_json_pending", "entries_written": len(entries)},
+            message="Glossary review stopped before writing review JSON",
+        )
         _write_json(paths.glossary_review_path, review_data)
         _emit(
             run_id,
@@ -2014,6 +2099,15 @@ def review_glossary_candidates(
             entries_written=len(entries),
         )
         phase = "write_review_csv"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "review_json_written",
+                "entries_written": len(entries),
+                "review_json_path": str(paths.glossary_review_path),
+            },
+            message="Glossary review stopped after writing review JSON",
+        )
         _write_review_csv(review_csv_path, entries)
         _emit(
             run_id,
@@ -2022,6 +2116,16 @@ def review_glossary_candidates(
             artifact_path=str(review_csv_path),
             artifact_format="tsv",
             entries_written=len(entries),
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "review_csv_written",
+                "entries_written": len(entries),
+                "review_json_path": str(paths.glossary_review_path),
+                "review_csv_path": str(review_csv_path),
+            },
+            message="Glossary review stopped after writing review CSV",
         )
         _emit(
             run_id,
@@ -2042,6 +2146,8 @@ def review_glossary_candidates(
             "review_json_path": str(paths.glossary_review_path),
             "review_csv_path": str(review_csv_path),
         }
+    except StopRequested:
+        raise
     except Exception as exc:
         _emit(
             run_id,

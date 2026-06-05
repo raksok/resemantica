@@ -173,6 +173,8 @@ Production gates also generate these two files automatically when unresolved glo
 
 The command emits `preprocess-glossary.review.started`, one `review.*.artifact_written` event for each generated review file, and `preprocess-glossary.review.completed`. Unexpected generation errors emit `preprocess-glossary.review.failed` with `severity = "error"`, `phase`, and `error`.
 
+Ctrl+C uses the shared `StopToken` path. Review checks for graceful stop before generation, after candidate/vote load, before writing `review.json`, after writing `review.json`, and after writing `review.csv`.
+
 ### `glossary-promote --review-file`
 
 If `--review-file` is provided, the command:
@@ -185,6 +187,8 @@ If `--review-file` is provided, the command:
 Without `--review-file`, behavior is identical to the original MVP flow.
 
 Promotion emits `preprocess-glossary.promote.started`, artifact events for the candidate and conflict snapshots, and `preprocess-glossary.promote.completed` with promotion/conflict counts. Unexpected promotion errors emit `preprocess-glossary.promote.failed` with `severity = "error"`, `phase`, and `error`.
+
+Promotion checks for graceful stop around review-file reads, review overrides, validation, locked-glossary writes, and promotion snapshot writes. Graceful stops raise `StopRequested` and do not emit `preprocess-glossary.promote.failed`.
 
 ## Validation Ownership
 

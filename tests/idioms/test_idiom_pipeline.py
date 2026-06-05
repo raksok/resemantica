@@ -1141,6 +1141,36 @@ def test_idiom_review_failure_emits_failed_event(tmp_path: Path, monkeypatch) ->
     assert failed.payload["error"] == "write exploded"
 
 
+def test_idiom_review_stop_requested_does_not_emit_failed_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m64-idiom-review-stop"
+    _insert_idiom_candidate(release_id=release_id)
+    from resemantica.orchestration.events import subscribe, unsubscribe
+    from resemantica.orchestration.stop import StopRequested, StopToken
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "review-stop":
+            received.append(event)
+
+    token = StopToken()
+    token.request_stop()
+    subscribe("*", callback)
+    try:
+        with pytest.raises(StopRequested):
+            review_idiom_candidates(
+                release_id=release_id,
+                run_id="review-stop",
+                stop_token=token,
+            )
+    finally:
+        unsubscribe("*", callback)
+
+    assert all(event.event_type != "preprocess-idioms.review.failed" for event in received)
+    assert not derive_paths(load_config(), release_id=release_id).idiom_review_path.exists()
+
+
 def test_idiom_promote_failure_emits_failed_event(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "m63-idiom-promote-failed"
@@ -1169,6 +1199,44 @@ def test_idiom_promote_failure_emits_failed_event(tmp_path: Path, monkeypatch) -
     assert failed.severity == "error"
     assert failed.payload["phase"] == "review_file"
     assert "Review file not found" in failed.payload["error"]
+
+
+def test_idiom_promote_stop_requested_does_not_emit_failed_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m64-idiom-promote-stop"
+    review_path = tmp_path / "review.json"
+    review_path.write_text('{"review_schema_version": 1, "entries": []}', encoding="utf-8")
+    from resemantica.orchestration.events import subscribe, unsubscribe
+    from resemantica.orchestration.stop import StopRequested, StopToken
+
+    token = StopToken()
+
+    def request_stop(path: Path):
+        token.request_stop()
+        return {"review_schema_version": 1, "entries": []}
+
+    monkeypatch.setattr("resemantica.idioms.pipeline._read_idiom_review_data", request_stop)
+    received = []
+
+    def callback(event):
+        if event.run_id == "promote-stop":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        with pytest.raises(StopRequested):
+            promote_idiom_candidates(
+                release_id=release_id,
+                run_id="promote-stop",
+                review_file_path=review_path,
+                stop_token=token,
+            )
+    finally:
+        unsubscribe("*", callback)
+
+    event_types = [event.event_type for event in received]
+    assert "preprocess-idioms.promote.started" in event_types
+    assert "preprocess-idioms.promote.failed" not in event_types
 
 
 def test_promote_idiom_csv_empty_is_noop(tmp_path: Path, monkeypatch) -> None:

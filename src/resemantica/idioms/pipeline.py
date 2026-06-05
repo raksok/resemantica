@@ -1108,12 +1108,18 @@ def review_idiom_candidates(
     run_id: str,
     config: AppConfig | None = None,
     project_root: Path | None = None,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
     phase = "load_candidates"
 
     try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"review_completed": False},
+            message="Idiom review stopped before starting",
+        )
         _emit(run_id, release_id, f"{_STAGE_NAME}.review.started")
         conn = open_connection(paths.db_path)
         ensure_schema(conn, "idioms")
@@ -1122,6 +1128,11 @@ def review_idiom_candidates(
             votes = list_translation_votes(conn, release_id=release_id)
         finally:
             conn.close()
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_loaded", "candidate_count": len(candidates)},
+            message="Idiom review stopped after loading candidates",
+        )
 
         phase = "build_review"
         model_order = {
@@ -1174,6 +1185,11 @@ def review_idiom_candidates(
         }
         review_csv_path = paths.idiom_review_path.with_suffix(".csv")
         phase = "write_review_json"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "review_json_pending", "entries_written": len(entries)},
+            message="Idiom review stopped before writing review JSON",
+        )
         _write_json(paths.idiom_review_path, review_data)
         _emit(
             run_id,
@@ -1184,6 +1200,15 @@ def review_idiom_candidates(
             entries_written=len(entries),
         )
         phase = "write_review_csv"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "review_json_written",
+                "entries_written": len(entries),
+                "review_json_path": str(paths.idiom_review_path),
+            },
+            message="Idiom review stopped after writing review JSON",
+        )
         _write_idiom_review_csv(review_csv_path, entries)
         _emit(
             run_id,
@@ -1192,6 +1217,16 @@ def review_idiom_candidates(
             artifact_path=str(review_csv_path),
             artifact_format="tsv",
             entries_written=len(entries),
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "review_csv_written",
+                "entries_written": len(entries),
+                "review_json_path": str(paths.idiom_review_path),
+                "review_csv_path": str(review_csv_path),
+            },
+            message="Idiom review stopped after writing review CSV",
         )
         _emit(
             run_id,
@@ -1211,6 +1246,8 @@ def review_idiom_candidates(
             "review_json_path": str(paths.idiom_review_path),
             "review_csv_path": str(review_csv_path),
         }
+    except StopRequested:
+        raise
     except Exception as exc:
         _emit(
             run_id,
@@ -1252,19 +1289,57 @@ def promote_idiom_candidates(
             if not review_file_path.exists():
                 raise FileNotFoundError(f"Review file not found: {review_file_path}")
             review_data = _read_idiom_review_data(review_file_path)
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"phase": "review_file_loaded"},
+                message="Idiom promotion stopped after reading review file",
+            )
             pending_candidates = _apply_idiom_review_overrides(
                 conn, release_id=release_id, review_data=review_data
+            )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"phase": "review_overrides_applied"},
+                message="Idiom promotion stopped after applying review overrides",
             )
         else:
             phase = "load_candidates"
             pending_candidates = list_candidates_for_promotion(conn, release_id=release_id)
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={"phase": "candidates_loaded"},
+                message="Idiom promotion stopped after loading candidates",
+            )
 
         phase = "validation"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "validation_pending"},
+            message="Idiom promotion stopped before validation",
+        )
         existing_policies = list_policies(conn, release_id=release_id)
         validation = validate_idiom_policy(
             candidates=pending_candidates,
             existing_policies=existing_policies,
             approval_run_id=run_id,
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "validation_completed",
+                "candidate_count": len(pending_candidates),
+                "conflict_count": len(validation.conflicts),
+            },
+            message="Idiom promotion stopped after validation",
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "promotion_pending",
+                "promoted_count": len(validation.promotion_entries),
+                "conflict_count": len(validation.conflicts),
+            },
+            message="Idiom promotion stopped before writing policies",
         )
 
         # Wipe old conflicts for all candidates — only current results appear
@@ -1288,8 +1363,22 @@ def promote_idiom_candidates(
             if candidate_id in reasons_by_candidate:
                 continue
             mark_candidate_promoted(conn, candidate_id=candidate_id)
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "promotion_written",
+                "promoted_count": len(validation.promotion_entries),
+                "conflict_count": len(validation.conflicts),
+            },
+            message="Idiom promotion stopped after writing policies",
+        )
 
         phase = "write_candidates_snapshot"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_snapshot_pending"},
+            message="Idiom promotion stopped before candidate snapshot",
+        )
         candidate_snapshot_count = _write_candidate_snapshot(
             conn,
             release_id=release_id,
@@ -1304,6 +1393,14 @@ def promote_idiom_candidates(
             candidate_count=candidate_snapshot_count,
         )
         phase = "write_policies_snapshot"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "candidates_snapshot_written",
+                "candidates_artifact": str(paths.idiom_candidates_path),
+            },
+            message="Idiom promotion stopped after candidate snapshot",
+        )
         policy_snapshot_count = _write_policy_snapshot(
             conn,
             release_id=release_id,
@@ -1318,6 +1415,15 @@ def promote_idiom_candidates(
             policy_count=policy_snapshot_count,
         )
         phase = "write_conflicts_snapshot"
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "policies_snapshot_written",
+                "candidates_artifact": str(paths.idiom_candidates_path),
+                "policies_artifact": str(paths.idiom_policies_path),
+            },
+            message="Idiom promotion stopped after policy snapshot",
+        )
         conflict_snapshot_count = _write_conflict_snapshot(
             conn,
             release_id=release_id,
@@ -1330,6 +1436,16 @@ def promote_idiom_candidates(
             artifact_path=str(paths.idiom_conflicts_path),
             artifact_format="json",
             conflict_count=conflict_snapshot_count,
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={
+                "phase": "conflicts_snapshot_written",
+                "candidates_artifact": str(paths.idiom_candidates_path),
+                "policies_artifact": str(paths.idiom_policies_path),
+                "conflicts_artifact": str(paths.idiom_conflicts_path),
+            },
+            message="Idiom promotion stopped after conflict snapshot",
         )
         _emit(
             run_id,

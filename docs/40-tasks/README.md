@@ -81,3 +81,4 @@ Always follow the milestone sequence below.
 | M61 | task-61 | M60 | Qwen Throttle Groups And System Prompt |
 | M62 | task-62 | M61 | KV-Cache Prompt Prefix Optimization |
 | M63 | task-63 | M62 | Review/Promote Event Coverage |
+| M64 | task-64 | M63 | Review/Promote Interrupt Coverage |
