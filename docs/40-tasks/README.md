@@ -80,3 +80,4 @@ Always follow the milestone sequence below.
 | M60 | task-60 | M59 | Glossary Scoring Progress |
 | M61 | task-61 | M60 | Qwen Throttle Groups And System Prompt |
 | M62 | task-62 | M61 | KV-Cache Prompt Prefix Optimization |
+| M63 | task-63 | M62 | Review/Promote Event Coverage |

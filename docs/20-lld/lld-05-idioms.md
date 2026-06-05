@@ -92,9 +92,13 @@ action	source_text	meaning_zh	meaning_en	rendering	candidate_id	evidence_snippet
 
 Production gates also generate `review.json` and `review.csv` automatically when unresolved idiom rendering votes block a downstream stage. The files remain human-editable inputs; promotion still requires an explicit `idiom-promote --review-file` run.
 
+The command emits `preprocess-idioms.review.started`, one `review.*.artifact_written` event for each generated review file, and `preprocess-idioms.review.completed`. Unexpected generation errors emit `preprocess-idioms.review.failed` with `severity = "error"`, `phase`, and `error`.
+
 ### `idiom-promote --review-file`
 
 If `--review-file` is provided, the command applies user edits from either `review.json` or `review.csv`, then runs standard validation + promotion.
+
+Promotion emits `preprocess-idioms.promote.started`, artifact events for candidate, policy, and conflict snapshots, and `preprocess-idioms.promote.completed` with promotion/conflict counts. Unexpected promotion errors emit `preprocess-idioms.promote.failed` with `severity = "error"`, `phase`, and `error`.
 
 ## Cross-Chapter Deduplication
 

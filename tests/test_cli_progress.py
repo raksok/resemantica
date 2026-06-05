@@ -105,6 +105,26 @@ def test_cli_progress_counts_warnings_and_skips() -> None:
     assert subscriber.skip_count == 1
 
 
+def test_cli_progress_counts_review_promote_artifacts() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
+
+    for event_type in (
+        "preprocess-glossary.review.json.artifact_written",
+        "preprocess-glossary.review.csv.artifact_written",
+        "preprocess-idioms.promote.policies.artifact_written",
+    ):
+        subscriber._on_event(
+            Event(
+                event_type=event_type,
+                run_id="run",
+                release_id="rel",
+                stage_name="preprocess",
+            )
+        )
+
+    assert subscriber.artifact_count == 3
+
+
 def test_cli_progress_completes_indeterminate_task() -> None:
     subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
 

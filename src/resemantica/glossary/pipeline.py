@@ -176,7 +176,7 @@ def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) 
     return len(candidates)
 
 
-def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
+def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -> int:
     conflicts = [conflict.to_json_dict() for conflict in list_conflicts(conn, release_id=release_id)]
     _write_json(
         output_path,
@@ -186,6 +186,7 @@ def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -
             "conflicts": conflicts,
         },
     )
+    return len(conflicts)
 
 
 def discover_glossary_candidates(
@@ -1605,6 +1606,7 @@ def promote_glossary_candidates(
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "glossary")
+    phase = "start"
     try:
         raise_if_stop_requested(
             stop_token,
@@ -1615,6 +1617,7 @@ def promote_glossary_candidates(
         logger.info("Promotion phase started")
 
         if review_file_path is not None:
+            phase = "review_file"
             if not review_file_path.exists():
                 raise FileNotFoundError(f"Review file not found: {review_file_path}")
             review_data = _read_review_data(review_file_path)
@@ -1622,6 +1625,7 @@ def promote_glossary_candidates(
                 conn, release_id=release_id, review_data=review_data
             )
         else:
+            phase = "load_candidates"
             promotable_candidates = (
                 [
                     candidate
@@ -1632,6 +1636,7 @@ def promote_glossary_candidates(
                 else list_candidates_for_promotion(conn, release_id=release_id)
             )
 
+        phase = "validation"
         existing_entries = list_locked_entries(conn, release_id=release_id)
         promotion_entries, conflicts = validate_candidates_for_promotion(
             candidates=promotable_candidates,
@@ -1665,12 +1670,22 @@ def promote_glossary_candidates(
         for entry in promotable_without_conflicts:
             mark_candidate_promoted(conn, candidate_id=entry.source_candidate_id)
 
-        _write_candidate_snapshot(
+        phase = "write_candidates_snapshot"
+        candidate_snapshot_count = _write_candidate_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.glossary_candidates_path,
         )
-        _write_conflict_snapshot(
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.promote.candidates.artifact_written",
+            artifact_path=str(paths.glossary_candidates_path),
+            artifact_format="json",
+            candidate_count=candidate_snapshot_count,
+        )
+        phase = "write_conflicts_snapshot"
+        conflict_snapshot_count = _write_conflict_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.glossary_conflicts_path,
@@ -1678,8 +1693,17 @@ def promote_glossary_candidates(
         _emit(
             run_id,
             release_id,
+            f"{_STAGE_NAME}.promote.conflicts.artifact_written",
+            artifact_path=str(paths.glossary_conflicts_path),
+            artifact_format="json",
+            conflict_count=conflict_snapshot_count,
+        )
+        _emit(
+            run_id,
+            release_id,
             f"{_STAGE_NAME}.promote.completed",
             promoted_count=len(promotable_without_conflicts),
+            conflict_count=len(conflicts),
             **(llm_usage_payload or {}),
         )
         logger.info(
@@ -1703,6 +1727,19 @@ def promote_glossary_candidates(
             promoted=len(promotable_without_conflicts),
             **(llm_usage_payload or {}),
         )
+    except StopRequested:
+        raise
+    except Exception as exc:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.promote.failed",
+            severity="error",
+            phase=phase,
+            error=str(exc),
+            message=f"Glossary promotion failed during {phase}: {exc}",
+        )
+        raise
     finally:
         conn.close()
 
@@ -1911,76 +1948,111 @@ def review_glossary_candidates(
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    phase = "load_candidates"
 
-    conn = open_connection(paths.db_path)
-    ensure_schema(conn, "glossary")
     try:
-        candidates = list_candidates_for_review(conn, release_id=release_id)
-        votes = list_translation_votes(conn, release_id=release_id)
-    finally:
-        conn.close()
+        _emit(run_id, release_id, f"{_STAGE_NAME}.review.started")
+        conn = open_connection(paths.db_path)
+        ensure_schema(conn, "glossary")
+        try:
+            candidates = list_candidates_for_review(conn, release_id=release_id)
+            votes = list_translation_votes(conn, release_id=release_id)
+        finally:
+            conn.close()
 
-    model_order = {
-        model_name: index
-        for index, model_name in enumerate(config_obj.models.effective_preprocess_translator_names())
-    }
-    votes_by_candidate: dict[str, list[Any]] = {}
-    for vote in votes:
-        votes_by_candidate.setdefault(vote.candidate_id, []).append(vote)
-    for candidate_votes in votes_by_candidate.values():
-        candidate_votes.sort(key=lambda vote: model_order.get(vote.model_name, len(model_order)))
-
-    entries = [
-        {
-            "candidate_id": c.candidate_id,
-            "source_term": c.source_term,
-            "category": c.category,
-            "translation": c.candidate_translation_en or "",
-            "evidence_snippet": c.evidence_snippet,
-            "alternatives": [
-                {
-                    "model_name": vote.model_name,
-                    "translation": vote.cleaned_output,
-                    "resolution_status": vote.resolution_status,
-                }
-                for vote in votes_by_candidate.get(c.candidate_id, [])
-            ],
-            "action": "keep",
+        phase = "build_review"
+        model_order = {
+            model_name: index
+            for index, model_name in enumerate(config_obj.models.effective_preprocess_translator_names())
         }
-        for c in candidates
-    ]
-    review_data = {
-        "review_schema_version": 1,
-        "release_id": release_id,
-        "generated_at": datetime.now(UTC).isoformat(),
-        "instructions": (
-            "Edit 'translation' to override a term's English rendering. "
-            "Set 'action' to 'delete' to remove an entry. "
-            "Add new entries with 'action': 'add' "
-            "(omit candidate_id, provide source_term, category, translation, evidence_snippet)."
-        ),
-        "entries": entries,
-    }
-    _write_json(paths.glossary_review_path, review_data)
-    _write_review_csv(paths.glossary_review_path.with_suffix(".csv"), entries)
-    _emit(
-        run_id,
-        release_id,
-        f"{_STAGE_NAME}.review.completed",
-        entries_written=len(entries),
-        review_path=str(paths.glossary_review_path),
-    )
-    logger.info("Review file written: {} entries -> {}", len(entries), paths.glossary_review_path)
-    review_csv_path = paths.glossary_review_path.with_suffix(".csv")
-    return {
-        "status": "success",
-        "release_id": release_id,
-        "run_id": run_id,
-        "entries_written": len(entries),
-        "review_path": str(paths.glossary_review_path),
-        "review_json_path": str(paths.glossary_review_path),
-        "review_csv_path": str(review_csv_path),
-    }
+        votes_by_candidate: dict[str, list[Any]] = {}
+        for vote in votes:
+            votes_by_candidate.setdefault(vote.candidate_id, []).append(vote)
+        for candidate_votes in votes_by_candidate.values():
+            candidate_votes.sort(key=lambda vote: model_order.get(vote.model_name, len(model_order)))
+
+        entries = [
+            {
+                "candidate_id": c.candidate_id,
+                "source_term": c.source_term,
+                "category": c.category,
+                "translation": c.candidate_translation_en or "",
+                "evidence_snippet": c.evidence_snippet,
+                "alternatives": [
+                    {
+                        "model_name": vote.model_name,
+                        "translation": vote.cleaned_output,
+                        "resolution_status": vote.resolution_status,
+                    }
+                    for vote in votes_by_candidate.get(c.candidate_id, [])
+                ],
+                "action": "keep",
+            }
+            for c in candidates
+        ]
+        review_data = {
+            "review_schema_version": 1,
+            "release_id": release_id,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "instructions": (
+                "Edit 'translation' to override a term's English rendering. "
+                "Set 'action' to 'delete' to remove an entry. "
+                "Add new entries with 'action': 'add' "
+                "(omit candidate_id, provide source_term, category, translation, evidence_snippet)."
+            ),
+            "entries": entries,
+        }
+        review_csv_path = paths.glossary_review_path.with_suffix(".csv")
+        phase = "write_review_json"
+        _write_json(paths.glossary_review_path, review_data)
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.json.artifact_written",
+            artifact_path=str(paths.glossary_review_path),
+            artifact_format="json",
+            entries_written=len(entries),
+        )
+        phase = "write_review_csv"
+        _write_review_csv(review_csv_path, entries)
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.csv.artifact_written",
+            artifact_path=str(review_csv_path),
+            artifact_format="tsv",
+            entries_written=len(entries),
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.completed",
+            entries_written=len(entries),
+            review_path=str(paths.glossary_review_path),
+            review_json_path=str(paths.glossary_review_path),
+            review_csv_path=str(review_csv_path),
+        )
+        logger.info("Review file written: {} entries -> {}", len(entries), paths.glossary_review_path)
+        return {
+            "status": "success",
+            "release_id": release_id,
+            "run_id": run_id,
+            "entries_written": len(entries),
+            "review_path": str(paths.glossary_review_path),
+            "review_json_path": str(paths.glossary_review_path),
+            "review_csv_path": str(review_csv_path),
+        }
+    except Exception as exc:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.failed",
+            severity="error",
+            phase=phase,
+            error=str(exc),
+            message=f"Glossary review failed during {phase}: {exc}",
+        )
+        raise
 
 
 def resolve_locked_glossary_term(

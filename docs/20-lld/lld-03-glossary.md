@@ -171,6 +171,8 @@ Supported user actions:
 
 Production gates also generate these two files automatically when unresolved glossary votes block a downstream stage. The files remain human-editable inputs; promotion still requires an explicit `glossary-promote --review-file` run.
 
+The command emits `preprocess-glossary.review.started`, one `review.*.artifact_written` event for each generated review file, and `preprocess-glossary.review.completed`. Unexpected generation errors emit `preprocess-glossary.review.failed` with `severity = "error"`, `phase`, and `error`.
+
 ### `glossary-promote --review-file`
 
 If `--review-file` is provided, the command:
@@ -181,6 +183,8 @@ If `--review-file` is provided, the command:
 5. Runs existing deterministic validation + promotion unchanged
 
 Without `--review-file`, behavior is identical to the original MVP flow.
+
+Promotion emits `preprocess-glossary.promote.started`, artifact events for the candidate and conflict snapshots, and `preprocess-glossary.promote.completed` with promotion/conflict counts. Unexpected promotion errors emit `preprocess-glossary.promote.failed` with `severity = "error"`, `phase`, and `error`.
 
 ## Validation Ownership
 

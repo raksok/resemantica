@@ -42,7 +42,7 @@ from resemantica.idioms.models import IdiomCandidate
 from resemantica.idioms.validators import normalize_idiom_source, validate_idiom_policy
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt, render_named_sections
-from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
+from resemantica.orchestration.stop import StopRequested, StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.utils import _build_llm_client, _write_json
 from resemantica.utils import _emit as _emit_shared
@@ -56,7 +56,7 @@ def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> No
     _emit_shared(run_id, release_id, event_type, stage_name=_STAGE_NAME, **kwargs)
 
 
-def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
+def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) -> int:
     candidates = [candidate.to_json_dict() for candidate in list_candidates(conn, release_id=release_id)]
     _write_json(
         output_path,
@@ -66,9 +66,10 @@ def _write_candidate_snapshot(conn: Any, *, release_id: str, output_path: Path) 
             "candidates": candidates,
         },
     )
+    return len(candidates)
 
 
-def _write_policy_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
+def _write_policy_snapshot(conn: Any, *, release_id: str, output_path: Path) -> int:
     policies = [policy.to_json_dict() for policy in list_policies(conn, release_id=release_id)]
     _write_json(
         output_path,
@@ -78,9 +79,10 @@ def _write_policy_snapshot(conn: Any, *, release_id: str, output_path: Path) -> 
             "policies": policies,
         },
     )
+    return len(policies)
 
 
-def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -> None:
+def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -> int:
     conflicts = [conflict.to_json_dict() for conflict in list_conflicts(conn, release_id=release_id)]
     _write_json(
         output_path,
@@ -90,6 +92,7 @@ def _write_conflict_snapshot(conn: Any, *, release_id: str, output_path: Path) -
             "conflicts": conflicts,
         },
     )
+    return len(conflicts)
 
 
 def _clean_llm_response(text: str) -> str:
@@ -1108,82 +1111,117 @@ def review_idiom_candidates(
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    phase = "load_candidates"
 
-    conn = open_connection(paths.db_path)
-    ensure_schema(conn, "idioms")
     try:
-        candidates = list_candidates_for_review(conn, release_id=release_id)
-        votes = list_translation_votes(conn, release_id=release_id)
-    finally:
-        conn.close()
+        _emit(run_id, release_id, f"{_STAGE_NAME}.review.started")
+        conn = open_connection(paths.db_path)
+        ensure_schema(conn, "idioms")
+        try:
+            candidates = list_candidates_for_review(conn, release_id=release_id)
+            votes = list_translation_votes(conn, release_id=release_id)
+        finally:
+            conn.close()
 
-    model_order = {
-        model_name: index
-        for index, model_name in enumerate(config_obj.models.effective_preprocess_translator_names())
-    }
-    votes_by_candidate: dict[str, list[Any]] = {}
-    for vote in votes:
-        votes_by_candidate.setdefault(vote.candidate_id, []).append(vote)
-    for candidate_votes in votes_by_candidate.values():
-        candidate_votes.sort(
-            key=lambda vote: (
-                vote.vote_kind,
-                model_order.get(vote.model_name, len(model_order)),
-            )
-        )
-
-    entries = [
-        {
-            "candidate_id": c.candidate_id,
-            "source_text": c.source_text,
-            "meaning_zh": c.meaning_zh,
-            "meaning_en": c.meaning_en,
-            "rendering": c.preferred_rendering_en,
-            "evidence_snippet": c.evidence_snippet,
-            "alternatives": [
-                {
-                    "model_name": vote.model_name,
-                    "kind": vote.vote_kind,
-                    "translation": vote.cleaned_output,
-                    "resolution_status": vote.resolution_status,
-                }
-                for vote in votes_by_candidate.get(c.candidate_id, [])
-            ],
-            "action": "keep",
+        phase = "build_review"
+        model_order = {
+            model_name: index
+            for index, model_name in enumerate(config_obj.models.effective_preprocess_translator_names())
         }
-        for c in candidates
-    ]
-    review_data = {
-        "review_schema_version": 1,
-        "release_id": release_id,
-        "generated_at": datetime.now(UTC).isoformat(),
-        "instructions": (
-            "Edit 'rendering' to override an idiom's English translation. "
-            "Set 'action' to 'delete' to remove an entry. "
-            "Add new entries with 'action': 'add' "
-            "(omit candidate_id, provide source_text, meaning_zh, rendering)."
-        ),
-        "entries": entries,
-    }
-    _write_json(paths.idiom_review_path, review_data)
-    _write_idiom_review_csv(paths.idiom_review_path.with_suffix(".csv"), entries)
-    _emit(
-        run_id,
-        release_id,
-        f"{_STAGE_NAME}.review.completed",
-        entries_written=len(entries),
-        review_path=str(paths.idiom_review_path),
-    )
-    review_csv_path = paths.idiom_review_path.with_suffix(".csv")
-    return {
-        "status": "success",
-        "release_id": release_id,
-        "run_id": run_id,
-        "entries_written": len(entries),
-        "review_path": str(paths.idiom_review_path),
-        "review_json_path": str(paths.idiom_review_path),
-        "review_csv_path": str(review_csv_path),
-    }
+        votes_by_candidate: dict[str, list[Any]] = {}
+        for vote in votes:
+            votes_by_candidate.setdefault(vote.candidate_id, []).append(vote)
+        for candidate_votes in votes_by_candidate.values():
+            candidate_votes.sort(
+                key=lambda vote: (
+                    vote.vote_kind,
+                    model_order.get(vote.model_name, len(model_order)),
+                )
+            )
+
+        entries = [
+            {
+                "candidate_id": c.candidate_id,
+                "source_text": c.source_text,
+                "meaning_zh": c.meaning_zh,
+                "meaning_en": c.meaning_en,
+                "rendering": c.preferred_rendering_en,
+                "evidence_snippet": c.evidence_snippet,
+                "alternatives": [
+                    {
+                        "model_name": vote.model_name,
+                        "kind": vote.vote_kind,
+                        "translation": vote.cleaned_output,
+                        "resolution_status": vote.resolution_status,
+                    }
+                    for vote in votes_by_candidate.get(c.candidate_id, [])
+                ],
+                "action": "keep",
+            }
+            for c in candidates
+        ]
+        review_data = {
+            "review_schema_version": 1,
+            "release_id": release_id,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "instructions": (
+                "Edit 'rendering' to override an idiom's English translation. "
+                "Set 'action' to 'delete' to remove an entry. "
+                "Add new entries with 'action': 'add' "
+                "(omit candidate_id, provide source_text, meaning_zh, rendering)."
+            ),
+            "entries": entries,
+        }
+        review_csv_path = paths.idiom_review_path.with_suffix(".csv")
+        phase = "write_review_json"
+        _write_json(paths.idiom_review_path, review_data)
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.json.artifact_written",
+            artifact_path=str(paths.idiom_review_path),
+            artifact_format="json",
+            entries_written=len(entries),
+        )
+        phase = "write_review_csv"
+        _write_idiom_review_csv(review_csv_path, entries)
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.csv.artifact_written",
+            artifact_path=str(review_csv_path),
+            artifact_format="tsv",
+            entries_written=len(entries),
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.completed",
+            entries_written=len(entries),
+            review_path=str(paths.idiom_review_path),
+            review_json_path=str(paths.idiom_review_path),
+            review_csv_path=str(review_csv_path),
+        )
+        return {
+            "status": "success",
+            "release_id": release_id,
+            "run_id": run_id,
+            "entries_written": len(entries),
+            "review_path": str(paths.idiom_review_path),
+            "review_json_path": str(paths.idiom_review_path),
+            "review_csv_path": str(review_csv_path),
+        }
+    except Exception as exc:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.review.failed",
+            severity="error",
+            phase=phase,
+            error=str(exc),
+            message=f"Idiom review failed during {phase}: {exc}",
+        )
+        raise
 
 
 def promote_idiom_candidates(
@@ -1200,6 +1238,7 @@ def promote_idiom_candidates(
 
     conn = open_connection(paths.db_path)
     ensure_schema(conn, "idioms")
+    phase = "start"
     try:
         raise_if_stop_requested(
             stop_token,
@@ -1209,6 +1248,7 @@ def promote_idiom_candidates(
         _emit(run_id, release_id, f"{_STAGE_NAME}.promote.started")
 
         if review_file_path is not None:
+            phase = "review_file"
             if not review_file_path.exists():
                 raise FileNotFoundError(f"Review file not found: {review_file_path}")
             review_data = _read_idiom_review_data(review_file_path)
@@ -1216,8 +1256,10 @@ def promote_idiom_candidates(
                 conn, release_id=release_id, review_data=review_data
             )
         else:
+            phase = "load_candidates"
             pending_candidates = list_candidates_for_promotion(conn, release_id=release_id)
 
+        phase = "validation"
         existing_policies = list_policies(conn, release_id=release_id)
         validation = validate_idiom_policy(
             candidates=pending_candidates,
@@ -1247,17 +1289,36 @@ def promote_idiom_candidates(
                 continue
             mark_candidate_promoted(conn, candidate_id=candidate_id)
 
-        _write_candidate_snapshot(
+        phase = "write_candidates_snapshot"
+        candidate_snapshot_count = _write_candidate_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.idiom_candidates_path,
         )
-        _write_policy_snapshot(
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.promote.candidates.artifact_written",
+            artifact_path=str(paths.idiom_candidates_path),
+            artifact_format="json",
+            candidate_count=candidate_snapshot_count,
+        )
+        phase = "write_policies_snapshot"
+        policy_snapshot_count = _write_policy_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.idiom_policies_path,
         )
-        _write_conflict_snapshot(
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.promote.policies.artifact_written",
+            artifact_path=str(paths.idiom_policies_path),
+            artifact_format="json",
+            policy_count=policy_snapshot_count,
+        )
+        phase = "write_conflicts_snapshot"
+        conflict_snapshot_count = _write_conflict_snapshot(
             conn,
             release_id=release_id,
             output_path=paths.idiom_conflicts_path,
@@ -1265,8 +1326,17 @@ def promote_idiom_candidates(
         _emit(
             run_id,
             release_id,
+            f"{_STAGE_NAME}.promote.conflicts.artifact_written",
+            artifact_path=str(paths.idiom_conflicts_path),
+            artifact_format="json",
+            conflict_count=conflict_snapshot_count,
+        )
+        _emit(
+            run_id,
+            release_id,
             f"{_STAGE_NAME}.promote.completed",
             promoted_count=len(validation.promotion_entries),
+            conflict_count=len(validation.conflicts),
         )
         raise_if_stop_requested(
             stop_token,
@@ -1276,6 +1346,19 @@ def promote_idiom_candidates(
             },
             message="Idiom preprocess stopped after promotion",
         )
+    except StopRequested:
+        raise
+    except Exception as exc:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.promote.failed",
+            severity="error",
+            phase=phase,
+            error=str(exc),
+            message=f"Idiom promotion failed during {phase}: {exc}",
+        )
+        raise
     finally:
         conn.close()
 

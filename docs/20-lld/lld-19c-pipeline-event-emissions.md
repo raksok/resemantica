@@ -82,7 +82,12 @@ The `summary_generation_completed` payload must include enough identity to audit
 | `preprocess-glossary.translate.unresolved` | Candidate vote did not resolve | severity `warning`, `candidate_id`, `source_term`, `unresolved_count` |
 | `preprocess-glossary.translate.failed` | Model voting or resolution failed | severity `error`, `model_name`, `candidate_id`, `phase`, `error` |
 | `preprocess-glossary.translate.snapshot.artifact_written` | Translation candidate snapshot written | `artifact_path`, `candidate_count` |
-| `preprocess-glossary.promote.started/completed` | Promotion phase | `promoted_count: int` (on completed) |
+| `preprocess-glossary.review.started/completed` | Human-review file generation | `entries_written`, review paths on completed |
+| `preprocess-glossary.review.json/csv.artifact_written` | Review JSON/CSV written | `artifact_path`, `artifact_format`, `entries_written` |
+| `preprocess-glossary.review.failed` | Review generation failed | severity `error`, `phase`, `error` |
+| `preprocess-glossary.promote.started/completed` | Promotion phase | `promoted_count`, `conflict_count` on completed |
+| `preprocess-glossary.promote.candidates/conflicts.artifact_written` | Promotion snapshots written | `artifact_path`, `artifact_format`, count payload |
+| `preprocess-glossary.promote.failed` | Promotion failed | severity `error`, `phase`, `error` |
 | `preprocess-glossary.completed` | Pipeline ends | `discovered: int`, `translated: int`, `promoted: int` |
 
 The glossary pipeline has 3 distinct phases. Each phase emits its own `chapter_started`/`chapter_completed` events under the phase namespace so the subscriber can distinguish them.
@@ -98,6 +103,12 @@ For glossary translation, chapter events belong to the resolution/save phase. Mo
 | `preprocess-idioms.started` | Pipeline begins | `total_chapters: int` |
 | `preprocess-idioms.chapter_started/completed` | Per chapter | `chapter_number` |
 | `preprocess-idioms.chapter_skipped` | On skip | `chapter_number`, `reason: str` |
+| `preprocess-idioms.review.started/completed` | Human-review file generation | `entries_written`, review paths on completed |
+| `preprocess-idioms.review.json/csv.artifact_written` | Review JSON/CSV written | `artifact_path`, `artifact_format`, `entries_written` |
+| `preprocess-idioms.review.failed` | Review generation failed | severity `error`, `phase`, `error` |
+| `preprocess-idioms.promote.started/completed` | Promotion phase | `promoted_count`, `conflict_count` on completed |
+| `preprocess-idioms.promote.candidates/policies/conflicts.artifact_written` | Promotion snapshots written | `artifact_path`, `artifact_format`, count payload |
+| `preprocess-idioms.promote.failed` | Promotion failed | severity `error`, `phase`, `error` |
 | `preprocess-idioms.completed` | Pipeline ends | `extracted: int`, `skipped: int` |
 
 #### Graph pipeline — stage name: `preprocess-graph`

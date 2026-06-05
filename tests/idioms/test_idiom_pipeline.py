@@ -924,11 +924,34 @@ def test_idiom_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) 
     finally:
         conn.close()
 
-    review = review_idiom_candidates(release_id=release_id, run_id="review-001")
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "review-001":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        review = review_idiom_candidates(release_id=release_id, run_id="review-001")
+    finally:
+        unsubscribe("*", callback)
     assert review["entries_written"] == 1
 
     csv_path = paths.idiom_review_path.with_suffix(".csv")
     assert csv_path.exists(), f"CSV review file not found: {csv_path}"
+    event_types = [event.event_type for event in received]
+    assert event_types == [
+        "preprocess-idioms.review.started",
+        "preprocess-idioms.review.json.artifact_written",
+        "preprocess-idioms.review.csv.artifact_written",
+        "preprocess-idioms.review.completed",
+    ]
+    assert received[1].payload["artifact_path"] == str(paths.idiom_review_path)
+    assert received[1].payload["entries_written"] == 1
+    assert received[2].payload["artifact_path"] == str(csv_path)
+    assert received[3].payload["review_csv_path"] == str(csv_path)
 
     import csv
     with open(csv_path, newline="", encoding="utf-8") as f:
@@ -997,12 +1020,46 @@ def test_promote_idiom_with_csv_file(tmp_path: Path, monkeypatch) -> None:
     )
     csv_path.write_text(csv_content, encoding="utf-8")
 
-    result = promote_idiom_candidates(
-        release_id=release_id,
-        run_id="promote-001",
-        review_file_path=csv_path,
-    )
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "promote-001":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        result = promote_idiom_candidates(
+            release_id=release_id,
+            run_id="promote-001",
+            review_file_path=csv_path,
+        )
+    finally:
+        unsubscribe("*", callback)
     assert result["status"] == "success"
+    event_types = [event.event_type for event in received]
+    assert "preprocess-idioms.promote.started" in event_types
+    assert "preprocess-idioms.promote.candidates.artifact_written" in event_types
+    assert "preprocess-idioms.promote.policies.artifact_written" in event_types
+    assert "preprocess-idioms.promote.conflicts.artifact_written" in event_types
+    assert "preprocess-idioms.promote.completed" in event_types
+    candidate_artifact = next(
+        event
+        for event in received
+        if event.event_type == "preprocess-idioms.promote.candidates.artifact_written"
+    )
+    policy_artifact = next(
+        event for event in received if event.event_type == "preprocess-idioms.promote.policies.artifact_written"
+    )
+    conflict_artifact = next(
+        event for event in received if event.event_type == "preprocess-idioms.promote.conflicts.artifact_written"
+    )
+    completed = next(event for event in received if event.event_type == "preprocess-idioms.promote.completed")
+    assert candidate_artifact.payload["artifact_path"] == str(paths.idiom_candidates_path)
+    assert policy_artifact.payload["artifact_path"] == str(paths.idiom_policies_path)
+    assert conflict_artifact.payload["artifact_path"] == str(paths.idiom_conflicts_path)
+    assert completed.payload["conflict_count"] == result["conflict_count"]
 
     conn = open_connection(paths.db_path)
     ensure_idiom_schema(conn)
@@ -1052,6 +1109,66 @@ def test_promote_idiom_csv_bad_header_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="invalid header"):
         from resemantica.idioms.pipeline import _read_idiom_review_data
         _read_idiom_review_data(csv_path)
+
+
+def test_idiom_review_failure_emits_failed_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m63-idiom-review-failed"
+    _insert_idiom_candidate(release_id=release_id)
+
+    def raise_write(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("write exploded")
+
+    monkeypatch.setattr("resemantica.idioms.pipeline._write_json", raise_write)
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "review-failed":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        with pytest.raises(RuntimeError, match="write exploded"):
+            review_idiom_candidates(release_id=release_id, run_id="review-failed")
+    finally:
+        unsubscribe("*", callback)
+
+    failed = next(event for event in received if event.event_type == "preprocess-idioms.review.failed")
+    assert failed.severity == "error"
+    assert failed.payload["phase"] == "write_review_json"
+    assert failed.payload["error"] == "write exploded"
+
+
+def test_idiom_promote_failure_emits_failed_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m63-idiom-promote-failed"
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == "promote-failed":
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        with pytest.raises(FileNotFoundError):
+            promote_idiom_candidates(
+                release_id=release_id,
+                run_id="promote-failed",
+                review_file_path=tmp_path / "missing.csv",
+            )
+    finally:
+        unsubscribe("*", callback)
+
+    event_types = [event.event_type for event in received]
+    assert "preprocess-idioms.promote.started" in event_types
+    failed = next(event for event in received if event.event_type == "preprocess-idioms.promote.failed")
+    assert failed.severity == "error"
+    assert failed.payload["phase"] == "review_file"
+    assert "Review file not found" in failed.payload["error"]
 
 
 def test_promote_idiom_csv_empty_is_noop(tmp_path: Path, monkeypatch) -> None:
