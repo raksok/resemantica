@@ -643,19 +643,20 @@ class TestRetryFailed:
         conn = open_connection(paths.db_path)
         ensure_glossary_schema(conn)
         try:
-            insert_conflicts(
-                conn,
-                conflicts=[
-                    GlossaryConflict(
-                        conflict_id="conflict-1",
-                        release_id=release_id,
-                        candidate_id="candidate-1",
-                        conflict_type="canon_conflict",
-                        conflict_reason="duplicate",
-                        existing_glossary_id="glex-1",
-                    )
-                ],
-            )
+            with conn:
+                insert_conflicts(
+                    conn,
+                    conflicts=[
+                        GlossaryConflict(
+                            conflict_id="conflict-1",
+                            release_id=release_id,
+                            candidate_id="candidate-1",
+                            conflict_type="canon_conflict",
+                            conflict_reason="duplicate",
+                            existing_glossary_id="glex-1",
+                        )
+                    ],
+                )
         finally:
             conn.close()
 

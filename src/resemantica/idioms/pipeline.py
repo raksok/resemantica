@@ -27,8 +27,8 @@ from resemantica.db.idiom_repo import (
     list_policies,
     list_translation_resume_candidate_ids,
     list_translation_votes,
-    mark_candidate_conflict,
-    mark_candidate_promoted,
+    mark_candidates_conflict,
+    mark_candidates_promoted,
     promote_policies,
     save_idiom_translation,
     set_checkpoint,
@@ -816,27 +816,31 @@ def preprocess_idioms(
             approval_run_id=run_id,
         )
 
-        # Wipe old conflicts for all candidates — only current results appear
-        if pending_candidates:
-            _all_ids = [c.candidate_id for c in pending_candidates]
-            _placeholders = ",".join("?" for _ in _all_ids)
-            conn.execute(
-                f"DELETE FROM idiom_conflicts "
-                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
-                [*_all_ids, release_id],
-            )
-        insert_conflicts(conn, conflicts=validation.conflicts)
-        promote_policies(conn, policies=validation.promotion_entries)
+        # All DB writes in a single transaction — batch via executemany
+        with conn:
+            if pending_candidates:
+                _all_ids = [c.candidate_id for c in pending_candidates]
+                _placeholders = ",".join("?" for _ in _all_ids)
+                conn.execute(
+                    f"DELETE FROM idiom_conflicts "
+                    f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                    [*_all_ids, release_id],
+                )
+            insert_conflicts(conn, conflicts=validation.conflicts)
+            promote_policies(conn, policies=validation.promotion_entries)
 
-        reasons_by_candidate: dict[str, list[str]] = {}
-        for conflict in validation.conflicts:
-            reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
-        for candidate_id, reasons in reasons_by_candidate.items():
-            mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
-        for candidate_id in validation.promoted_candidate_ids:
-            if candidate_id in reasons_by_candidate:
-                continue
-            mark_candidate_promoted(conn, candidate_id=candidate_id)
+            reasons_by_candidate: dict[str, list[str]] = {}
+            for conflict in validation.conflicts:
+                reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
+            mark_candidates_conflict(
+                conn,
+                conflicts=[(cid, " | ".join(reasons)) for cid, reasons in reasons_by_candidate.items()],
+            )
+            promoted_ids = [
+                cid for cid in validation.promoted_candidate_ids
+                if cid not in reasons_by_candidate
+            ]
+            mark_candidates_promoted(conn, candidate_ids=promoted_ids)
 
         _write_candidate_snapshot(
             conn,
@@ -1342,27 +1346,31 @@ def promote_idiom_candidates(
             message="Idiom promotion stopped before writing policies",
         )
 
-        # Wipe old conflicts for all candidates — only current results appear
-        if pending_candidates:
-            _all_ids = [c.candidate_id for c in pending_candidates]
-            _placeholders = ",".join("?" for _ in _all_ids)
-            conn.execute(
-                f"DELETE FROM idiom_conflicts "
-                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
-                [*_all_ids, release_id],
-            )
-        insert_conflicts(conn, conflicts=validation.conflicts)
-        promote_policies(conn, policies=validation.promotion_entries)
+        # All DB writes in a single transaction — batch via executemany
+        with conn:
+            if pending_candidates:
+                _all_ids = [c.candidate_id for c in pending_candidates]
+                _placeholders = ",".join("?" for _ in _all_ids)
+                conn.execute(
+                    f"DELETE FROM idiom_conflicts "
+                    f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                    [*_all_ids, release_id],
+                )
+            insert_conflicts(conn, conflicts=validation.conflicts)
+            promote_policies(conn, policies=validation.promotion_entries)
 
-        reasons_by_candidate: dict[str, list[str]] = {}
-        for conflict in validation.conflicts:
-            reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
-        for candidate_id, reasons in reasons_by_candidate.items():
-            mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
-        for candidate_id in validation.promoted_candidate_ids:
-            if candidate_id in reasons_by_candidate:
-                continue
-            mark_candidate_promoted(conn, candidate_id=candidate_id)
+            reasons_by_candidate: dict[str, list[str]] = {}
+            for conflict in validation.conflicts:
+                reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
+            mark_candidates_conflict(
+                conn,
+                conflicts=[(cid, " | ".join(reasons)) for cid, reasons in reasons_by_candidate.items()],
+            )
+            promoted_ids = [
+                cid for cid in validation.promoted_candidate_ids
+                if cid not in reasons_by_candidate
+            ]
+            mark_candidates_promoted(conn, candidate_ids=promoted_ids)
         raise_if_stop_requested(
             stop_token,
             checkpoint={

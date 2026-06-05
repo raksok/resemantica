@@ -625,46 +625,50 @@ def save_candidate_translation(
         )
 
 
-def mark_candidate_conflict(
+def mark_candidates_conflict(
     conn: sqlite3.Connection,
     *,
-    candidate_id: str,
-    conflict_reason: str,
+    conflicts: Sequence[tuple[str, str]],
 ) -> None:
-    with conn:
-        conn.execute(
-            """
-            UPDATE glossary_candidates
-            SET candidate_status = 'conflict',
-                validation_status = 'conflict',
-                conflict_reason = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE candidate_id = ?
-            """,
-            (conflict_reason, candidate_id),
-        )
+    if not conflicts:
+        return
+    conn.executemany(
+        """
+        UPDATE glossary_candidates
+        SET candidate_status = 'conflict',
+            validation_status = 'conflict',
+            conflict_reason = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE candidate_id = ?
+        """,
+        [(reason, cid) for cid, reason in conflicts],
+    )
 
 
-def mark_candidate_promoted(conn: sqlite3.Connection, *, candidate_id: str) -> None:
-    with conn:
-        conn.execute(
-            """
-            UPDATE glossary_candidates
-            SET candidate_status = 'promoted',
-                validation_status = 'approved',
-                conflict_reason = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE candidate_id = ?
-            """,
-            (candidate_id,),
-        )
+def mark_candidates_promoted(
+    conn: sqlite3.Connection,
+    *,
+    candidate_ids: Sequence[str],
+) -> None:
+    if not candidate_ids:
+        return
+    conn.executemany(
+        """
+        UPDATE glossary_candidates
+        SET candidate_status = 'promoted',
+            validation_status = 'approved',
+            conflict_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE candidate_id = ?
+        """,
+        [(cid,) for cid in candidate_ids],
+    )
 
 
 def insert_conflicts(conn: sqlite3.Connection, *, conflicts: Sequence[GlossaryConflict]) -> None:
     if not conflicts:
         return
-    with conn:
-        conn.executemany(
+    conn.executemany(
             """
             INSERT INTO glossary_conflicts(
                 conflict_id, release_id, candidate_id, conflict_type,
@@ -728,39 +732,40 @@ def promote_locked_entries(
 ) -> None:
     if not entries:
         return
-    with conn:
-        for entry in entries:
-            conn.execute(
-                """
-                INSERT INTO locked_glossary(
-                    glossary_entry_id, release_id, source_term, normalized_source_term,
-                    target_term, normalized_target_term, category, status, approved_at,
-                    approval_run_id, source_candidate_id, schema_version
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(release_id, normalized_source_term, category)
-                DO UPDATE SET
-                    target_term = excluded.target_term,
-                    normalized_target_term = excluded.normalized_target_term,
-                    approval_run_id = excluded.approval_run_id,
-                    approved_at = excluded.approved_at,
-                    source_candidate_id = excluded.source_candidate_id
-                """,
-                (
-                    entry.glossary_entry_id,
-                    entry.release_id,
-                    entry.source_term,
-                    entry.normalized_source_term,
-                    entry.target_term,
-                    entry.normalized_target_term,
-                    entry.category,
-                    entry.status,
-                    entry.approved_at,
-                    entry.approval_run_id,
-                    entry.source_candidate_id,
-                    entry.schema_version,
-                ),
+    conn.executemany(
+        """
+        INSERT INTO locked_glossary(
+            glossary_entry_id, release_id, source_term, normalized_source_term,
+            target_term, normalized_target_term, category, status, approved_at,
+            approval_run_id, source_candidate_id, schema_version
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(release_id, normalized_source_term, category)
+        DO UPDATE SET
+            target_term = excluded.target_term,
+            normalized_target_term = excluded.normalized_target_term,
+            approval_run_id = excluded.approval_run_id,
+            approved_at = excluded.approved_at,
+            source_candidate_id = excluded.source_candidate_id
+        """,
+        [
+            (
+                entry.glossary_entry_id,
+                entry.release_id,
+                entry.source_term,
+                entry.normalized_source_term,
+                entry.target_term,
+                entry.normalized_target_term,
+                entry.category,
+                entry.status,
+                entry.approved_at,
+                entry.approval_run_id,
+                entry.source_candidate_id,
+                entry.schema_version,
             )
+            for entry in entries
+        ],
+    )
 
 
 def find_exact_locked_entry(

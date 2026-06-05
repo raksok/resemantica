@@ -105,7 +105,8 @@ def _seed_glossary(
                     schema_version=1,
                 )
             )
-        promote_locked_entries(conn, entries=entries)
+        with conn:
+            promote_locked_entries(conn, entries=entries)
     finally:
         conn.close()
     return mapping
@@ -244,7 +245,8 @@ def _seed_idioms(*, release_id: str, rows: list[tuple[str, str, str]]) -> None:
             )
             for source_text, meaning_zh, rendering_en in rows
         ]
-        promote_policies(conn, policies=policies)
+        with conn:
+            promote_policies(conn, policies=policies)
     finally:
         conn.close()
 

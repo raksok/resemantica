@@ -145,27 +145,28 @@ def _insert_policy(
     conn = open_connection(paths.db_path)
     ensure_idiom_schema(conn)
     try:
-        promote_policies(
-            conn,
-            policies=[
-                IdiomPolicy(
-                    idiom_id="idi_test_existing",
-                    release_id=release_id,
-                    source_text=source_text,
-                    normalized_source_text=normalize_idiom_source(source_text),
-                    meaning_zh=meaning_zh,
-                    preferred_rendering_en=preferred_rendering_en,
-                    usage_notes=None,
-                    policy_status="approved",
-                    first_seen_chapter=1,
-                    last_seen_chapter=1,
-                    appearance_count=1,
-                    promoted_from_candidate_id="ican_existing",
-                    approval_run_id=f"seed-{datetime.now(UTC).isoformat()}",
-                    schema_version=1,
-                )
-            ],
-        )
+        with conn:
+            promote_policies(
+                conn,
+                policies=[
+                    IdiomPolicy(
+                        idiom_id="idi_test_existing",
+                        release_id=release_id,
+                        source_text=source_text,
+                        normalized_source_text=normalize_idiom_source(source_text),
+                        meaning_zh=meaning_zh,
+                        preferred_rendering_en=preferred_rendering_en,
+                        usage_notes=None,
+                        policy_status="approved",
+                        first_seen_chapter=1,
+                        last_seen_chapter=1,
+                        appearance_count=1,
+                        promoted_from_candidate_id="ican_existing",
+                        approval_run_id=f"seed-{datetime.now(UTC).isoformat()}",
+                        schema_version=1,
+                    )
+                ],
+            )
     finally:
         conn.close()
 

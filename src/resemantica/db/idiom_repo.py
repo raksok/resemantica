@@ -605,39 +605,44 @@ def list_candidates_for_review(
     return [_candidate_from_row(row) for row in rows]
 
 
-def mark_candidate_conflict(
+def mark_candidates_conflict(
     conn: sqlite3.Connection,
     *,
-    candidate_id: str,
-    conflict_reason: str,
+    conflicts: Sequence[tuple[str, str]],
 ) -> None:
-    with conn:
-        conn.execute(
-            """
-            UPDATE idiom_candidates
-            SET candidate_status = 'conflict',
-                validation_status = 'conflict',
-                conflict_reason = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE candidate_id = ?
-            """,
-            (conflict_reason, candidate_id),
-        )
+    if not conflicts:
+        return
+    conn.executemany(
+        """
+        UPDATE idiom_candidates
+        SET candidate_status = 'conflict',
+            validation_status = 'conflict',
+            conflict_reason = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE candidate_id = ?
+        """,
+        [(reason, cid) for cid, reason in conflicts],
+    )
 
 
-def mark_candidate_promoted(conn: sqlite3.Connection, *, candidate_id: str) -> None:
-    with conn:
-        conn.execute(
-            """
-            UPDATE idiom_candidates
-            SET candidate_status = 'approved',
-                validation_status = 'approved',
-                conflict_reason = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE candidate_id = ?
-            """,
-            (candidate_id,),
-        )
+def mark_candidates_promoted(
+    conn: sqlite3.Connection,
+    *,
+    candidate_ids: Sequence[str],
+) -> None:
+    if not candidate_ids:
+        return
+    conn.executemany(
+        """
+        UPDATE idiom_candidates
+        SET candidate_status = 'approved',
+            validation_status = 'approved',
+            conflict_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE candidate_id = ?
+        """,
+        [(cid,) for cid in candidate_ids],
+    )
 
 
 def insert_conflicts(conn: sqlite3.Connection, *, conflicts: Sequence[IdiomConflict]) -> None:
@@ -689,52 +694,53 @@ def list_conflicts(conn: sqlite3.Connection, *, release_id: str) -> list[IdiomCo
 def promote_policies(conn: sqlite3.Connection, *, policies: Sequence[IdiomPolicy]) -> None:
     if not policies:
         return
-    with conn:
-        for policy in policies:
-            conn.execute(
-                """
-                INSERT INTO idiom_policies(
-                    idiom_id, release_id, source_text, normalized_source_text,
-                    meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
-                    policy_status, first_seen_chapter, last_seen_chapter,
-                    appearance_count, promoted_from_candidate_id, approval_run_id,
-                    schema_version, updated_at
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(release_id, normalized_source_text)
-                DO UPDATE SET
-                    source_text = excluded.source_text,
-                    meaning_zh = excluded.meaning_zh,
-                    meaning_en = excluded.meaning_en,
-                    preferred_rendering_en = excluded.preferred_rendering_en,
-                    usage_notes = excluded.usage_notes,
-                    policy_status = excluded.policy_status,
-                    first_seen_chapter = MIN(idiom_policies.first_seen_chapter, excluded.first_seen_chapter),
-                    last_seen_chapter = MAX(idiom_policies.last_seen_chapter, excluded.last_seen_chapter),
-                    appearance_count = excluded.appearance_count,
-                    promoted_from_candidate_id = excluded.promoted_from_candidate_id,
-                    approval_run_id = excluded.approval_run_id,
-                    schema_version = excluded.schema_version,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    policy.idiom_id,
-                    policy.release_id,
-                    policy.source_text,
-                    policy.normalized_source_text,
-                    policy.meaning_zh,
-                    policy.meaning_en,
-                    policy.preferred_rendering_en,
-                    policy.usage_notes,
-                    policy.policy_status,
-                    policy.first_seen_chapter,
-                    policy.last_seen_chapter,
-                    policy.appearance_count,
-                    policy.promoted_from_candidate_id,
-                    policy.approval_run_id,
-                    policy.schema_version,
-                ),
+    conn.executemany(
+        """
+        INSERT INTO idiom_policies(
+            idiom_id, release_id, source_text, normalized_source_text,
+            meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+            policy_status, first_seen_chapter, last_seen_chapter,
+            appearance_count, promoted_from_candidate_id, approval_run_id,
+            schema_version, updated_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(release_id, normalized_source_text)
+        DO UPDATE SET
+            source_text = excluded.source_text,
+            meaning_zh = excluded.meaning_zh,
+            meaning_en = excluded.meaning_en,
+            preferred_rendering_en = excluded.preferred_rendering_en,
+            usage_notes = excluded.usage_notes,
+            policy_status = excluded.policy_status,
+            first_seen_chapter = MIN(idiom_policies.first_seen_chapter, excluded.first_seen_chapter),
+            last_seen_chapter = MAX(idiom_policies.last_seen_chapter, excluded.last_seen_chapter),
+            appearance_count = excluded.appearance_count,
+            promoted_from_candidate_id = excluded.promoted_from_candidate_id,
+            approval_run_id = excluded.approval_run_id,
+            schema_version = excluded.schema_version,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        [
+            (
+                policy.idiom_id,
+                policy.release_id,
+                policy.source_text,
+                policy.normalized_source_text,
+                policy.meaning_zh,
+                policy.meaning_en,
+                policy.preferred_rendering_en,
+                policy.usage_notes,
+                policy.policy_status,
+                policy.first_seen_chapter,
+                policy.last_seen_chapter,
+                policy.appearance_count,
+                policy.promoted_from_candidate_id,
+                policy.approval_run_id,
+                policy.schema_version,
             )
+            for policy in policies
+        ],
+    )
 
 
 def list_policies(conn: sqlite3.Connection, *, release_id: str) -> list[IdiomPolicy]:

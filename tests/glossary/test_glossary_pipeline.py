@@ -1896,7 +1896,8 @@ def test_promotion_insert_is_transactional(tmp_path: Path, monkeypatch) -> None:
     )
 
     with pytest.raises(sqlite3.IntegrityError):
-        promote_locked_entries(conn, entries=[entry_a, entry_b])
+        with conn:
+            promote_locked_entries(conn, entries=[entry_a, entry_b])
 
     locked = list_locked_entries(conn, release_id="m3-transaction")
     assert locked == []
@@ -1910,25 +1911,26 @@ def test_exact_match_precedence_over_fallback(tmp_path: Path, monkeypatch) -> No
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
     try:
-        promote_locked_entries(
-            conn,
-            entries=[
-                LockedGlossaryEntry(
-                    glossary_entry_id="glex_precedence",
-                    release_id="m3-precedence",
-                    source_term="青云门",
-                    normalized_source_term=normalize_term("青云门"),
-                    target_term="Azure Sect",
-                    normalized_target_term=normalize_term("Azure Sect"),
-                    category="faction",
-                    status="approved",
-                    approved_at=datetime.now(UTC).isoformat(),
-                    approval_run_id="promote-001",
-                    source_candidate_id="gcan_precedence",
-                    schema_version=1,
-                )
-            ],
-        )
+        with conn:
+            promote_locked_entries(
+                conn,
+                entries=[
+                    LockedGlossaryEntry(
+                        glossary_entry_id="glex_precedence",
+                        release_id="m3-precedence",
+                        source_term="青云门",
+                        normalized_source_term=normalize_term("青云门"),
+                        target_term="Azure Sect",
+                        normalized_target_term=normalize_term("Azure Sect"),
+                        category="faction",
+                        status="approved",
+                        approved_at=datetime.now(UTC).isoformat(),
+                        approval_run_id="promote-001",
+                        source_candidate_id="gcan_precedence",
+                        schema_version=1,
+                    )
+                ],
+            )
     finally:
         conn.close()
 

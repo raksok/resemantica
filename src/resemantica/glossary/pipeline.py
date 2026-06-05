@@ -29,8 +29,8 @@ from resemantica.db.glossary_repo import (
     list_locked_entries,
     list_translation_resume_candidate_ids,
     list_translation_votes,
-    mark_candidate_conflict,
-    mark_candidate_promoted,
+    mark_candidates_conflict,
+    mark_candidates_promoted,
     promote_locked_entries,
     replace_candidates,
     save_candidate_translation,
@@ -1673,22 +1673,9 @@ def promote_glossary_candidates(
             message="Glossary promotion stopped after validation",
         )
 
-        # Wipe old conflicts for all candidates — only current results appear
-        if promotable_candidates:
-            _all_ids = [c.candidate_id for c in promotable_candidates]
-            _placeholders = ",".join("?" for _ in _all_ids)
-            conn.execute(
-                f"DELETE FROM glossary_conflicts "
-                f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
-                [*_all_ids, release_id],
-            )
-        insert_conflicts(conn, conflicts=conflicts)
-
         reasons_by_candidate: dict[str, list[str]] = {}
         for conflict in conflicts:
             reasons_by_candidate.setdefault(conflict.candidate_id, []).append(conflict.conflict_reason)
-        for candidate_id, reasons in reasons_by_candidate.items():
-            mark_candidate_conflict(conn, candidate_id=candidate_id, conflict_reason=" | ".join(reasons))
 
         promotable_without_conflicts = [
             entry
@@ -1704,9 +1691,27 @@ def promote_glossary_candidates(
             },
             message="Glossary promotion stopped before writing locked glossary",
         )
-        promote_locked_entries(conn, entries=promotable_without_conflicts)
-        for entry in promotable_without_conflicts:
-            mark_candidate_promoted(conn, candidate_id=entry.source_candidate_id)
+
+        # All DB writes in a single transaction — batch via executemany
+        with conn:
+            if promotable_candidates:
+                _all_ids = [c.candidate_id for c in promotable_candidates]
+                _placeholders = ",".join("?" for _ in _all_ids)
+                conn.execute(
+                    f"DELETE FROM glossary_conflicts "
+                    f"WHERE candidate_id IN ({_placeholders}) AND release_id = ?",
+                    [*_all_ids, release_id],
+                )
+            insert_conflicts(conn, conflicts=conflicts)
+            mark_candidates_conflict(
+                conn,
+                conflicts=[(cid, " | ".join(reasons)) for cid, reasons in reasons_by_candidate.items()],
+            )
+            promote_locked_entries(conn, entries=promotable_without_conflicts)
+            mark_candidates_promoted(
+                conn,
+                candidate_ids=[entry.source_candidate_id for entry in promotable_without_conflicts],
+            )
         raise_if_stop_requested(
             stop_token,
             checkpoint={

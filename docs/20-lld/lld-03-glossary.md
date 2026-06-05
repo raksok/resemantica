@@ -194,7 +194,13 @@ Promotion checks for graceful stop around review-file reads, review overrides, v
 
 - normalization, duplicate detection, and policy checks are deterministic code
 - promotion must be transactional
+- promotion batches all DB writes into a single transaction using `executemany` to avoid O(N) transaction overhead
 - candidate history remains intact after promotion
+
+## Performance
+
+- promotion of 28k candidates completes in under 30 seconds on local hardware
+- all DB writes (conflict delete + insert, locked glossary insert, candidate status update) are batched into a single transaction via `executemany`
 
 ## Resume And Rerun
 

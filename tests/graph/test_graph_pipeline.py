@@ -91,25 +91,26 @@ def _insert_locked_glossary_entry(
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
     try:
-        promote_locked_entries(
-            conn,
-            entries=[
-                LockedGlossaryEntry(
-                    glossary_entry_id=f"glex_{category}_{normalize_term(source_term)}",
-                    release_id=release_id,
-                    source_term=source_term,
-                    normalized_source_term=normalize_term(source_term),
-                    target_term=target_term,
-                    normalized_target_term=normalize_term(target_term),
-                    category=category,
-                    status="approved",
-                    approved_at=datetime.now(UTC).isoformat(),
-                    approval_run_id="promote-test",
-                    source_candidate_id=f"gcan_{category}_{normalize_term(source_term)}",
-                    schema_version=1,
-                )
-            ],
-        )
+        with conn:
+            promote_locked_entries(
+                conn,
+                entries=[
+                    LockedGlossaryEntry(
+                        glossary_entry_id=f"glex_{category}_{normalize_term(source_term)}",
+                        release_id=release_id,
+                        source_term=source_term,
+                        normalized_source_term=normalize_term(source_term),
+                        target_term=target_term,
+                        normalized_target_term=normalize_term(target_term),
+                        category=category,
+                        status="approved",
+                        approved_at=datetime.now(UTC).isoformat(),
+                        approval_run_id="promote-test",
+                        source_candidate_id=f"gcan_{category}_{normalize_term(source_term)}",
+                        schema_version=1,
+                    )
+                ],
+            )
     finally:
         conn.close()
 
