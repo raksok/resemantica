@@ -27,7 +27,7 @@ Prompt contract:
 - JSON analyst prompts should tell uncertain models to choose the safest schema-valid value and return the required JSON shape without explaining uncertainty. Prose analyst prompts should choose the most evidence-supported wording and return only final prose.
 - Prompt schemas are stage-owned interfaces; prompt optimization must not break existing parsers or artifact shapes.
 - Prompt version bumps are required when prompt behavior changes so affected caches and checkpoints invalidate.
-- Translator prompts are fragile and are excluded from the analyst prompt optimization pass unless a later task explicitly owns them.
+- HY-MT-specific translator prompt patterns are fragile and are excluded from analyst prompt optimization unless a later task explicitly owns them. Non-HY-MT prompts may be prefix-optimized when a task owns the prompt and preserves its parser-visible output contract.
 - Prompt-local text remains the default contract for analyst behavior. Throttle groups may optionally attach a stateless per-request system message for backend-specific behavior.
 
 Python modules:

@@ -79,3 +79,4 @@ Always follow the milestone sequence below.
 | M59 | task-59 | M58 | Glossary Discovery Chapter Resume |
 | M60 | task-60 | M59 | Glossary Scoring Progress |
 | M61 | task-61 | M60 | Qwen Throttle Groups And System Prompt |
+| M62 | task-62 | M61 | KV-Cache Prompt Prefix Optimization |

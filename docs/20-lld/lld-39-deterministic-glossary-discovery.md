@@ -275,7 +275,7 @@ Each element: {"candidate_id": "...", "keep": true/false, "term_type": "...", "r
 If you cannot evaluate a candidate, set keep=false, reason_code="ambiguous", confidence=0.0.
 ```
 
-The evaluator prompt is analyst-facing and optimized for compact schema-only output. Translator prompts used later in glossary translation are intentionally excluded from this optimization pass.
+The evaluator prompt is analyst-facing and optimized for compact schema-only output. Translator prompts used later in glossary translation were intentionally excluded from this deterministic-discovery optimization pass; later tasks may own non-HY-MT translator prompts separately as long as their output contracts remain stable.
 
 ### Expanded `glossary/validators.py`
 

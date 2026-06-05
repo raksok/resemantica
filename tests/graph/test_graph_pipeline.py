@@ -629,7 +629,7 @@ def test_graph_resume_uses_persisted_chapter_drafts(
             run_id="graph-001",
             chapter_number=1,
             chapter_source_hash="hash-1",
-            prompt_version="2.2",
+            prompt_version="2.3",
         )
         assert draft is not None
     finally:

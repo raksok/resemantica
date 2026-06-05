@@ -1,16 +1,10 @@
-# version: 2.0
+# version: 2.1
 
 ## TASK
 IDIOM_DETECT
 
-## CHAPTER NUMBER
-{CHAPTER_NUMBER}
-
-## SOURCE TEXT (ZH)
-{SOURCE_TEXT_ZH}
-
 ## INSTRUCTIONS
-Identify all Chinese idioms (成语、惯用语、俗语、谚语) from the source text above.
+Identify all Chinese idioms (成语、惯用语、俗语、谚语) from the source text in the input block.
 Focus on:
 - Four-character idioms (成语)
 - Common figurative expressions (惯用语)
@@ -35,3 +29,10 @@ Each row must include:
 - meaning_zh
 - usage_notes (optional)
 
+## INPUT
+
+## CHAPTER NUMBER
+{CHAPTER_NUMBER}
+
+## SOURCE TEXT (ZH)
+{SOURCE_TEXT_ZH}

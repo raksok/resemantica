@@ -137,7 +137,7 @@ Candidates with lexicon matches bypass the score threshold unless they are clear
 
 New `idioms/evaluator.py` and `llm/prompts/idiom_evaluate.txt`.
 
-The evaluator prompt is analyst-facing and returns compact JSON only. It forbids markdown, prose, explanations, analysis, chain-of-thought, and `<think>` artifacts. Idiom translation and meaning prompts are translator-facing and are intentionally excluded from this optimization pass.
+The evaluator prompt is analyst-facing and returns compact JSON only. It forbids markdown, prose, explanations, analysis, chain-of-thought, and `<think>` artifacts. Idiom translation and meaning prompts were intentionally excluded from this deterministic-discovery optimization pass; later tasks may own non-HY-MT translator prompts separately as long as their output contracts remain stable.
 
 Response schema per item:
 

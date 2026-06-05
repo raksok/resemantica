@@ -1,5 +1,6 @@
-# version: 2.1
+# version: 2.2
 
 Translate the following term in `zh` to `en` with no extra explanation:
 
+## INPUT
 {MEANING_ZH}

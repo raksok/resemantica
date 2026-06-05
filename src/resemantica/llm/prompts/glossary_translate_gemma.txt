@@ -1,8 +1,6 @@
-# version: 2.1
+# version: 2.2
 
-CONTEXT: {EVIDENCE_SNIPPET}
-
-Translate the Chinese glossary term ({CATEGORY}) to English.
+Translate one Chinese glossary term to English.
 
 STRICT RULES:
 - Output ONLY the English translation (1-5 words max)
@@ -10,6 +8,9 @@ STRICT RULES:
 - NO parentheses, NO slashes, NO Chinese characters
 - If uncertain, give your best concise guess
 
+## INPUT
+Category: {CATEGORY}
+Context: {EVIDENCE_SNIPPET}
 Term: {SOURCE_TERM}
 
 English:

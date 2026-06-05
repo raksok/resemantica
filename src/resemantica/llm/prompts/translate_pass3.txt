@@ -1,9 +1,16 @@
-# version: 1.2
+# version: 1.3
 PASS3
 
 ## ANALYST INSTRUCTION
 Reason through the task once. Do not restart your reasoning, loop over the same uncertainty, or narrate self-corrections such as "but wait", "let me rethink", or "I should check again". After one reasoning pass, return only the required output.
 If uncertain after one pass, choose the most evidence-supported wording and return only the final requested prose.
+
+## INSTRUCTIONS
+Polish the Pass 2 output in the input block for readability without changing meaning, terminology, facts, or event order.
+Preserve all named entities, glossary terms, aliases, idiom renderings, and relationship facts exactly.
+Preserve placeholders exactly as provided.
+
+## INPUT
 
 ## SOURCE TEXT
 {SOURCE_TEXT}
@@ -22,8 +29,3 @@ If uncertain after one pass, choose the most evidence-supported wording and retu
 
 ## RELATIONSHIPS
 {RELATIONSHIP_CONSTRAINTS}
-
-## INSTRUCTIONS
-Polish the Pass 2 output for readability without changing meaning, terminology, facts, or event order.
-Preserve all named entities, glossary terms, aliases, idiom renderings, and relationship facts exactly.
-Preserve placeholders exactly as provided.

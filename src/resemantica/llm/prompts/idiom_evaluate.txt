@@ -1,4 +1,4 @@
-# version: 1.2
+# version: 1.3
 
 ## TASK
 IDIOM_EVALUATE
@@ -6,9 +6,6 @@ IDIOM_EVALUATE
 ## ANALYST INSTRUCTION
 Reason through the task once. Do not restart your reasoning, loop over the same uncertainty, or narrate self-corrections such as "but wait", "let me rethink", or "I should check again". After one reasoning pass, return only the required output.
 If uncertain after one pass, choose the safest schema-valid value and return the JSON array. Do not explain uncertainty.
-
-## CANDIDATES
-{CANDIDATES_JSON}
 
 ## INSTRUCTIONS
 Evaluate each Chinese candidate phrase from a web novel.
@@ -27,3 +24,6 @@ For each candidate, return:
 
 ## OUTPUT FORMAT
 Return a JSON array only. No markdown fences. No explanation text.
+
+## CANDIDATES
+{CANDIDATES_JSON}

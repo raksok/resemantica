@@ -22,6 +22,10 @@ JSON_PROMPTS = [
 ]
 
 
+def _assert_after(template: str, marker: str, anchor: str) -> None:
+    assert template.index(marker) > template.index(anchor)
+
+
 @pytest.mark.parametrize(
     "prompt_name",
     [
@@ -103,3 +107,69 @@ def test_pass_prompts_keep_output_contracts() -> None:
     assert '"corrected_text"' in pass2_prompt.template
     assert "Polish the Pass 2 output" in pass3_prompt.template
     assert "return only the final requested prose" in pass3_prompt.template
+
+
+def test_evaluator_prompts_keep_dynamic_candidates_after_schema() -> None:
+    glossary_prompt = load_prompt("glossary_evaluate.txt")
+    idiom_prompt = load_prompt("idiom_evaluate.txt")
+
+    _assert_after(
+        glossary_prompt.template,
+        "{CANDIDATES_JSON}",
+        'Each element: {"candidate_id": "..."',
+    )
+    _assert_after(idiom_prompt.template, "{CANDIDATES_JSON}", "## OUTPUT FORMAT")
+
+
+def test_idiom_detect_prompt_keeps_source_text_after_rules() -> None:
+    prompt = load_prompt("idiom_detect.txt")
+
+    _assert_after(prompt.template, "{SOURCE_TEXT_ZH}", "Each row must include:")
+
+
+def test_graph_prompt_keeps_dynamic_inputs_after_schema() -> None:
+    prompt = load_prompt("graph_extract.txt")
+
+    _assert_after(prompt.template, "{SOURCE_TEXT_ZH}", "Relationships schema:")
+    _assert_after(prompt.template, "{GLOSSARY_CONTEXT}", "Relationships schema:")
+
+
+def test_glossary_translate_gemma_keeps_inputs_after_output_rules() -> None:
+    prompt = load_prompt("glossary_translate_gemma.txt")
+
+    _assert_after(prompt.template, "{EVIDENCE_SNIPPET}", "- If uncertain")
+    _assert_after(prompt.template, "{SOURCE_TERM}", "- If uncertain")
+
+
+def test_idiom_meaning_prompt_keeps_meaning_after_translation_instruction() -> None:
+    prompt = load_prompt("idiom_meaning.txt")
+
+    _assert_after(prompt.template, "{MEANING_ZH}", "Translate the following term")
+
+
+def test_pass2_prompt_keeps_dynamic_inputs_after_json_contract() -> None:
+    prompt = load_prompt("translate_pass2.txt")
+
+    anchor = "Only return the JSON object"
+    _assert_after(prompt.template, "{GLOSSARY}", anchor)
+    _assert_after(prompt.template, "{ALIAS_RESOLUTIONS}", anchor)
+    _assert_after(prompt.template, "{MATCHED_IDIOMS}", anchor)
+    _assert_after(prompt.template, "{LOCAL_RELATIONSHIPS}", anchor)
+    _assert_after(prompt.template, "{CONTINUITY_NOTES}", anchor)
+    _assert_after(prompt.template, "{RETRIEVAL_EVIDENCE}", anchor)
+    _assert_after(prompt.template, "{SOURCE_TEXT}", anchor)
+    _assert_after(prompt.template, "{DRAFT_TEXT}", anchor)
+    _assert_after(prompt.template, "{FULL_SOURCE_BLOCK}", anchor)
+    _assert_after(prompt.template, "{PRIOR_SEGMENTS}", anchor)
+
+
+def test_pass3_prompt_keeps_dynamic_inputs_after_polish_rules() -> None:
+    prompt = load_prompt("translate_pass3.txt")
+
+    anchor = "Preserve placeholders exactly as provided."
+    _assert_after(prompt.template, "{SOURCE_TEXT}", anchor)
+    _assert_after(prompt.template, "{PASS2_OUTPUT}", anchor)
+    _assert_after(prompt.template, "{GLOSSARY}", anchor)
+    _assert_after(prompt.template, "{ALIAS_RESOLUTIONS}", anchor)
+    _assert_after(prompt.template, "{MATCHED_IDIOMS}", anchor)
+    _assert_after(prompt.template, "{RELATIONSHIP_CONSTRAINTS}", anchor)
