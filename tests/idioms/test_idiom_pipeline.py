@@ -9,18 +9,24 @@ import pytest
 from loguru import logger
 
 from resemantica.db.idiom_repo import (
+    count_complete_translation_vote_pairs_by_model,
     ensure_idiom_schema,
     get_checkpoint,
     list_candidates,
+    list_candidates_by_ids,
     list_candidates_for_promotion,
     list_candidates_for_translation,
     list_conflicts,
+    list_existing_translation_vote_candidate_ids,
     list_policies,
+    list_translation_resume_candidate_ids,
+    list_translation_vote_candidate_ids,
     list_translation_votes,
     promote_policies,
     save_idiom_translation,
     set_checkpoint,
     upsert_discovered_candidates,
+    upsert_translation_vote,
 )
 from resemantica.db.sqlite import open_connection
 from resemantica.idioms.extractor import extract_idioms
@@ -206,6 +212,58 @@ def _insert_idiom_candidate(
     return candidate_id
 
 
+def _insert_idiom_vote(
+    *,
+    release_id: str,
+    run_id: str,
+    candidate_id: str,
+    model_name: str,
+    vote_kind: str,
+    output: str,
+) -> None:
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        upsert_translation_vote(
+            conn,
+            candidate_id=candidate_id,
+            release_id=release_id,
+            translation_run_id=run_id,
+            model_name=model_name,
+            prompt_version="test",
+            vote_kind=vote_kind,
+            raw_output=output,
+            cleaned_output=output,
+            normalized_output=output.strip().casefold(),
+        )
+    finally:
+        conn.close()
+
+
+def _emit_idiom_translate_started_event(
+    *,
+    release_id: str,
+    run_id: str,
+    pending_count: int,
+) -> None:
+    from resemantica.orchestration.events import emit_event
+
+    emit_event(
+        run_id=run_id,
+        release_id=release_id,
+        event_type="preprocess-idioms.translate.started",
+        stage_name="preprocess-idioms",
+        payload={
+            "total_chapters": 1,
+            "pending_count": pending_count,
+            "candidate_count": pending_count,
+            "model_count": 2,
+        },
+    )
+
+
 def test_detected_idiom_candidate_starts_without_english_rendering(
     tmp_path: Path,
     monkeypatch,
@@ -295,9 +353,13 @@ def test_multi_model_idiom_translation_resolves_rendering_and_stores_votes(
         assert len(votes) == 6
         assert {vote.vote_kind for vote in votes} == {"rendering", "meaning"}
         event_names = [event_name for event_name, _ in events]
-        assert event_names[0] == "translate.started"
+        assert event_names[0] == "translate.loading_started"
+        assert "translate.loading_completed" in event_names
+        assert "translate.started" in event_names
         assert event_names.count("translate.model_started") == 3
         assert event_names.count("translate.model_completed") == 3
+        assert "translate.resolution.started" in event_names
+        assert "translate.resolution.completed" in event_names
         assert event_names[-1] == "translate.completed"
         assert events[-1][1]["translated_count"] == 1
         assert events[-1][1]["unresolved_count"] == 0
@@ -363,6 +425,467 @@ def test_unresolved_idiom_translation_warns_and_preserves_unresolved_behavior(
     finally:
         logger.remove(sink_id)
         conn.close()
+
+
+def test_idiom_translation_vote_candidate_id_lookup_is_scoped(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-vote-lookup"
+    first_id = _insert_idiom_candidate(release_id=release_id)
+    second_id = _insert_idiom_candidate(
+        release_id=release_id,
+        source_text="杯弓蛇影",
+        meaning_zh="疑神疑鬼",
+        candidate_id="ican_second",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id="run-a",
+        candidate_id=first_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="kill two birds with one stone",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id="run-a",
+        candidate_id=first_id,
+        model_name="hy",
+        vote_kind="meaning",
+        output="achieve two things at once",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id="run-a",
+        candidate_id=second_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="seeing snakes in shadows",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id="run-b",
+        candidate_id=second_id,
+        model_name="hy",
+        vote_kind="meaning",
+        output="being paranoid",
+    )
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        assert list_translation_vote_candidate_ids(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+            model_name="hy",
+            vote_kind="rendering",
+        ) == {first_id, second_id}
+        assert list_existing_translation_vote_candidate_ids(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+            model_name="hy",
+            vote_kind="meaning",
+        ) == {first_id}
+        assert count_complete_translation_vote_pairs_by_model(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+        ) == {"hy": 1}
+        assert list_translation_resume_candidate_ids(
+            conn,
+            release_id=release_id,
+            translation_run_id="run-a",
+        ) == [first_id, second_id]
+        indexes = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA index_list(idiom_translation_votes)").fetchall()
+        }
+        save_idiom_translation(
+            conn,
+            candidate_id=first_id,
+            translation_run_id="translate-001",
+            target_term="kill two birds with one stone",
+            meaning_en="achieve two things at once",
+            translator_model_name="hy",
+            translator_prompt_version="test",
+        )
+        untranslated = list_candidates_by_ids(
+            conn,
+            release_id=release_id,
+            candidate_ids=[first_id, second_id],
+            untranslated_only=True,
+        )
+        all_candidates = list_candidates_by_ids(
+            conn,
+            release_id=release_id,
+            candidate_ids=[first_id, second_id],
+        )
+    finally:
+        conn.close()
+    assert "idx_idiom_translation_votes_resume" in indexes
+    assert [candidate.candidate_id for candidate in untranslated] == [second_id]
+    assert [candidate.candidate_id for candidate in all_candidates] == [first_id, second_id]
+
+
+def test_idiom_translation_skips_existing_model_vote_pairs_on_rerun(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-resume-skip"
+    run_id = "translate-001"
+    first_id = _insert_idiom_candidate(release_id=release_id)
+    second_id = _insert_idiom_candidate(
+        release_id=release_id,
+        source_text="杯弓蛇影",
+        meaning_zh="疑神疑鬼",
+        candidate_id="ican_second",
+    )
+    for candidate_id in [first_id, second_id]:
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name="hy",
+            vote_kind="rendering",
+            output="kill two birds with one stone",
+        )
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name="hy",
+            vote_kind="meaning",
+            output="achieve two things at once",
+        )
+    translator = ModelMappedIdiomTranslator(
+        {
+            ("gemma", "rendering"): "kill two birds with one stone",
+            ("gemma", "meaning"): "achieve two things at once",
+        }
+    )
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    events: list[tuple[str, dict[str, object]]] = []
+    try:
+        translated = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id=run_id,
+            translator_client=translator,
+            translator_model_names=["hy", "gemma"],
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+            event_callback=lambda event_name, payload: events.append((event_name, payload)),
+        )
+    finally:
+        conn.close()
+
+    assert translated == 2
+    assert translator.calls == [
+        ("gemma", "rendering"),
+        ("gemma", "meaning"),
+        ("gemma", "rendering"),
+        ("gemma", "meaning"),
+    ]
+    model_completed = [
+        payload for event_name, payload in events
+        if event_name == "translate.model_completed"
+    ]
+    assert [
+        (payload["model_name"], payload["candidate_count"], payload["skipped_count"])
+        for payload in model_completed
+    ] == [("hy", 0, 2), ("gemma", 2, 0)]
+
+
+def test_idiom_translation_resumes_partial_vote_kind(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-resume-kind"
+    run_id = "translate-001"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="kill two birds with one stone",
+    )
+    translator = ModelMappedIdiomTranslator({
+        ("hy", "meaning"): "achieve two things at once",
+    })
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        translated = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id=run_id,
+            translator_client=translator,
+            translator_model_names=["hy"],
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+        )
+        saved = list_candidates(conn, release_id=release_id)[0]
+    finally:
+        conn.close()
+
+    assert translated == 1
+    assert translator.calls == [("hy", "meaning")]
+    assert saved.preferred_rendering_en == "kill two birds with one stone"
+    assert saved.meaning_en == "achieve two things at once"
+
+
+def test_idiom_translation_uses_vote_resume_candidate_loading(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-vote-resume-load"
+    run_id = "translate-001"
+    first_id = _insert_idiom_candidate(release_id=release_id)
+    second_id = _insert_idiom_candidate(
+        release_id=release_id,
+        source_text="杯弓蛇影",
+        meaning_zh="疑神疑鬼",
+        candidate_id="ican_second",
+    )
+    _emit_idiom_translate_started_event(release_id=release_id, run_id=run_id, pending_count=2)
+    for candidate_id in [first_id, second_id]:
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name="hy",
+            vote_kind="rendering",
+            output="kill two birds with one stone",
+        )
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name="hy",
+            vote_kind="meaning",
+            output="achieve two things at once",
+        )
+
+    def fail_canonical_scan(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        raise AssertionError("canonical pending scan should not run")
+
+    import resemantica.idioms.pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod, "list_candidates_for_translation", fail_canonical_scan)
+    original_fetch_by_ids = pipeline_mod.list_candidates_by_ids
+    events: list[tuple[str, dict[str, object]]] = []
+    row_fetch_event_count: list[int] = []
+
+    def wrapped_fetch_by_ids(*args, **kwargs):  # noqa: ANN002, ANN003
+        row_fetch_event_count.append(len(events))
+        assert any(event_name == "translate.loading_completed" for event_name, _ in events)
+        return original_fetch_by_ids(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "list_candidates_by_ids", wrapped_fetch_by_ids)
+    translator = ModelMappedIdiomTranslator(
+        {
+            ("gemma", "rendering"): "kill two birds with one stone",
+            ("gemma", "meaning"): "achieve two things at once",
+        }
+    )
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        translated = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id=run_id,
+            translator_client=translator,
+            translator_model_names=["hy", "gemma"],
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+            tracking_db_path=paths.release_root / "tracking.db",
+            event_callback=lambda event_name, payload: events.append((event_name, payload)),
+        )
+    finally:
+        conn.close()
+
+    assert translated == 2
+    assert translator.calls == [
+        ("gemma", "rendering"),
+        ("gemma", "meaning"),
+        ("gemma", "rendering"),
+        ("gemma", "meaning"),
+    ]
+    assert row_fetch_event_count
+    loading_completed = [
+        payload for event_name, payload in events
+        if event_name == "translate.loading_completed"
+    ][-1]
+    assert loading_completed["load_strategy"] == "vote_resume"
+    assert loading_completed["resume_vote_model"] == "hy"
+
+
+def test_idiom_translation_falls_back_when_vote_pairs_are_incomplete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-vote-resume-incomplete"
+    run_id = "translate-001"
+    first_id = _insert_idiom_candidate(release_id=release_id)
+    _insert_idiom_candidate(
+        release_id=release_id,
+        source_text="杯弓蛇影",
+        meaning_zh="疑神疑鬼",
+        candidate_id="ican_second",
+    )
+    _emit_idiom_translate_started_event(release_id=release_id, run_id=run_id, pending_count=2)
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=first_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="kill two birds with one stone",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=first_id,
+        model_name="hy",
+        vote_kind="meaning",
+        output="achieve two things at once",
+    )
+
+    import resemantica.idioms.pipeline as pipeline_mod
+
+    original_scan = pipeline_mod.list_candidates_for_translation
+    scan_called = False
+
+    def wrapped_scan(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal scan_called
+        scan_called = True
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "list_candidates_for_translation", wrapped_scan)
+    translator = ModelMappedIdiomTranslator(
+        {
+            ("hy", "rendering"): "kill two birds with one stone",
+            ("hy", "meaning"): "achieve two things at once",
+            ("gemma", "rendering"): "kill two birds with one stone",
+            ("gemma", "meaning"): "achieve two things at once",
+        }
+    )
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        translated = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id=run_id,
+            translator_client=translator,
+            translator_model_names=["hy", "gemma"],
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+            tracking_db_path=paths.release_root / "tracking.db",
+        )
+    finally:
+        conn.close()
+
+    assert translated == 2
+    assert scan_called is True
+    assert translator.calls == [
+        ("hy", "rendering"),
+        ("hy", "meaning"),
+        ("gemma", "rendering"),
+        ("gemma", "meaning"),
+        ("gemma", "rendering"),
+        ("gemma", "meaning"),
+    ]
+
+
+def test_idiom_translation_force_regenerates_existing_votes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-resume-force"
+    run_id = "translate-001"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="old rendering",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="hy",
+        vote_kind="meaning",
+        output="old meaning",
+    )
+    translator = ModelMappedIdiomTranslator({
+        ("hy", "rendering"): "kill two birds with one stone",
+        ("hy", "meaning"): "achieve two things at once",
+    })
+    rendering_prompt = load_prompt("idiom_translate.txt")
+    meaning_prompt = load_prompt("idiom_meaning.txt")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        translated = translate_idiom_candidates(
+            conn=conn,
+            release_id=release_id,
+            run_id=run_id,
+            translator_client=translator,
+            translator_model_names=["hy"],
+            rendering_prompt_template=rendering_prompt.template,
+            rendering_prompt_version=rendering_prompt.version,
+            meaning_prompt_template=meaning_prompt.template,
+            meaning_prompt_version=meaning_prompt.version,
+            force=True,
+        )
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert translated == 1
+    assert translator.calls == [("hy", "rendering"), ("hy", "meaning")]
+    assert {(vote.vote_kind, vote.cleaned_output) for vote in votes} == {
+        ("rendering", "kill two birds with one stone"),
+        ("meaning", "achieve two things at once"),
+    }
 
 
 def test_idiom_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:
@@ -693,9 +1216,13 @@ def test_preprocess_idioms_emits_chapter_events(tmp_path: Path, monkeypatch) -> 
     assert "preprocess-idioms.chapter_completed" in event_types
     assert "preprocess-idioms.eval_batch_start" in event_types
     assert "preprocess-idioms.eval_batch_success" in event_types
+    assert "preprocess-idioms.translate.loading_started" in event_types
+    assert "preprocess-idioms.translate.loading_completed" in event_types
     assert "preprocess-idioms.translate.started" in event_types
     assert "preprocess-idioms.translate.model_started" in event_types
     assert "preprocess-idioms.translate.model_completed" in event_types
+    assert "preprocess-idioms.translate.resolution.started" in event_types
+    assert "preprocess-idioms.translate.resolution.completed" in event_types
     assert "preprocess-idioms.translate.completed" in event_types
     assert event_types[-1] == "preprocess-idioms.completed"
 

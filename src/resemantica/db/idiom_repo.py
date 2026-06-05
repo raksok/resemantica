@@ -61,6 +61,21 @@ DO UPDATE SET
     updated_at = CURRENT_TIMESTAMP
 """
 
+_CANDIDATE_ROW_COLUMNS = """
+    candidate_id, release_id, source_text, normalized_source_text,
+    meaning_zh, meaning_en, preferred_rendering_en, usage_notes,
+    first_seen_chapter, last_seen_chapter, appearance_count,
+    evidence_snippet, detection_run_id,
+    translation_run_id, candidate_status, validation_status, conflict_reason,
+    analyst_model_name, analyst_prompt_version, translator_model_name,
+    translator_prompt_version, schema_version,
+    dictionary_match, source_strategies, chapter_coverage, corpus_score,
+    context_snippets, literal_meaning_zh, idiomatic_meaning_zh,
+    llm_is_idiom, llm_usage_type, llm_translation_strategy,
+    llm_reason_code, llm_confidence, cluster_id, canonical_source_text,
+    existing_policy_id
+"""
+
 
 def ensure_idiom_schema(conn: sqlite3.Connection) -> None:
     ensure_schema(conn, "idioms")
@@ -275,6 +290,128 @@ def list_candidates_for_translation(
         (release_id,),
     ).fetchall()
     return [_candidate_from_row(row) for row in rows]
+
+
+def list_translation_resume_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT candidate_id
+        FROM idiom_translation_votes
+        WHERE release_id = ?
+          AND translation_run_id = ?
+        ORDER BY candidate_id
+        """,
+        (release_id, translation_run_id),
+    ).fetchall()
+    return [str(row["candidate_id"]) for row in rows]
+
+
+def list_translation_vote_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    model_name: str,
+    vote_kind: str,
+) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT candidate_id
+        FROM idiom_translation_votes
+        WHERE release_id = ?
+          AND translation_run_id = ?
+          AND model_name = ?
+          AND vote_kind = ?
+        """,
+        (release_id, translation_run_id, model_name, vote_kind),
+    ).fetchall()
+    return {str(row["candidate_id"]) for row in rows}
+
+
+def list_existing_translation_vote_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    model_name: str,
+    vote_kind: str,
+) -> set[str]:
+    return list_translation_vote_candidate_ids(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+        model_name=model_name,
+        vote_kind=vote_kind,
+    )
+
+
+def count_complete_translation_vote_pairs_by_model(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT model_name, COUNT(*) AS candidate_count
+        FROM (
+            SELECT model_name, candidate_id
+            FROM idiom_translation_votes
+            WHERE release_id = ?
+              AND translation_run_id = ?
+              AND vote_kind IN ('rendering', 'meaning')
+            GROUP BY model_name, candidate_id
+            HAVING COUNT(DISTINCT vote_kind) = 2
+        )
+        GROUP BY model_name
+        """,
+        (release_id, translation_run_id),
+    ).fetchall()
+    return {str(row["model_name"]): int(row["candidate_count"]) for row in rows}
+
+
+def list_candidates_by_ids(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    candidate_ids: Sequence[str],
+    untranslated_only: bool = False,
+    preserve_input_order: bool = True,
+) -> list[IdiomCandidate]:
+    if not candidate_ids:
+        return []
+    placeholders = ",".join("?" for _ in candidate_ids)
+    untranslated_clause = ""
+    if untranslated_only:
+        untranslated_clause = "AND (preferred_rendering_en IS NULL OR preferred_rendering_en = '')"
+    rows = conn.execute(
+        f"""
+        SELECT {_CANDIDATE_ROW_COLUMNS}
+        FROM idiom_candidates
+        WHERE candidate_id IN ({placeholders})
+          -- Keep vote_resume hydration on primary-key lookups; large releases can otherwise scan by release_id.
+          AND +release_id = ?
+          {untranslated_clause}
+        """,
+        (*candidate_ids, release_id),
+    ).fetchall()
+    candidates = [_candidate_from_row(row) for row in rows]
+    if preserve_input_order:
+        order = {candidate_id: index for index, candidate_id in enumerate(candidate_ids)}
+        candidates.sort(key=lambda candidate: order.get(candidate.candidate_id, len(order)))
+    else:
+        candidates.sort(
+            key=lambda candidate: (
+                candidate.first_seen_chapter,
+                candidate.normalized_source_text,
+            )
+        )
+    return candidates
 
 
 def save_idiom_translation(

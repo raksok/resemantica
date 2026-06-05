@@ -52,6 +52,8 @@ Idiom vote fields:
 - `normalized_output`
 - `resolution_status`
 
+Idiom vote lookup is indexed for resume with `(release_id, translation_run_id, model_name, candidate_id, vote_kind)`. The repository exposes scoped helpers to list candidate IDs that already have votes for a model and vote kind, count candidates with complete model vote pairs, reconstruct the resume candidate ID set from saved votes, and hydrate candidates by candidate ID batches.
+
 The existing canonical fields remain authoritative after resolution:
 - `glossary_candidates.candidate_translation_en`
 - `idiom_candidates.preferred_rendering_en`
@@ -103,10 +105,23 @@ Glossary translation events are scoped to the real work boundaries:
 
 Idiom translation:
 1. Load pending idiom candidates after detection.
-2. For each model, translate every candidate's rendering and meaning.
+2. For each model, translate only missing vote kinds for each candidate unless `force=True`.
 3. Save votes with `vote_kind = 'rendering'` and `vote_kind = 'meaning'`.
 4. Resolve rendering and meaning independently.
 5. Write canonical idiom fields only when rendering resolves. Meaning may resolve independently, but unresolved meaning should not block promotion if rendering is resolved.
+
+Idiom vote-level resume is keyed by `(release_id, translation_run_id, model_name, candidate_id, vote_kind)`. A complete model vote for idioms means both a `rendering` and a `meaning` vote exist for a candidate. On rerun, each configured model receives only candidates missing at least one of those vote kinds, and the generator calls only the missing prompt(s). Existing rendering votes do not force meaning regeneration, and existing meaning votes do not force rendering regeneration.
+
+When rerunning an interrupted idiom translation run, the loader may use `vote_resume` instead of the canonical pending scan if a prior `preprocess-idioms.translate.started` event has a pending count and one configured model has complete vote pairs for exactly that many candidates. `vote_resume` reconstructs the candidate ID universe from saved idiom votes, emits loading completion after that indexed ID work, and hydrates candidate rows lazily by `candidate_id` chunks during missing-vote generation and resolution. If saved vote pairs are incomplete, the loader falls back to the canonical pending scan. `force=True` bypasses existing-vote skips and regenerates both vote kinds.
+
+Idiom translation events mirror glossary where applicable:
+- `preprocess-idioms.translate.loading_started` before loading pending candidates.
+- `preprocess-idioms.translate.loading_completed` with `load_strategy`, `previous_pending_count`, `resume_vote_model`, complete-pair counts by model, and load timings.
+- `preprocess-idioms.translate.started` after pending candidates or resume candidate IDs are loaded.
+- `preprocess-idioms.translate.model_started` and `.model_completed` around each model's missing-vote work, with `model_name`, `pending_count`, `candidate_count`, `skipped_count`, and `vote_lookup_seconds` on start.
+- `preprocess-idioms.translate.resolution.started`, `.chapter_started`, `.chapter_completed`, `.unresolved`, `.resolution.completed`, and `.completed` during saved-vote resolution and phase completion.
+
+If idiom translation crashes during a model batch, votes saved before the crash remain the resume authority as long as the translate phase checkpoint has not advanced to `translated`. `preprocess_idioms(..., resume=True)` still skips the whole translate phase once the checkpoint is `translated` or `promoted`.
 
 Review workflow:
 - `glossary-review` includes an `alternatives` array for each translated or unresolved candidate.
@@ -117,7 +132,7 @@ Review workflow:
 - Settings tests cover configured lists, omitted lists, and empty lists.
 - Repository tests cover idempotent vote upserts and vote listing order.
 - Glossary pipeline tests cover single-model compatibility, exact consensus, majority consensus, unresolved disagreement, review alternatives, and model-batched call order.
-- Idiom pipeline tests cover rendering vote resolution, meaning vote resolution, unresolved rendering blocking promotion, and review alternatives.
+- Idiom pipeline tests cover rendering vote resolution, meaning vote resolution, unresolved rendering blocking promotion, review alternatives, complete vote-pair skips on rerun, partial vote-kind resume, `vote_resume` loading, incomplete-vote fallback, and `force=True` regeneration.
 
 ## Out Of Scope
 - Per-stage translator lists.

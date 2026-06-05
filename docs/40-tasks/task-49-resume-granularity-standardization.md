@@ -42,6 +42,11 @@ Standardize rerun behavior so the same `release_id` and `run_id` resumes complet
 - Graph drafts are keyed by release, run, chapter, chapter source hash, and prompt version.
 - Checkpoints advance only after durable writes complete.
 
+## Durable Resume Units
+
+- Idiom translation resumes at two levels: the existing phase checkpoint skips the whole translate phase after `translated` or `promoted`, and interrupted in-phase translation resumes from persisted `idiom_translation_votes` rows keyed by release, run, model, candidate, and vote kind.
+- A complete idiom model vote is both `rendering` and `meaning` rows for the same candidate. Reruns generate only missing vote kinds unless `--force` is used.
+
 ## Tests Or Smoke Checks
 
 - CLI parsing proves `--force` and `--allow-rewind` are separate.

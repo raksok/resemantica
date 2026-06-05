@@ -363,6 +363,15 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             UNIQUE (candidate_id, translation_run_id, model_name, vote_kind)
         );
 
+        CREATE INDEX IF NOT EXISTS idx_idiom_translation_votes_resume
+            ON idiom_translation_votes (
+                release_id,
+                translation_run_id,
+                model_name,
+                candidate_id,
+                vote_kind
+            );
+
         CREATE TABLE IF NOT EXISTS deferred_entities (
             deferred_id TEXT PRIMARY KEY,
             release_id TEXT NOT NULL,
