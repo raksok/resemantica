@@ -497,6 +497,8 @@ db_filename = "test.db"
         assert config.llm.throttle_groups["qwen"].model_names == [
             "Qwen3.5-9B-GLM5.1",
             "Qwen3.5-9B-NonThinking-unsloth",
+            "Qwopus3.5-9B",
+            "Crow3.5-9B",
         ]
         assert config.llm.throttle_groups["qwen"].max_concurrent_requests == 1
         assert config.llm.throttle_groups["qwen"].system_prompt == QWEN_SYSTEM_PROMPT

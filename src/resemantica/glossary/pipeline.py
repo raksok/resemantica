@@ -67,6 +67,19 @@ _STAGE_NAME = "preprocess-glossary"
 _TRANSLATION_RESUME_FETCH_CHUNK_SIZE = 500
 
 
+def _should_log_glossary_fill_candidate(
+    *,
+    candidate_index: int,
+    candidate_count: int,
+    sample_every: int,
+) -> bool:
+    return (
+        candidate_index == 1
+        or candidate_index == candidate_count
+        or candidate_index % sample_every == 0
+    )
+
+
 def _stable_json_hash(payload: object) -> str:
     return sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1934,7 +1947,9 @@ def fill_glossary_translation_votes(
                     message=f"Glossary filler model {model_name} started: {len(model_pending)} candidates",
                 )
                 generated_count = 0
-                for candidate in model_pending:
+                candidate_count = len(model_pending)
+                sample_every = config_obj.events.progress_sample_every
+                for candidate_index, candidate in enumerate(model_pending, start=1):
                     current_candidate_id = candidate.candidate_id
                     votes = [
                         vote
@@ -1945,6 +1960,21 @@ def fill_glossary_translation_votes(
                         )
                         if vote.translation_run_id == run_id
                     ]
+                    if _should_log_glossary_fill_candidate(
+                        candidate_index=candidate_index,
+                        candidate_count=candidate_count,
+                        sample_every=sample_every,
+                    ):
+                        logger.bind(
+                            release_id=release_id,
+                            run_id=run_id,
+                            model_name=model_name,
+                            candidate_id=candidate.candidate_id,
+                            source_term=candidate.source_term,
+                            chapter_number=candidate.first_seen_chapter,
+                            candidate_index=candidate_index,
+                            candidate_count=candidate_count,
+                        ).debug("Glossary filler processing candidate")
                     translated = client.translate_glossary_fill_candidate(
                         model_name=model_name,
                         prompt_template=prompt.template,

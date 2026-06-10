@@ -10,7 +10,12 @@ The earlier 64-token glossary translation completion cap was reverted. Glossary 
 
 ```toml
 [llm.throttle_groups.qwen]
-model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+model_names = [
+  "Qwen3.5-9B-GLM5.1",
+  "Qwen3.5-9B-NonThinking-unsloth",
+  "Qwopus3.5-9B",
+  "Crow3.5-9B",
+]
 max_concurrent_requests = 1
 system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 ```
@@ -18,6 +23,7 @@ system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assis
 Rules:
 - `llm.max_concurrent_requests_per_model` remains the default for ungrouped models.
 - A configured throttle group uses one shared semaphore for all listed exact model names.
+- Qwen-family fork model names such as `Qwopus3.5-9B` and `Crow3.5-9B` can be listed in the same group when they route to the same backend.
 - `model_names` must be non-empty after trimming whitespace.
 - `max_concurrent_requests` must be at least 1.
 - `system_prompt` is optional and defaults to an empty string.

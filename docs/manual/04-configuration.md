@@ -31,7 +31,12 @@ Optional throttle groups let exact model IDs share one process-local concurrency
 
 ```toml
 [llm.throttle_groups.qwen]
-model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+model_names = [
+  "Qwen3.5-9B-GLM5.1",
+  "Qwen3.5-9B-NonThinking-unsloth",
+  "Qwopus3.5-9B",
+  "Crow3.5-9B",
+]
 max_concurrent_requests = 1
 system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 ```
@@ -195,7 +200,12 @@ context_window = 65000
 max_concurrent_requests_per_model = 1
 
 [llm.throttle_groups.qwen]
-model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+model_names = [
+  "Qwen3.5-9B-GLM5.1",
+  "Qwen3.5-9B-NonThinking-unsloth",
+  "Qwopus3.5-9B",
+  "Crow3.5-9B",
+]
 max_concurrent_requests = 1
 system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 

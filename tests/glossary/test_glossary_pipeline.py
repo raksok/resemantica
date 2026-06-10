@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from loguru import logger
 
 from resemantica.db.glossary_repo import (
     ensure_glossary_schema,
@@ -42,7 +43,7 @@ from resemantica.glossary.pipeline import (
 )
 from resemantica.glossary.validators import normalize_term
 from resemantica.llm.prompts import load_prompt, render_named_sections
-from resemantica.settings import AppConfig, LLMConfig, derive_paths, load_config
+from resemantica.settings import AppConfig, EventsConfig, LLMConfig, derive_paths, load_config
 
 
 class ScriptedGlossaryLLM:
@@ -883,6 +884,77 @@ def test_glossary_fill_does_not_write_candidate_snapshot(
     )
 
     assert result["translated_count"] == 1
+
+
+def test_glossary_fill_debug_logs_sampled_candidate_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-debug-sampling"
+    run_id = "glossary-translate"
+    source_terms = [f"采样候选{i}" for i in range(1, 6)]
+    for source_term in source_terms:
+        _insert_glossary_candidate(release_id=release_id, source_term=source_term)
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term=source_term,
+            model_name="model-a",
+            target_term=f"Resolved Term {source_term[-1]}",
+        )
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term=source_term,
+            model_name="model-b",
+            target_term=f"Alternative Term {source_term[-1]}",
+        )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    config.events = EventsConfig(progress_sample_every=2)
+    filler = ModelMappedGlossaryFiller(
+        {
+            ("filler-a", source_term): f"Resolved Term {source_term[-1]}"
+            for source_term in source_terms
+        }
+    )
+    records = []
+    sink_id = logger.add(lambda message: records.append(message.record), level="DEBUG")
+
+    try:
+        fill_glossary_translation_votes(
+            release_id=release_id,
+            run_id=run_id,
+            filler_model_names=["filler-a"],
+            config=config,
+            llm_client=filler,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    sampled_records = [
+        record for record in records if record["message"] == "Glossary filler processing candidate"
+    ]
+    extras = [record["extra"] for record in sampled_records]
+
+    assert [extra["candidate_index"] for extra in extras] == [1, 2, 4, 5]
+    assert {extra["candidate_count"] for extra in extras} == {5}
+    assert {extra["release_id"] for extra in extras} == {release_id}
+    assert {extra["run_id"] for extra in extras} == {run_id}
+    assert {extra["model_name"] for extra in extras} == {"filler-a"}
+    assert all(extra["candidate_id"].startswith("gcan_") for extra in extras)
+    assert all(extra["source_term"] for extra in extras)
+    assert {extra["chapter_number"] for extra in extras} == {1}
+
+    sampled_payload = json.dumps(
+        [{"message": record["message"], "extra": record["extra"]} for record in sampled_records],
+        ensure_ascii=False,
+    )
+    assert "OUTPUT CONTRACT" not in sampled_payload
+    assert "Existing alternatives" not in sampled_payload
+    assert "Resolved Term" not in sampled_payload
+    assert "Alternative Term" not in sampled_payload
 
 
 def test_glossary_fill_prompt_keeps_candidate_data_after_stable_prefix() -> None:

@@ -51,12 +51,17 @@
 
 ```toml
 [llm.throttle_groups.qwen]
-model_names = ["Qwen3.5-9B-GLM5.1", "Qwen3.5-9B-NonThinking-unsloth"]
+model_names = [
+  "Qwen3.5-9B-GLM5.1",
+  "Qwen3.5-9B-NonThinking-unsloth",
+  "Qwopus3.5-9B",
+  "Crow3.5-9B",
+]
 max_concurrent_requests = 1
 system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 ```
 
-This serializes those Qwen calls inside one process while leaving unrelated model IDs on their own per-model limits. The system prompt is sent as a fresh `system` message for every matching Qwen request.
+This serializes those Qwen and Qwen-family fork calls inside one process while leaving unrelated model IDs on their own per-model limits. The system prompt is sent as a fresh `system` message for every matching grouped request.
 
 Existing malformed Qwen glossary votes are already persisted. Regenerate them with `--force` or delete the targeted vote rows before rerunning glossary translation.
 
@@ -74,6 +79,13 @@ leaves for human review.
 `glossary-fill` does not run full glossary translation and does not directly
 override canonical translations. If Tao/Dao-style policy disagreements remain
 unresolved, edit the review file and promote with `glossary-promote -F`.
+
+Long `glossary-fill` runs emit sampled DEBUG records before filler model calls.
+The records identify the release, run, model, candidate, source term, chapter,
+candidate index, and candidate count. They do not include prompt text or model
+output. JSONL logs capture DEBUG by default, but the records are sampled using
+`events.progress_sample_every` to avoid one JSONL row per candidate; console
+DEBUG output requires `-vvv` or higher.
 
 ### Glossary discovery appears stuck after chapters finish
 
