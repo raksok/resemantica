@@ -934,11 +934,19 @@ def test_glossary_fill_debug_logs_sampled_candidate_metadata(
         logger.remove(sink_id)
 
     sampled_records = [
-        record for record in records if record["message"] == "Glossary filler processing candidate"
+        record
+        for record in records
+        if record["message"].startswith("Glossary filler processing candidate")
     ]
     extras = [record["extra"] for record in sampled_records]
+    messages = [record["message"] for record in sampled_records]
 
     assert [extra["candidate_index"] for extra in extras] == [1, 2, 4, 5]
+    assert [message.split()[4] for message in messages] == ["1/5", "2/5", "4/5", "5/5"]
+    assert all("model=filler-a" in message for message in messages)
+    assert all("candidate_id=gcan_" in message for message in messages)
+    assert all("source_term=采样候选" in message for message in messages)
+    assert all("chapter=1" in message for message in messages)
     assert {extra["candidate_count"] for extra in extras} == {5}
     assert {extra["release_id"] for extra in extras} == {release_id}
     assert {extra["run_id"] for extra in extras} == {run_id}

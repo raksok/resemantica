@@ -1974,7 +1974,16 @@ def fill_glossary_translation_votes(
                             chapter_number=candidate.first_seen_chapter,
                             candidate_index=candidate_index,
                             candidate_count=candidate_count,
-                        ).debug("Glossary filler processing candidate")
+                        ).debug(
+                            "Glossary filler processing candidate {}/{} model={} "
+                            "candidate_id={} source_term={} chapter={}",
+                            candidate_index,
+                            candidate_count,
+                            model_name,
+                            candidate.candidate_id,
+                            candidate.source_term,
+                            candidate.first_seen_chapter,
+                        )
                     translated = client.translate_glossary_fill_candidate(
                         model_name=model_name,
                         prompt_template=prompt.template,
