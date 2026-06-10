@@ -16,6 +16,7 @@ from resemantica.cli_progress import CliProgressSubscriber
 from resemantica.epub.extractor import extract_epub
 from resemantica.glossary.pipeline import (
     promote_glossary_candidates,
+    resolve_glossary_translation_votes,
     translate_glossary_candidates,
 )
 from resemantica.logging_config import configure_logging
@@ -432,6 +433,15 @@ produce provisional English renderings. Updates candidates.json.""",
     _add_chapter_scope_args(glossary_translate)
     _add_force_arg(glossary_translate)
 
+    glossary_resolve = preprocess_subparsers.add_parser(
+        "glossary-resolve", aliases=["gls-resolve"],
+        help="Re-resolve saved glossary translation votes without calling LLMs.",
+        description="""\
+Replays existing glossary translation votes for the selected release/run and
+updates canonical candidate translations without regenerating model votes.""",
+    )
+    _add_common_release_args(glossary_resolve, default_run="glossary-translate")
+
     glossary_review = preprocess_subparsers.add_parser(
         "glossary-review", aliases=["gls-review"],
         help="Generate a human-editable review file(s) for translated candidates.",
@@ -793,6 +803,7 @@ _ALIAS_MAP: dict[str, str] = {
     "reb": "rebuild",
     "gls-discover": "glossary-discover",
     "gls-translate": "glossary-translate",
+    "gls-resolve": "glossary-resolve",
     "gls-review": "glossary-review",
     "gls-promote": "glossary-promote",
     "sum": "summaries",
@@ -929,6 +940,27 @@ def main(argv: list[str] | None = None) -> int:
                 return 130
             print(f"status={result['status']}")
             print(f"translated_count={result['translated_count']}")
+            print(f"candidates_artifact={result['candidates_artifact']}")
+            return 0
+
+        if args.preprocess_command == "glossary-resolve":
+            result = _with_cli_progress(
+                lambda: resolve_glossary_translation_votes(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={result['status']}")
+            print(f"candidate_count={result['candidate_count']}")
+            print(f"translated_count={result['translated_count']}")
+            print(f"unresolved_count={result['unresolved_count']}")
+            print(f"stale_cleared_count={result['stale_cleared_count']}")
             print(f"candidates_artifact={result['candidates_artifact']}")
             return 0
 

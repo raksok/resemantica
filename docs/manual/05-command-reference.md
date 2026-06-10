@@ -98,6 +98,29 @@ uv run rsem preprocess glossary-translate -r <release> [-R <run>] [options]
 
 Resume is the default. Glossary translation skips existing votes for the same release, run, and configured model, so rerunning after a local model-server crash continues from the first missing vote. Use the same `-r`, same `-R`, and same config without `--force` to resume. When a complete seed model vote set exists, resume avoids a full candidate-table scan and loads candidate rows later by `candidate_id` primary key. Change the configured model list only when intentionally abandoning a crashing model.
 
+### `glossary-resolve` (alias: `gls-resolve`)
+
+Re-run the deterministic glossary voter over saved translation votes without
+calling translation models.
+
+```bash
+uv run rsem preprocess glossary-resolve -r <release> [-R <translation-run>]
+```
+
+Output: updated `candidates.json`
+
+The default run scope is `glossary-translate`, matching the default
+`glossary-translate` vote scope. Use this command after improving voter logic or
+changing deterministic style rules, then regenerate review files:
+
+```bash
+uv run rsem preprocess glossary-resolve -r <release> -R glossary-translate
+uv run rsem preprocess glossary-review -r <release>
+```
+
+Existing vote rows are not regenerated. Only candidate canonical translation
+fields and vote `resolution_status` values are updated.
+
 ### `glossary-review` (alias: `gls-review`)
 
 Generate review files for human editing.
@@ -107,6 +130,9 @@ uv run rsem preprocess glossary-review -r <release> [options]
 ```
 
 Output: `review.json` and `review.csv`
+
+This command reads translated/voted glossary candidates from SQLite, writes the
+two review files, and does not call LLMs.
 
 ### `glossary-promote` (alias: `gls-promote`)
 

@@ -76,6 +76,12 @@ Tie-breaking:
 - Do not use a generalist picker model in v1.
 - Do not use COMET, XCOMET, or CometKiwi scores to override disagreement in v1.
 
+Glossary resolution also has a no-LLM replay path. `preprocess
+glossary-resolve` loads saved glossary vote IDs for the selected release/run,
+hydrates candidates by primary key, and re-applies the deterministic resolver to
+candidate canonical fields. This is the operator path for improved voter logic
+or style-rule changes when the expensive model vote rows are still valid.
+
 ## Pipeline Behavior
 Glossary translation:
 1. Load pending candidates using the existing translation query.
@@ -87,6 +93,11 @@ Glossary translation:
 7. Leave unresolved candidates for review.
 
 Vote-level resume is keyed by `(release_id, translation_run_id, model_name)`. On rerun, each configured model receives only candidates that do not already have a vote for that release, run, and model. Completed votes from earlier model batches remain valid durable state and are not discarded by later failures.
+
+Resolve-only uses the same `(release_id, translation_run_id)` vote scope but
+skips model work entirely. It updates vote `resolution_status`, writes resolved
+candidate canonical translations, clears stale translations from the same run
+that are no longer resolvable, and writes `candidates.json`.
 
 When rerunning an interrupted translation run, the loader may use `vote_resume` instead of the canonical pending scan if a prior `translate.started` event has a pending count and one configured model already has exactly that many votes. The `vote_resume` strategy reconstructs the candidate ID universe from saved votes, emits loading completion after that indexed ID work, and fetches candidate rows lazily in `candidate_id` primary-key chunks during missing-vote generation and resolution. Lazy hydration must stay ID-first; it must not devolve into release-wide `glossary_candidates` scans before per-model resume can skip completed votes.
 

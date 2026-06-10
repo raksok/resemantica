@@ -344,6 +344,19 @@ def list_translation_resume_candidate_ids(
     return [str(row["candidate_id"]) for row in rows]
 
 
+def list_translation_vote_candidate_ids_for_run(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> list[str]:
+    return list_translation_resume_candidate_ids(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+    )
+
+
 def list_existing_translation_vote_candidate_ids(
     conn: sqlite3.Connection,
     *,
@@ -433,30 +446,49 @@ def list_candidates_for_review(
     *,
     release_id: str,
 ) -> list[GlossaryCandidate]:
-    rows = conn.execute(
+    translated_rows = conn.execute(
         """
-        SELECT candidate_id, release_id, source_term, normalized_source_term, category,
-               source_language, first_seen_chapter, last_seen_chapter, appearance_count,
-               evidence_snippet, candidate_translation_en, normalized_target_term,
-               discovery_run_id, translation_run_id, candidate_status, validation_status,
-               conflict_reason, critic_score, analyst_model_name, analyst_prompt_version,
-               translator_model_name, translator_prompt_version, schema_version,
-               pos_tags, ner_label, type_prior, source_strategies, chapter_coverage,
-               corpus_score, context_snippets, llm_keep, llm_type, llm_reason_code, llm_confidence
+        SELECT candidate_id
         FROM glossary_candidates
         WHERE release_id = ?
-          AND (
-            candidate_status = 'translated'
-            OR EXISTS (
-                SELECT 1 FROM glossary_translation_votes v
-                WHERE v.candidate_id = glossary_candidates.candidate_id
-            )
-          )
-        ORDER BY first_seen_chapter, normalized_source_term, category
+          AND candidate_status = 'translated'
         """,
         (release_id,),
     ).fetchall()
-    return [_candidate_from_row(row) for row in rows]
+    voted_rows = conn.execute(
+        """
+        SELECT DISTINCT candidate_id
+        FROM glossary_translation_votes
+        WHERE release_id = ?
+        """,
+        (release_id,),
+    ).fetchall()
+    candidate_ids = list(dict.fromkeys(
+        [str(row["candidate_id"]) for row in translated_rows]
+        + [str(row["candidate_id"]) for row in voted_rows]
+    ))
+    candidates: list[GlossaryCandidate] = []
+    for start in range(0, len(candidate_ids), 500):
+        chunk = candidate_ids[start:start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"""
+            SELECT {_CANDIDATE_ROW_COLUMNS}
+            FROM glossary_candidates
+            WHERE candidate_id IN ({placeholders})
+              AND +release_id = ?
+            """,
+            (*chunk, release_id),
+        ).fetchall()
+        candidates.extend(_candidate_from_row(row) for row in rows)
+    candidates.sort(
+        key=lambda candidate: (
+            candidate.first_seen_chapter,
+            candidate.normalized_source_term,
+            candidate.category,
+        )
+    )
+    return candidates
 
 
 def upsert_translation_vote(
@@ -550,6 +582,25 @@ def list_translation_votes(
     return [_vote_from_row(row) for row in rows]
 
 
+def list_translation_votes_for_review(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+) -> list[GlossaryTranslationVote]:
+    rows = conn.execute(
+        """
+        SELECT vote_id, candidate_id, release_id, translation_run_id,
+               model_name, prompt_version, '' AS raw_output, cleaned_output,
+               normalized_output, resolution_status, schema_version
+        FROM glossary_translation_votes
+        WHERE release_id = ?
+        ORDER BY candidate_id, created_at, model_name
+        """,
+        (release_id,),
+    ).fetchall()
+    return [_vote_from_row(row) for row in rows]
+
+
 def list_translation_vote_candidate_ids(
     conn: sqlite3.Connection,
     *,
@@ -622,6 +673,32 @@ def save_candidate_translation(
                 translator_prompt_version,
                 candidate_id,
             ),
+        )
+
+
+def clear_candidate_translation_for_run(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    translation_run_id: str,
+) -> None:
+    with conn:
+        conn.execute(
+            """
+            UPDATE glossary_candidates
+            SET candidate_translation_en = NULL,
+                normalized_target_term = NULL,
+                translator_model_name = NULL,
+                translator_prompt_version = NULL,
+                candidate_status = 'discovered',
+                validation_status = 'pending',
+                conflict_reason = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE candidate_id = ?
+              AND translation_run_id = ?
+              AND candidate_status = 'translated'
+            """,
+            (candidate_id, translation_run_id),
         )
 
 

@@ -18,6 +18,24 @@ Produces two files at `<release_root>/glossary/`:
 - `review.json` — Full structured data with all fields
 - `review.csv` — Tab-separated spreadsheet-friendly format
 
+Review generation is database and file I/O only; it does not call translation or
+analysis models. On large releases, glossary review uses indexed lookups over
+translated candidates and translation votes instead of scanning every discovered
+candidate.
+
+If only the voter logic changed and existing model votes are still valid, re-run
+the saved-vote resolver before regenerating review files:
+
+```bash
+uv run rsem preprocess glossary-resolve -r v1.0 -R glossary-translate
+uv run rsem preprocess glossary-review -r v1.0
+```
+
+`glossary-resolve` does not call LLMs. It replays saved
+`glossary_translation_votes`, updates canonical candidate translations, and then
+`glossary-review` reflects the new resolved/unresolved state in `review.json`
+and `review.csv`.
+
 ### Review File Format
 
 **JSON structure:**

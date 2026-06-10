@@ -140,6 +140,22 @@ This is text of {CATEGORY}, Translate the following `zh` into `en` with no extra
 
 Response post-processing strips label prefixes (`Category:`, `Translation:`, etc.) and takes only the last non-empty line as defense against chain-of-thought leakage. Glossary translation requests do not set a glossary-specific completion cap.
 
+### `glossary-resolve` command
+
+Replays saved `glossary_translation_votes` for one `(release_id,
+translation_run_id)` and updates canonical candidate translation fields without
+calling LLMs. The command loads candidate IDs from the vote table, hydrates
+candidate rows by primary-key chunks, runs the same deterministic voter used by
+`glossary-translate`, and writes a fresh `candidates.json` snapshot.
+
+Existing vote rows remain the source of truth and are not regenerated. The
+resolver updates vote `resolution_status`; writes
+`glossary_candidates.candidate_translation_en`, `normalized_target_term`, and
+translator metadata for resolved winners; and clears stale canonical
+translations previously written by that same translation run when the current
+voter now leaves the candidate unresolved. Review and promotion schemas are
+unchanged.
+
 ## Review Workflow
 
 ### `glossary-review` command

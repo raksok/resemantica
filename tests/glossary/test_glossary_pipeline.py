@@ -6,18 +6,21 @@ import sqlite3
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from resemantica.db.glossary_repo import (
     ensure_glossary_schema,
     list_candidates_by_ids,
+    list_candidates_for_review,
     list_conflicts,
     list_existing_translation_vote_candidate_ids,
     list_locked_entries,
     list_translation_resume_candidate_ids,
     list_translation_vote_candidate_ids,
     list_translation_votes,
+    list_translation_votes_for_review,
     promote_locked_entries,
     upsert_discovered_candidates,
     upsert_translation_vote,
@@ -27,8 +30,10 @@ from resemantica.epub.extractor import extract_epub
 from resemantica.glossary.evaluator import EvalResult
 from resemantica.glossary.models import AliasCluster, GlossaryCandidate, LockedGlossaryEntry
 from resemantica.glossary.pipeline import (
+    _resolve_translation_votes,
     discover_glossary_candidates,
     promote_glossary_candidates,
+    resolve_glossary_translation_votes,
     resolve_locked_glossary_term,
     review_glossary_candidates,
     translate_glossary_candidates,
@@ -251,6 +256,15 @@ def _insert_translation_vote(
         conn.close()
 
 
+def _resolver_vote(model_name: str, target_term: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        model_name=model_name,
+        cleaned_output=target_term,
+        normalized_output=normalize_term(target_term),
+        prompt_version="test",
+    )
+
+
 def _emit_translate_started_event(
     *,
     release_id: str,
@@ -308,8 +322,11 @@ class CapturingLookupConnection(sqlite3.Connection):
         super().__init__(*args, **kwargs)
         self.candidate_lookup_sql: str = ""
         self.candidate_lookup_params: tuple[object, ...] = ()
+        self.select_sql: list[str] = []
 
     def execute(self, sql: str, parameters=(), /):  # noqa: ANN001
+        if sql.lstrip().upper().startswith("SELECT"):
+            self.select_sql.append(sql)
         if (
             sql.lstrip().upper().startswith("SELECT")
             and "FROM glossary_candidates" in sql
@@ -492,6 +509,86 @@ def test_multi_model_glossary_translation_majority_and_review_alternatives(
     assert unresolved_events[0].severity == "warning"
     assert unresolved_events[0].payload["candidate_id"] == ids_by_source["苍云门"]
     assert unresolved_events[0].payload["source_term"] == "苍云门"
+
+
+def test_glossary_vote_resolution_collapses_case_and_article_variants() -> None:
+    case_resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "respect"),
+            _resolver_vote("model-b", "Respect"),
+            _resolver_vote("model-c", "Respect"),
+        ],
+        ["model-a", "model-b", "model-c"],
+        source_term="尊重",
+    )
+    assert case_resolution["status"] == "consensus"
+    assert case_resolution["target_term"] == "Respect"
+
+    article_resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "the Great Sui Dynasty"),
+            _resolver_vote("model-b", "Great Sui Dynasty"),
+            _resolver_vote("model-c", ""),
+        ],
+        ["model-a", "model-b", "model-c"],
+        source_term="大隋王朝",
+    )
+    assert article_resolution["status"] == "majority"
+    assert article_resolution["target_term"] == "Great Sui Dynasty"
+
+
+def test_glossary_vote_resolution_prefers_great_dynasty_family_variants() -> None:
+    resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "Da Li Imperial Palace"),
+            _resolver_vote("model-b", "Dali Imperial Palace"),
+            _resolver_vote("model-c", "Great Li Imperial Palace"),
+        ],
+        ["model-a", "model-b", "model-c"],
+        source_term="大骊皇宫",
+    )
+
+    assert resolution["status"] == "consensus"
+    assert resolution["target_term"] == "Great Li Imperial Palace"
+
+
+def test_glossary_vote_resolution_keeps_different_dynasty_phrases_unresolved() -> None:
+    resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "Prince of Dali"),
+            _resolver_vote("model-b", "Dali Vassal Prince"),
+            _resolver_vote("model-c", "Great Li Vassal King"),
+        ],
+        ["model-a", "model-b", "model-c"],
+        source_term="大骊藩王",
+    )
+
+    assert resolution["status"] == "unresolved"
+    assert resolution["target_term"] == ""
+
+
+def test_glossary_vote_resolution_keeps_tao_dao_disagreements_unresolved() -> None:
+    taoism_resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "Taoism"),
+            _resolver_vote("model-b", "Taoism"),
+            _resolver_vote("model-c", "Daoism"),
+        ],
+        ["model-a", "model-b", "model-c"],
+        source_term="道教",
+    )
+    assert taoism_resolution["status"] == "unresolved"
+
+    taoist_resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "Taoist sect"),
+            _resolver_vote("model-b", "Taoist Sect"),
+            _resolver_vote("model-c", "Daoist sect"),
+        ],
+        ["model-a", "model-b", "model-c"],
+        source_term="道教宗门",
+    )
+    assert taoist_resolution["status"] == "unresolved"
 
 
 def test_glossary_translation_failure_emits_model_context(
@@ -807,6 +904,169 @@ def test_glossary_translation_force_regenerates_existing_votes(
     assert votes[0].cleaned_output == "Azure Sect"
 
 
+def test_glossary_resolve_only_uses_saved_votes_and_writes_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "resemantica.glossary.pipeline._build_llm_client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("LLM should not be built")),
+    )
+    release_id = "m42-glossary-resolve-only"
+    run_id = "translate-001"
+    _insert_glossary_candidate(release_id=release_id, source_term="大骊皇宫")
+    _insert_glossary_candidate(release_id=release_id, source_term="道教")
+    for model_name, target_term in [
+        ("model-a", "Da Li Imperial Palace"),
+        ("model-b", "Dali Imperial Palace"),
+        ("model-c", "Great Li Imperial Palace"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="大骊皇宫",
+            model_name=model_name,
+            target_term=target_term,
+        )
+    for model_name, target_term in [
+        ("model-a", "Taoism"),
+        ("model-b", "Taoism"),
+        ("model-c", "Daoism"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="道教",
+            model_name=model_name,
+            target_term=target_term,
+        )
+
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+
+    def callback(event):
+        if event.run_id == run_id:
+            received.append(event)
+
+    subscribe("*", callback)
+    try:
+        result = resolve_glossary_translation_votes(
+            release_id=release_id,
+            run_id=run_id,
+            config=config,
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result["candidate_count"] == 2
+    assert result["translated_count"] == 1
+    assert result["unresolved_count"] == 1
+    assert result["stale_cleared_count"] == 0
+    paths = derive_paths(load_config(), release_id=release_id)
+    assert paths.glossary_candidates_path.exists()
+    candidate_snapshot = json.loads(paths.glossary_candidates_path.read_text(encoding="utf-8"))
+    translations = {
+        item["source_term"]: item["candidate_translation_en"]
+        for item in candidate_snapshot["candidates"]
+    }
+    assert translations["大骊皇宫"] == "Great Li Imperial Palace"
+    assert translations["道教"] is None
+
+    event_types = [event.event_type for event in received]
+    assert event_types == [
+        "preprocess-glossary.resolve.started",
+        "preprocess-glossary.resolve.unresolved",
+        "preprocess-glossary.resolve.snapshot.artifact_written",
+        "preprocess-glossary.resolve.completed",
+    ]
+
+    review = review_glossary_candidates(release_id=release_id, run_id="review-001", config=config)
+    assert review["entries_written"] == 2
+    csv_rows = paths.glossary_review_path.with_suffix(".csv").read_text(encoding="utf-8").splitlines()
+    assert csv_rows[0] == "action\tsource_term\tcategory\ttranslation\tcandidate_id\tevidence_snippet\talternatives"
+    review_data = json.loads(paths.glossary_review_path.read_text(encoding="utf-8"))
+    resolved_entry = next(entry for entry in review_data["entries"] if entry["source_term"] == "大骊皇宫")
+    assert resolved_entry["translation"] == "Great Li Imperial Palace"
+    assert [alt["translation"] for alt in resolved_entry["alternatives"]] == [
+        "Da Li Imperial Palace",
+        "Dali Imperial Palace",
+        "Great Li Imperial Palace",
+    ]
+
+
+def test_glossary_resolve_only_clears_stale_translation_when_now_unresolved(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-glossary-resolve-clear"
+    run_id = "translate-001"
+    _insert_glossary_candidate(release_id=release_id, source_term="道教")
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        conn.execute(
+            """
+            UPDATE glossary_candidates
+            SET candidate_translation_en = ?,
+                normalized_target_term = ?,
+                translation_run_id = ?,
+                candidate_status = 'translated'
+            WHERE release_id = ? AND source_term = ?
+            """,
+            ("Taoism", "taoism", run_id, release_id, "道教"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    for model_name, target_term in [
+        ("model-a", "Taoism"),
+        ("model-b", "Taoism"),
+        ("model-c", "Daoism"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="道教",
+            model_name=model_name,
+            target_term=target_term,
+        )
+
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b", "model-c"]
+    result = resolve_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        config=config,
+    )
+
+    assert result["translated_count"] == 0
+    assert result["unresolved_count"] == 1
+    assert result["stale_cleared_count"] == 1
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        row = conn.execute(
+            """
+            SELECT candidate_translation_en, normalized_target_term, candidate_status
+            FROM glossary_candidates
+            WHERE release_id = ? AND source_term = ?
+            """,
+            (release_id, "道教"),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["candidate_translation_en"] is None
+    assert row["normalized_target_term"] is None
+    assert row["candidate_status"] == "discovered"
+
+
 def test_glossary_translation_vote_candidate_id_lookup_is_scoped(
     tmp_path: Path,
     monkeypatch,
@@ -937,6 +1197,141 @@ def test_glossary_candidate_id_batch_lookup_uses_primary_key_plan() -> None:
     assert "candidate_id" in plan_detail
     assert "normalized_source_term" not in plan_detail
     assert "release_id" not in plan_detail
+
+
+def test_glossary_review_loads_translated_and_voted_candidates_once() -> None:
+    release_id = "m42-review-loading"
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_glossary_schema(conn)
+    try:
+        upsert_discovered_candidates(
+            conn,
+            candidates=[
+                _lookup_candidate(release_id=release_id, index=20, translated=True),
+                _lookup_candidate(release_id=release_id, index=10),
+                _lookup_candidate(release_id=release_id, index=30, translated=True),
+            ],
+        )
+        upsert_translation_vote(
+            conn,
+            candidate_id="gcan_lookup_0010",
+            release_id=release_id,
+            translation_run_id="translate-001",
+            model_name="model-a",
+            prompt_version="test",
+            raw_output="raw voted output",
+            cleaned_output="Voted Only",
+            normalized_output="voted only",
+        )
+        upsert_translation_vote(
+            conn,
+            candidate_id="gcan_lookup_0030",
+            release_id=release_id,
+            translation_run_id="translate-001",
+            model_name="model-a",
+            prompt_version="test",
+            raw_output="raw duplicate output",
+            cleaned_output="Translated With Vote",
+            normalized_output="translated with vote",
+        )
+
+        candidates = list_candidates_for_review(conn, release_id=release_id)
+        votes = list_translation_votes_for_review(conn, release_id=release_id)
+        candidate_indexes = [
+            int(candidate.candidate_id.rsplit("_", maxsplit=1)[1])
+            for candidate in candidates
+        ]
+        candidate_indexes_by_id = {candidate.candidate_id: index for index, candidate in enumerate(candidates)}
+        candidate_indexes_for_votes = [
+            candidate_indexes_by_id[vote.candidate_id]
+            for vote in votes
+            if vote.cleaned_output == "Voted Only"
+        ]
+        candidate_indexes_for_translated_votes = [
+            candidate_indexes_by_id[vote.candidate_id]
+            for vote in votes
+            if vote.cleaned_output == "Translated With Vote"
+        ]
+    finally:
+        conn.close()
+
+    assert candidate_indexes == [10, 20, 30]
+    assert candidate_indexes_for_votes == [0]
+    assert candidate_indexes_for_translated_votes == [2]
+    assert [vote.raw_output for vote in votes] == ["", ""]
+    assert [vote.cleaned_output for vote in votes] == ["Voted Only", "Translated With Vote"]
+
+
+def test_glossary_review_indexes_exist() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_glossary_schema(conn)
+    try:
+        candidate_indexes = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA index_list(glossary_candidates)").fetchall()
+        }
+        vote_indexes = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA index_list(glossary_translation_votes)").fetchall()
+        }
+    finally:
+        conn.close()
+
+    assert "idx_glossary_candidates_review_status" in candidate_indexes
+    assert "idx_glossary_translation_votes_review" in vote_indexes
+
+
+def test_glossary_review_lookup_avoids_correlated_candidate_scan() -> None:
+    release_id = "m42-review-query-shape"
+    conn = sqlite3.connect(":memory:", factory=CapturingLookupConnection)
+    conn.row_factory = sqlite3.Row
+    ensure_glossary_schema(conn)
+    try:
+        upsert_discovered_candidates(
+            conn,
+            candidates=[
+                _lookup_candidate(
+                    release_id=release_id,
+                    index=index,
+                    translated=index in {123, 400},
+                )
+                for index in range(650)
+            ],
+        )
+        upsert_translation_vote(
+            conn,
+            candidate_id="gcan_lookup_0510",
+            release_id=release_id,
+            translation_run_id="translate-001",
+            model_name="model-a",
+            prompt_version="test",
+            raw_output="raw",
+            cleaned_output="Review Candidate",
+            normalized_output="review candidate",
+        )
+
+        candidates = list_candidates_for_review(conn, release_id=release_id)
+        plan_rows = conn.execute(
+            f"EXPLAIN QUERY PLAN {conn.candidate_lookup_sql}",
+            conn.candidate_lookup_params,
+        ).fetchall()
+        select_sql = "\n".join(conn.select_sql).lower()
+    finally:
+        conn.close()
+
+    assert [candidate.candidate_id for candidate in candidates] == [
+        "gcan_lookup_0123",
+        "gcan_lookup_0400",
+        "gcan_lookup_0510",
+    ]
+    assert " exists " not in select_sql
+    assert "from glossary_translation_votes" in select_sql
+    assert "candidate_id in" in conn.candidate_lookup_sql.lower()
+    plan_detail = " ".join(str(row["detail"]) for row in plan_rows).lower()
+    assert "candidate_id" in plan_detail
+    assert "normalized_source_term" not in plan_detail
 
 
 def test_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:

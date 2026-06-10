@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sqlite3
 import time
+import unicodedata
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -14,6 +16,7 @@ from loguru import logger
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.glossary_repo import (
     clear_alias_clusters_for_run,
+    clear_candidate_translation_for_run,
     clear_discovery_chapter_state,
     count_translation_votes_by_model,
     find_exact_locked_entry,
@@ -28,7 +31,9 @@ from resemantica.db.glossary_repo import (
     list_existing_translation_vote_candidate_ids,
     list_locked_entries,
     list_translation_resume_candidate_ids,
+    list_translation_vote_candidate_ids_for_run,
     list_translation_votes,
+    list_translation_votes_for_review,
     mark_candidates_conflict,
     mark_candidates_promoted,
     promote_locked_entries,
@@ -1401,33 +1406,17 @@ def translate_glossary_candidates(
                         chapter_number=chapter,
                     )
                 chapter_candidate_count += 1
-                votes = list_translation_votes(
+                result = _apply_candidate_vote_resolution(
                     conn,
                     release_id=release_id,
-                    candidate_id=candidate.candidate_id,
-                )
-                votes = [vote for vote in votes if vote.translation_run_id == run_id]
-                resolution = _resolve_translation_votes(votes, translator_names)
-                resolution_model_name = resolution.get("model_name", "")
-                set_translation_vote_resolution(
-                    conn,
-                    candidate_id=candidate.candidate_id,
                     translation_run_id=run_id,
-                    resolution_status=resolution["status"],
+                    candidate=candidate,
+                    translator_names=translator_names,
+                    model_prompt_versions=model_prompt_versions,
                 )
-                if resolution["target_term"]:
-                    save_candidate_translation(
-                        conn,
-                        candidate_id=candidate.candidate_id,
-                        translation_run_id=run_id,
-                        target_term=resolution["target_term"],
-                        normalized_target_term=resolution["normalized_target_term"],
-                        translator_model_name=resolution["model_name"],
-                        translator_prompt_version=model_prompt_versions.get(
-                            resolution.get("model_name", ""),
-                            "unknown",
-                        ),
-                    )
+                resolution = result["resolution"]
+                resolution_model_name = resolution.get("model_name", "")
+                if result["translated"]:
                     translated_count += 1
                     chapter_translated_count += 1
                 else:
@@ -1548,45 +1537,410 @@ def translate_glossary_candidates(
     }
 
 
-def _resolve_translation_votes(votes: list[Any], model_order: list[str]) -> dict[str, str]:
+def _empty_vote_resolution() -> dict[str, str]:
+    return {
+        "status": "unresolved",
+        "target_term": "",
+        "normalized_target_term": "",
+        "model_name": "",
+        "prompt_version": "",
+    }
+
+
+def _ascii_fold(value: str) -> str:
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKD", value)
+        if not unicodedata.combining(char)
+    )
+
+
+def _strip_leading_article(value: str) -> str:
+    return re.sub(r"^(?:the|a|an)\s+", "", value, count=1)
+
+
+def _has_leading_article(value: str) -> bool:
+    return bool(re.match(r"^(?:the|a|an)\s+", value.strip(), flags=re.IGNORECASE))
+
+
+def _base_resolution_key(value: str) -> str:
+    normalized = normalize_term(_ascii_fold(value))
+    normalized = _strip_leading_article(normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _dynasty_family(source_term: str) -> tuple[str, tuple[str, ...]] | None:
+    if "大骊" in source_term:
+        return "Great Li", ("great li", "da li", "dalí", "dali")
+    if "大隋" in source_term:
+        return "Great Sui", ("great sui", "da sui", "dasiu")
+    return None
+
+
+def _dynasty_resolution_key(value: str, source_term: str) -> str:
+    key = _base_resolution_key(value)
+    family = _dynasty_family(source_term)
+    if family is None:
+        return key
+    _preferred, variants = family
+    for variant in sorted(variants, key=len, reverse=True):
+        key = re.sub(rf"\b{re.escape(variant)}\b", "__dynasty__", key)
+    return key
+
+
+def _preferred_dynasty_display(value: str, source_term: str) -> str:
+    family = _dynasty_family(source_term)
+    if family is None:
+        return value
+    preferred, variants = family
+    result = value
+    for variant in sorted(variants, key=len, reverse=True):
+        result = re.sub(rf"\b{re.escape(variant)}\b", preferred, result, flags=re.IGNORECASE)
+    return result
+
+
+def _has_tao_dao_disagreement(votes: list[Any]) -> bool:
+    has_tao = False
+    has_dao = False
+    for vote in votes:
+        key = _base_resolution_key(str(vote.cleaned_output or vote.normalized_output or ""))
+        has_tao = has_tao or bool(re.search(r"\btao\w*\b", key))
+        has_dao = has_dao or bool(re.search(r"\bdao\w*\b", key))
+    return has_tao and has_dao
+
+
+def _resolve_translation_votes(
+    votes: list[Any],
+    model_order: list[str],
+    *,
+    source_term: str = "",
+) -> dict[str, str]:
     votes_by_model = {vote.model_name: vote for vote in votes}
     ordered_votes = [votes_by_model[name] for name in model_order if name in votes_by_model]
     if not ordered_votes:
-        return {
-            "status": "unresolved",
-            "target_term": "",
-            "normalized_target_term": "",
-            "model_name": "",
-        }
+        return _empty_vote_resolution()
+    if _has_tao_dao_disagreement(ordered_votes):
+        return _empty_vote_resolution()
 
-    counts: dict[str, int] = {}
+    votes_by_key: dict[str, list[Any]] = {}
     for vote in ordered_votes:
-        if vote.normalized_output:
-            counts[vote.normalized_output] = counts.get(vote.normalized_output, 0) + 1
-    if not counts:
-        return {
-            "status": "unresolved",
-            "target_term": "",
-            "normalized_target_term": "",
-            "model_name": "",
-        }
+        cleaned_output = str(vote.cleaned_output or "").strip()
+        if cleaned_output:
+            key = _dynasty_resolution_key(cleaned_output, source_term)
+            if key:
+                votes_by_key.setdefault(key, []).append(vote)
+    if not votes_by_key:
+        return _empty_vote_resolution()
 
-    winning_normalized, winning_count = max(counts.items(), key=lambda item: item[1])
+    winning_key, winning_votes = max(
+        votes_by_key.items(),
+        key=lambda item: (
+            len(item[1]),
+            -min(model_order.index(vote.model_name) for vote in item[1] if vote.model_name in model_order),
+        ),
+    )
+    winning_count = len(winning_votes)
     if winning_count <= len(ordered_votes) // 2:
-        return {
-            "status": "unresolved",
-            "target_term": "",
-            "normalized_target_term": "",
-            "model_name": "",
-        }
+        return _empty_vote_resolution()
 
     status = "consensus" if winning_count == len(ordered_votes) else "majority"
-    display_vote = next(vote for vote in ordered_votes if vote.normalized_output == winning_normalized)
+    surfaces: dict[str, int] = {}
+    for vote in winning_votes:
+        surfaces[str(vote.cleaned_output).strip()] = surfaces.get(str(vote.cleaned_output).strip(), 0) + 1
+    display_surface = max(
+        surfaces,
+        key=lambda surface: (
+            surfaces[surface],
+            0 if _has_leading_article(surface) else 1,
+            -next(
+                index
+                for index, vote in enumerate(ordered_votes)
+                if str(vote.cleaned_output).strip() == surface
+            ),
+        ),
+    )
+    display_vote = next(
+        vote
+        for vote in ordered_votes
+        if str(vote.cleaned_output).strip() == display_surface and vote in winning_votes
+    )
+    target_term = _preferred_dynasty_display(display_surface, source_term)
     return {
         "status": status,
-        "target_term": display_vote.cleaned_output,
-        "normalized_target_term": winning_normalized,
+        "target_term": target_term,
+        "normalized_target_term": normalize_term(target_term) or winning_key,
         "model_name": display_vote.model_name,
+        "prompt_version": display_vote.prompt_version,
+    }
+
+
+def _apply_candidate_vote_resolution(
+    conn: Any,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    candidate: GlossaryCandidate,
+    translator_names: list[str],
+    model_prompt_versions: dict[str, str] | None = None,
+    clear_stale_translation: bool = False,
+) -> dict[str, Any]:
+    votes = list_translation_votes(
+        conn,
+        release_id=release_id,
+        candidate_id=candidate.candidate_id,
+    )
+    votes = [vote for vote in votes if vote.translation_run_id == translation_run_id]
+    resolution = _resolve_translation_votes(
+        votes,
+        translator_names,
+        source_term=candidate.source_term,
+    )
+    set_translation_vote_resolution(
+        conn,
+        candidate_id=candidate.candidate_id,
+        translation_run_id=translation_run_id,
+        resolution_status=resolution["status"],
+    )
+    if resolution["target_term"]:
+        prompt_versions = model_prompt_versions or {}
+        save_candidate_translation(
+            conn,
+            candidate_id=candidate.candidate_id,
+            translation_run_id=translation_run_id,
+            target_term=resolution["target_term"],
+            normalized_target_term=resolution["normalized_target_term"],
+            translator_model_name=resolution["model_name"],
+            translator_prompt_version=(
+                resolution.get("prompt_version")
+                or prompt_versions.get(resolution.get("model_name", ""), "unknown")
+            ),
+        )
+        return {
+            "resolution": resolution,
+            "translated": True,
+            "unresolved": False,
+            "cleared_stale": False,
+        }
+
+    cleared_stale = False
+    if (
+        clear_stale_translation
+        and candidate.translation_run_id == translation_run_id
+        and (candidate.candidate_translation_en or "").strip()
+    ):
+        clear_candidate_translation_for_run(
+            conn,
+            candidate_id=candidate.candidate_id,
+            translation_run_id=translation_run_id,
+        )
+        cleared_stale = True
+    return {
+        "resolution": resolution,
+        "translated": False,
+        "unresolved": True,
+        "cleared_stale": cleared_stale,
+    }
+
+
+def _load_vote_resolution_candidates(
+    conn: Any,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> list[GlossaryCandidate]:
+    candidate_ids = list_translation_vote_candidate_ids_for_run(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+    )
+    candidates = [
+        candidate
+        for candidate_id_batch in _chunks(candidate_ids, _TRANSLATION_RESUME_FETCH_CHUNK_SIZE)
+        for candidate in list_candidates_by_ids(
+            conn,
+            release_id=release_id,
+            candidate_ids=candidate_id_batch,
+            preserve_input_order=False,
+        )
+    ]
+    candidates.sort(
+        key=lambda candidate: (
+            candidate.first_seen_chapter,
+            candidate.normalized_source_term,
+            candidate.category,
+        )
+    )
+    return candidates
+
+
+def resolve_glossary_translation_votes(
+    *,
+    release_id: str,
+    run_id: str,
+    config: AppConfig | None = None,
+    project_root: Path | None = None,
+    stop_token: StopToken | None = None,
+) -> dict[str, Any]:
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    translator_names = config_obj.models.effective_preprocess_translator_names()
+    phase = "start"
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "glossary")
+    try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"resolve_completed": False},
+            message="Glossary vote resolution stopped before starting",
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.started",
+            translation_run_id=run_id,
+            model_count=len(translator_names),
+            message="Glossary saved-vote resolution started",
+        )
+        logger.info(
+            "Saved-vote resolution started: release={}, run={}, models={}, db={}",
+            release_id,
+            run_id,
+            len(translator_names),
+            paths.db_path,
+        )
+
+        phase = "load_candidates"
+        candidates = _load_vote_resolution_candidates(
+            conn,
+            release_id=release_id,
+            translation_run_id=run_id,
+        )
+        candidates = [candidate for candidate in candidates if candidate.candidate_status != "promoted"]
+        logger.info(
+            "Saved-vote resolution loaded {} candidates from run {}",
+            len(candidates),
+            run_id,
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_loaded", "candidate_count": len(candidates)},
+            message="Glossary vote resolution stopped after loading candidates",
+        )
+
+        phase = "resolve_votes"
+        translated_count = 0
+        unresolved_count = 0
+        stale_cleared_count = 0
+        for candidate in candidates:
+            result = _apply_candidate_vote_resolution(
+                conn,
+                release_id=release_id,
+                translation_run_id=run_id,
+                candidate=candidate,
+                translator_names=translator_names,
+                clear_stale_translation=True,
+            )
+            if result["translated"]:
+                translated_count += 1
+            else:
+                unresolved_count += 1
+                if result["cleared_stale"]:
+                    stale_cleared_count += 1
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.resolve.unresolved",
+                    severity="warning",
+                    candidate_id=candidate.candidate_id,
+                    source_term=candidate.source_term,
+                    chapter_number=candidate.first_seen_chapter,
+                    unresolved_count=unresolved_count,
+                    message=(
+                        "Glossary saved-vote resolution unresolved for candidate "
+                        f"{candidate.candidate_id}: no majority vote"
+                    ),
+                )
+                logger.warning(
+                    "Saved-vote resolution unresolved for candidate {} ({})",
+                    candidate.candidate_id,
+                    candidate.source_term,
+                )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "phase": "resolve_votes",
+                    "translated_count": translated_count,
+                    "unresolved_count": unresolved_count,
+                },
+                message="Glossary vote resolution stopped while resolving candidates",
+            )
+
+        phase = "write_candidates_snapshot"
+        snapshot_count = _write_candidate_snapshot(
+            conn,
+            release_id=release_id,
+            output_path=paths.glossary_candidates_path,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.snapshot.artifact_written",
+            artifact_path=str(paths.glossary_candidates_path),
+            artifact_format="json",
+            candidate_count=snapshot_count,
+        )
+        logger.info(
+            "Saved-vote resolution candidate snapshot written: {} candidates -> {}",
+            snapshot_count,
+            paths.glossary_candidates_path,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.completed",
+            translation_run_id=run_id,
+            candidate_count=len(candidates),
+            translated_count=translated_count,
+            unresolved_count=unresolved_count,
+            stale_cleared_count=stale_cleared_count,
+            candidates_artifact=str(paths.glossary_candidates_path),
+        )
+        logger.info(
+            "Saved-vote resolution complete: {} translated, {} unresolved, {} stale translations cleared",
+            translated_count,
+            unresolved_count,
+            stale_cleared_count,
+        )
+    except StopRequested:
+        raise
+    except Exception as exc:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.failed",
+            severity="error",
+            phase=phase,
+            error=str(exc),
+            message=f"Glossary saved-vote resolution failed during {phase}: {exc}",
+        )
+        logger.opt(exception=True).error(
+            "Saved-vote resolution failed during {}: {}",
+            phase,
+            exc,
+        )
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "status": "success",
+        "release_id": release_id,
+        "run_id": run_id,
+        "candidate_count": len(candidates),
+        "translated_count": translated_count,
+        "unresolved_count": unresolved_count,
+        "stale_cleared_count": stale_cleared_count,
+        "candidates_artifact": str(paths.glossary_candidates_path),
     }
 
 
@@ -2036,7 +2390,7 @@ def review_glossary_candidates(
         ensure_schema(conn, "glossary")
         try:
             candidates = list_candidates_for_review(conn, release_id=release_id)
-            votes = list_translation_votes(conn, release_id=release_id)
+            votes = list_translation_votes_for_review(conn, release_id=release_id)
         finally:
             conn.close()
         raise_if_stop_requested(

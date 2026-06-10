@@ -86,6 +86,11 @@ class TestCliDispatch:
         args = _parse_and_resolve(["pre", "gls-translate", "--release", "r1"])
         assert args.preprocess_command == "glossary-translate"
 
+    def test_glossary_resolve_alias(self):
+        args = _parse_and_resolve(["pre", "gls-resolve", "--release", "r1"])
+        assert args.preprocess_command == "glossary-resolve"
+        assert args.run == "glossary-translate"
+
     def test_glossary_review_alias(self):
         args = _parse_and_resolve(["pre", "gls-review", "--release", "r1"])
         assert args.preprocess_command == "glossary-review"
@@ -196,6 +201,12 @@ class TestCliDispatch:
         parser = _build_parser()
         args = parser.parse_args(["preprocess", "glossary-translate", "--release", "r1"])
         assert args.preprocess_command == "glossary-translate"
+
+    def test_preprocess_glossary_resolve(self):
+        parser = _build_parser()
+        args = parser.parse_args(["preprocess", "glossary-resolve", "--release", "r1"])
+        assert args.preprocess_command == "glossary-resolve"
+        assert args.run == "glossary-translate"
 
     def test_preprocess_promote(self):
         parser = _build_parser()
@@ -546,6 +557,43 @@ class TestCliDispatch:
         assert "review_csv_path=artifacts/releases/r1/glossary/review.csv" in out
         assert captured["progress_stop_token"] is not None
         assert captured["review_stop_token"] is captured["progress_stop_token"]
+
+    def test_glossary_resolve_prints_counts_and_artifact(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        def fake_resolve(**kwargs):
+            captured["resolve_stop_token"] = kwargs.get("stop_token")
+            captured["run_id"] = kwargs.get("run_id")
+            return {
+                "status": "success",
+                "candidate_count": 3,
+                "translated_count": 2,
+                "unresolved_count": 1,
+                "stale_cleared_count": 1,
+                "candidates_artifact": "artifacts/releases/r1/glossary/candidates.json",
+            }
+
+        def fake_progress(fn, **kwargs):
+            captured["progress_stop_token"] = kwargs.get("stop_token")
+            return fn()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", fake_progress)
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr(cli_mod, "resolve_glossary_translation_votes", fake_resolve)
+
+        result = cli_mod.main(["preprocess", "glossary-resolve", "--release", "r1"])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "candidate_count=3" in out
+        assert "translated_count=2" in out
+        assert "unresolved_count=1" in out
+        assert "stale_cleared_count=1" in out
+        assert "candidates_artifact=artifacts/releases/r1/glossary/candidates.json" in out
+        assert captured["run_id"] == "glossary-translate"
+        assert captured["progress_stop_token"] is not None
+        assert captured["resolve_stop_token"] is captured["progress_stop_token"]
 
     def test_idiom_review_prints_json_and_csv_paths(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
