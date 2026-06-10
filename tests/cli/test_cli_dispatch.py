@@ -91,6 +91,12 @@ class TestCliDispatch:
         assert args.preprocess_command == "glossary-resolve"
         assert args.run == "glossary-translate"
 
+    def test_glossary_fill_alias(self):
+        args = _parse_and_resolve(["pre", "gls-fill", "--release", "r1", "--model", "filler-a"])
+        assert args.preprocess_command == "glossary-fill"
+        assert args.run == "glossary-translate"
+        assert args.model == ["filler-a"]
+
     def test_glossary_review_alias(self):
         args = _parse_and_resolve(["pre", "gls-review", "--release", "r1"])
         assert args.preprocess_command == "glossary-review"
@@ -207,6 +213,24 @@ class TestCliDispatch:
         args = parser.parse_args(["preprocess", "glossary-resolve", "--release", "r1"])
         assert args.preprocess_command == "glossary-resolve"
         assert args.run == "glossary-translate"
+
+    def test_preprocess_glossary_fill(self):
+        parser = _build_parser()
+        args = parser.parse_args([
+            "preprocess",
+            "glossary-fill",
+            "--release",
+            "r1",
+            "--model",
+            "filler-a",
+            "--model",
+            "filler-b",
+            "--force",
+        ])
+        assert args.preprocess_command == "glossary-fill"
+        assert args.run == "glossary-translate"
+        assert args.model == ["filler-a", "filler-b"]
+        assert args.force is True
 
     def test_preprocess_promote(self):
         parser = _build_parser()
@@ -594,6 +618,59 @@ class TestCliDispatch:
         assert captured["run_id"] == "glossary-translate"
         assert captured["progress_stop_token"] is not None
         assert captured["resolve_stop_token"] is captured["progress_stop_token"]
+
+    def test_glossary_fill_dispatches_models_force_and_prints_counts(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        def fake_fill(**kwargs):
+            captured["fill_stop_token"] = kwargs.get("stop_token")
+            captured["release_id"] = kwargs.get("release_id")
+            captured["run_id"] = kwargs.get("run_id")
+            captured["filler_model_names"] = kwargs.get("filler_model_names")
+            captured["force"] = kwargs.get("force")
+            return {
+                "status": "success",
+                "candidate_count": 3,
+                "filler_vote_count": 2,
+                "skipped_vote_count": 1,
+                "translated_count": 2,
+                "unresolved_count": 1,
+            }
+
+        def fake_progress(fn, **kwargs):
+            captured["progress_stop_token"] = kwargs.get("stop_token")
+            return fn()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", fake_progress)
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr(cli_mod, "fill_glossary_translation_votes", fake_fill)
+
+        result = cli_mod.main([
+            "preprocess",
+            "glossary-fill",
+            "--release",
+            "r1",
+            "--model",
+            "filler-a",
+            "--model",
+            "filler-b",
+            "--force",
+        ])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "candidate_count=3" in out
+        assert "filler_vote_count=2" in out
+        assert "skipped_vote_count=1" in out
+        assert "translated_count=2" in out
+        assert "unresolved_count=1" in out
+        assert captured["release_id"] == "r1"
+        assert captured["run_id"] == "glossary-translate"
+        assert captured["filler_model_names"] == ["filler-a", "filler-b"]
+        assert captured["force"] is True
+        assert captured["progress_stop_token"] is not None
+        assert captured["fill_stop_token"] is captured["progress_stop_token"]
 
     def test_idiom_review_prints_json_and_csv_paths(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)

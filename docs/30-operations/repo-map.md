@@ -32,9 +32,9 @@ Implemented package layout (M2 slice):
 
 Implemented package layout (M3 slice):
 
-- `src/resemantica/glossary/`: candidate discovery, filter/eval/scoring/dedup/finalization events, translation vote/finalization events, saved-vote resolution, review CSV/JSON export/import, promotion validators, and glossary pipeline orchestration
-- `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, translation votes, vote-resume, resolve-only, and review lookup helpers, locked glossary, and conflicts
-- `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`: M3 glossary prompt files
+- `src/resemantica/glossary/`: candidate discovery, filter/eval/scoring/dedup/finalization events, translation vote/finalization events, saved-vote resolution, unresolved-vote filler pass, review CSV/JSON export/import, promotion validators, and glossary pipeline orchestration
+- `src/resemantica/db/glossary_repo.py`: SQLite repository for glossary candidates, translation votes, vote-resume, resolve-only, filler, and review lookup helpers, locked glossary, and conflicts
+- `src/resemantica/llm/prompts/glossary_discover.txt`, `glossary_translate.txt`, `glossary_fill.txt`: M3 glossary prompt files
 - `tests/glossary/`: glossary discovery, conflict, transaction, and precedence tests
 
 ### Glossary translate resume

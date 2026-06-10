@@ -1773,6 +1773,324 @@ def _load_vote_resolution_candidates(
     return candidates
 
 
+def _existing_vote_alternatives_for_prompt(votes: list[Any], model_order: list[str]) -> str:
+    votes_by_model = {vote.model_name: vote for vote in votes}
+    ordered_votes = [votes_by_model[name] for name in model_order if name in votes_by_model]
+    ordered_votes.extend(
+        vote
+        for vote in votes
+        if vote.model_name not in model_order
+    )
+    alternatives: list[str] = []
+    seen: set[str] = set()
+    for vote in ordered_votes:
+        cleaned = str(vote.cleaned_output or "").strip()
+        if not cleaned:
+            continue
+        key = normalize_term(cleaned)
+        if key in seen:
+            continue
+        seen.add(key)
+        alternatives.append(f"- {cleaned}")
+    return "\n".join(alternatives) if alternatives else "- None"
+
+
+def _load_glossary_fill_candidates(
+    conn: Any,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    translator_names: list[str],
+) -> list[GlossaryCandidate]:
+    candidates = _load_vote_resolution_candidates(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+    )
+    fill_candidates: list[GlossaryCandidate] = []
+    for candidate in candidates:
+        if candidate.candidate_status == "promoted":
+            continue
+        if (candidate.candidate_translation_en or "").strip():
+            continue
+        votes = [
+            vote
+            for vote in list_translation_votes(
+                conn,
+                release_id=release_id,
+                candidate_id=candidate.candidate_id,
+            )
+            if vote.translation_run_id == translation_run_id
+        ]
+        resolution = _resolve_translation_votes(
+            votes,
+            translator_names,
+            source_term=candidate.source_term,
+        )
+        if not resolution["target_term"]:
+            fill_candidates.append(candidate)
+    return fill_candidates
+
+
+def fill_glossary_translation_votes(
+    *,
+    release_id: str,
+    run_id: str,
+    filler_model_names: list[str],
+    config: AppConfig | None = None,
+    project_root: Path | None = None,
+    llm_client: LLMClient | None = None,
+    force: bool = False,
+    stop_token: StopToken | None = None,
+) -> dict[str, Any]:
+    if not filler_model_names:
+        raise ValueError("At least one filler model is required.")
+    filler_model_names = list(dict.fromkeys(filler_model_names))
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    translator_names = config_obj.models.effective_preprocess_translator_names()
+    duplicate_models = set(translator_names).intersection(filler_model_names)
+    if duplicate_models:
+        names = ", ".join(sorted(duplicate_models))
+        raise ValueError(f"Filler models must be distinct from translator models: {names}")
+    model_order = [*translator_names, *filler_model_names]
+    client = _build_llm_client(config_obj, llm_client)
+    usage_before = capture_usage_snapshot(client)
+    prompt = load_prompt("glossary_fill.txt")
+    phase = "start"
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "glossary")
+    try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"fill_completed": False},
+            message="Glossary filler stopped before starting",
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.started",
+            translation_run_id=run_id,
+            filler_model_count=len(filler_model_names),
+            force=force,
+            message="Glossary filler started",
+        )
+
+        phase = "load_candidates"
+        candidates = _load_glossary_fill_candidates(
+            conn,
+            release_id=release_id,
+            translation_run_id=run_id,
+            translator_names=translator_names,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.loading_completed",
+            candidate_count=len(candidates),
+            filler_model_count=len(filler_model_names),
+            force=force,
+            message=f"Glossary filler loaded {len(candidates)} unresolved candidates",
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_loaded", "candidate_count": len(candidates)},
+            message="Glossary filler stopped after loading candidates",
+        )
+
+        phase = "vote_generation"
+        filler_vote_count = 0
+        skipped_vote_count = 0
+        current_model_name = ""
+        current_candidate_id = ""
+        try:
+            for model_name in filler_model_names:
+                current_model_name = model_name
+                existing_vote_candidate_ids = (
+                    set()
+                    if force
+                    else list_existing_translation_vote_candidate_ids(
+                        conn,
+                        release_id=release_id,
+                        translation_run_id=run_id,
+                        model_name=model_name,
+                    )
+                )
+                model_pending = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.candidate_id not in existing_vote_candidate_ids
+                ]
+                model_skipped_count = len(candidates) - len(model_pending)
+                skipped_vote_count += model_skipped_count
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.model_started",
+                    model_name=model_name,
+                    candidate_count=len(model_pending),
+                    skipped_count=model_skipped_count,
+                    force=force,
+                    message=f"Glossary filler model {model_name} started: {len(model_pending)} candidates",
+                )
+                generated_count = 0
+                for candidate in model_pending:
+                    current_candidate_id = candidate.candidate_id
+                    votes = [
+                        vote
+                        for vote in list_translation_votes(
+                            conn,
+                            release_id=release_id,
+                            candidate_id=candidate.candidate_id,
+                        )
+                        if vote.translation_run_id == run_id
+                    ]
+                    translated = client.translate_glossary_fill_candidate(
+                        model_name=model_name,
+                        prompt_template=prompt.template,
+                        source_term=candidate.source_term,
+                        category=candidate.category,
+                        evidence_snippet=candidate.evidence_snippet,
+                        existing_alternatives=_existing_vote_alternatives_for_prompt(
+                            votes,
+                            translator_names,
+                        ),
+                    )
+                    upsert_translation_vote(
+                        conn,
+                        candidate_id=candidate.candidate_id,
+                        release_id=release_id,
+                        translation_run_id=run_id,
+                        model_name=model_name,
+                        prompt_version=prompt.version,
+                        raw_output=translated,
+                        cleaned_output=translated,
+                        normalized_output=normalize_term(translated),
+                    )
+                    generated_count += 1
+                filler_vote_count += generated_count
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.model_completed",
+                    model_name=model_name,
+                    candidate_count=generated_count,
+                    skipped_count=model_skipped_count,
+                    message=f"Glossary filler model {model_name} completed: {generated_count} votes",
+                )
+        except Exception as exc:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.fill.failed",
+                severity="error",
+                phase=phase,
+                model_name=current_model_name,
+                candidate_id=current_candidate_id,
+                error=str(exc),
+                message=(
+                    "Glossary filler failed"
+                    f" for model {current_model_name}, candidate {current_candidate_id}: {exc}"
+                ),
+            )
+            raise
+
+        phase = "resolve_votes"
+        translated_count = 0
+        unresolved_count = 0
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.resolution.started",
+            candidate_count=len(candidates),
+            filler_vote_count=filler_vote_count,
+            skipped_vote_count=skipped_vote_count,
+        )
+        for candidate in candidates:
+            result = _apply_candidate_vote_resolution(
+                conn,
+                release_id=release_id,
+                translation_run_id=run_id,
+                candidate=candidate,
+                translator_names=model_order,
+            )
+            if result["translated"]:
+                translated_count += 1
+            else:
+                unresolved_count += 1
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.unresolved",
+                    severity="warning",
+                    candidate_id=candidate.candidate_id,
+                    source_term=candidate.source_term,
+                    chapter_number=candidate.first_seen_chapter,
+                    unresolved_count=unresolved_count,
+                    message=(
+                        "Glossary filler unresolved for candidate "
+                        f"{candidate.candidate_id}: no majority vote"
+                    ),
+                )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "phase": "resolve_votes",
+                    "translated_count": translated_count,
+                    "unresolved_count": unresolved_count,
+                },
+                message="Glossary filler stopped while resolving candidates",
+            )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.resolution.completed",
+            candidate_count=len(candidates),
+            translated_count=translated_count,
+            unresolved_count=unresolved_count,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.completed",
+            translation_run_id=run_id,
+            candidate_count=len(candidates),
+            filler_vote_count=filler_vote_count,
+            skipped_vote_count=skipped_vote_count,
+            translated_count=translated_count,
+            unresolved_count=unresolved_count,
+            **usage_payload_delta(client, usage_before),
+        )
+    except StopRequested:
+        raise
+    except Exception as exc:
+        if phase != "vote_generation":
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.fill.failed",
+                severity="error",
+                phase=phase,
+                error=str(exc),
+                message=f"Glossary filler failed during {phase}: {exc}",
+            )
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "status": "success",
+        "release_id": release_id,
+        "run_id": run_id,
+        "candidate_count": len(candidates),
+        "filler_vote_count": filler_vote_count,
+        "skipped_vote_count": skipped_vote_count,
+        "translated_count": translated_count,
+        "unresolved_count": unresolved_count,
+        **usage_payload_delta(client, usage_before),
+    }
+
+
 def resolve_glossary_translation_votes(
     *,
     release_id: str,

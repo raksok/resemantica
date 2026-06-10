@@ -36,6 +36,22 @@ uv run rsem preprocess glossary-review -r v1.0
 `glossary-review` reflects the new resolved/unresolved state in `review.json`
 and `review.csv`.
 
+For releases with many unresolved vote disagreements, an optional filler pass can
+ask one or more extra models only about the unresolved glossary candidates before
+review generation:
+
+```bash
+uv run rsem preprocess glossary-resolve -r v1.0 -R glossary-translate
+uv run rsem preprocess glossary-fill -r v1.0 -R glossary-translate --model <filler-model>
+uv run rsem preprocess glossary-review -r v1.0
+```
+
+`glossary-fill` stores filler outputs as ordinary auditable
+`glossary_translation_votes` rows and then reuses deterministic resolution with
+the filler model names appended after the configured translator models. It does
+not run full glossary translation and does not replace human review for policy
+disagreements that remain unresolved.
+
 ### Review File Format
 
 **JSON structure:**

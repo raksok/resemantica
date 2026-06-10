@@ -16,6 +16,7 @@ CLI:
 
 - `uv run python -m resemantica.cli preprocess glossary-discover --release <release_id> [--pruning-threshold <float>]`
 - `uv run python -m resemantica.cli preprocess glossary-translate --release <release_id> [--run <run_id>]`
+- `uv run python -m resemantica.cli preprocess glossary-fill --release <release_id> [--run <run_id>] --model <filler_model>`
 - `uv run python -m resemantica.cli preprocess glossary-promote --release <release_id> [--review-file <path>]`
 - `uv run python -m resemantica.cli preprocess glossary-review --release <release_id>`
 
@@ -155,6 +156,31 @@ translator metadata for resolved winners; and clears stale canonical
 translations previously written by that same translation run when the current
 voter now leaves the candidate unresolved. Review and promotion schemas are
 unchanged.
+
+### `glossary-fill` command
+
+Optionally fills unresolved saved-vote cases after `glossary-resolve` and before
+`glossary-review`. The command:
+
+1. Loads candidates in the selected translation run that still have no canonical
+   translation and do not resolve under the configured translator model order.
+2. Calls each `--model` filler only for candidates missing that filler model's
+   vote, unless `--force` is set.
+3. Stores each filler output as a normal `glossary_translation_votes` row using
+   the filler model name and prompt version.
+4. Re-runs deterministic resolution for those candidates with configured
+   translator model names first and filler model names appended last.
+
+The filler cannot directly override canonical translation fields. It can only
+create an auditable vote that contributes to deterministic majority resolution.
+Tao/Dao-style policy disagreements still remain unresolved when the resolver's
+policy rules require human review. `glossary-fill` updates database rows and vote
+statuses only; it does not rewrite the public `candidates.json` snapshot.
+
+The filler prompt (`llm/prompts/glossary_fill.txt`) is KV-cache friendly:
+stable task instructions, output contract, examples, and style rules precede
+the volatile candidate block. The candidate block uses fixed order: source term,
+category, evidence, existing alternatives.
 
 ## Review Workflow
 

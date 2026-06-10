@@ -82,6 +82,20 @@ hydrates candidates by primary key, and re-applies the deterministic resolver to
 candidate canonical fields. This is the operator path for improved voter logic
 or style-rule changes when the expensive model vote rows are still valid.
 
+Glossary unresolved cases also have an optional filler path. `preprocess
+glossary-fill` loads only unresolved glossary candidates with missing canonical
+translations, calls selected filler model names, writes those outputs as normal
+`glossary_translation_votes`, and re-runs the deterministic resolver with the
+original translator order followed by filler model names. Filler votes are
+tie-break authority only; they cannot directly override canonical translations.
+Policy disagreements such as Taoism/Daoism remain unresolved when the resolver
+requires human review.
+
+The filler prompt is constrained for KV-cache reuse: all stable instructions,
+output contract, examples, and style rules must remain before the per-candidate
+block. Volatile fields appear only at the end in fixed order: source term,
+category, evidence snippet, existing alternatives.
+
 ## Pipeline Behavior
 Glossary translation:
 1. Load pending candidates using the existing translation query.

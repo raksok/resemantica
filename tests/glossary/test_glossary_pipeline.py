@@ -30,8 +30,10 @@ from resemantica.epub.extractor import extract_epub
 from resemantica.glossary.evaluator import EvalResult
 from resemantica.glossary.models import AliasCluster, GlossaryCandidate, LockedGlossaryEntry
 from resemantica.glossary.pipeline import (
+    _load_glossary_fill_candidates,
     _resolve_translation_votes,
     discover_glossary_candidates,
+    fill_glossary_translation_votes,
     promote_glossary_candidates,
     resolve_glossary_translation_votes,
     resolve_locked_glossary_term,
@@ -39,6 +41,7 @@ from resemantica.glossary.pipeline import (
     translate_glossary_candidates,
 )
 from resemantica.glossary.validators import normalize_term
+from resemantica.llm.prompts import load_prompt, render_named_sections
 from resemantica.settings import AppConfig, LLMConfig, derive_paths, load_config
 
 
@@ -173,6 +176,37 @@ class ModelMappedGlossaryTranslator:
         evidence_snippet: str,  # noqa: ARG002
     ) -> str:
         self.calls.append((model_name, source_term))
+        return self.outputs[(model_name, source_term)]
+
+
+class ModelMappedGlossaryFiller:
+    def __init__(self, outputs: dict[tuple[str, str], str]) -> None:
+        self.outputs = outputs
+        self.calls: list[tuple[str, str]] = []
+        self.prompts: list[str] = []
+
+    def translate_glossary_fill_candidate(
+        self,
+        *,
+        model_name: str,
+        prompt_template: str,
+        source_term: str,
+        category: str,
+        evidence_snippet: str,
+        existing_alternatives: str,
+    ) -> str:
+        self.calls.append((model_name, source_term))
+        self.prompts.append(
+            render_named_sections(
+                prompt_template,
+                sections={
+                    "SOURCE_TERM": source_term,
+                    "CATEGORY": category,
+                    "EVIDENCE_SNIPPET": evidence_snippet,
+                    "EXISTING_ALTERNATIVES": existing_alternatives,
+                },
+            )
+        )
         return self.outputs[(model_name, source_term)]
 
 
@@ -589,6 +623,294 @@ def test_glossary_vote_resolution_keeps_tao_dao_disagreements_unresolved() -> No
         source_term="道教宗门",
     )
     assert taoist_resolution["status"] == "unresolved"
+
+
+def test_glossary_fill_selects_only_unresolved_untranslated_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-selection"
+    run_id = "glossary-translate"
+    for source_term in ["多数候选", "分歧候选", "已译候选", "无票候选"]:
+        _insert_glossary_candidate(release_id=release_id, source_term=source_term)
+    for model_name, target_term in [
+        ("model-a", "Majority Term"),
+        ("model-b", "Majority Term"),
+        ("model-c", "Other Term"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="多数候选",
+            model_name=model_name,
+            target_term=target_term,
+        )
+    for model_name, target_term in [
+        ("model-a", "First Term"),
+        ("model-b", "Second Term"),
+        ("model-c", "Third Term"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="分歧候选",
+            model_name=model_name,
+            target_term=target_term,
+        )
+    for model_name, target_term in [
+        ("model-a", "Translated First"),
+        ("model-b", "Translated Second"),
+        ("model-c", "Translated Third"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="已译候选",
+            model_name=model_name,
+            target_term=target_term,
+        )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        conn.execute(
+            """
+            UPDATE glossary_candidates
+            SET candidate_translation_en = ?, normalized_target_term = ?, translation_run_id = ?
+            WHERE release_id = ? AND source_term = ?
+            """,
+            ("Human Term", "human term", run_id, release_id, "已译候选"),
+        )
+        selected = _load_glossary_fill_candidates(
+            conn,
+            release_id=release_id,
+            translation_run_id=run_id,
+            translator_names=["model-a", "model-b", "model-c"],
+        )
+    finally:
+        conn.close()
+
+    assert [candidate.source_term for candidate in selected] == ["分歧候选"]
+
+
+def test_glossary_fill_writes_vote_and_resolves_majority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-majority"
+    run_id = "glossary-translate"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="model-a",
+        target_term="Azure Sect",
+    )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="model-b",
+        target_term="Blue Cloud Gate",
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    filler = ModelMappedGlossaryFiller({("filler-a", "青云门"): "Azure Sect"})
+
+    result = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+    )
+
+    assert result["candidate_count"] == 1
+    assert result["filler_vote_count"] == 1
+    assert result["translated_count"] == 1
+    assert filler.calls == [("filler-a", "青云门")]
+    assert "Existing alternatives:\n- Azure Sect\n- Blue Cloud Gate" in filler.prompts[0]
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        row = conn.execute(
+            """
+            SELECT candidate_translation_en, translator_model_name, candidate_status
+            FROM glossary_candidates
+            WHERE release_id = ? AND source_term = ?
+            """,
+            (release_id, "青云门"),
+        ).fetchone()
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["candidate_translation_en"] == "Azure Sect"
+    assert row["translator_model_name"] == "model-a"
+    assert row["candidate_status"] == "translated"
+    assert {(vote.model_name, vote.cleaned_output) for vote in votes} == {
+        ("model-a", "Azure Sect"),
+        ("model-b", "Blue Cloud Gate"),
+        ("filler-a", "Azure Sect"),
+    }
+    assert {vote.resolution_status for vote in votes} == {"majority"}
+
+
+def test_glossary_fill_force_regenerates_existing_filler_votes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-force"
+    run_id = "glossary-translate"
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    for model_name, target_term in [
+        ("model-a", "Cangyun Gate"),
+        ("model-b", "Azure Cloud Sect"),
+        ("filler-a", "Old Filler"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="苍云门",
+            model_name=model_name,
+            target_term=target_term,
+        )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    filler = ModelMappedGlossaryFiller({("filler-a", "苍云门"): "Cangyun Gate"})
+
+    skipped = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+    )
+    forced = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+        force=True,
+    )
+
+    assert skipped["filler_vote_count"] == 0
+    assert skipped["skipped_vote_count"] == 1
+    assert skipped["unresolved_count"] == 1
+    assert forced["filler_vote_count"] == 1
+    assert forced["translated_count"] == 1
+    assert filler.calls == [("filler-a", "苍云门")]
+
+
+def test_glossary_fill_keeps_tao_dao_policy_disagreement_unresolved(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-tao-dao"
+    run_id = "glossary-translate"
+    _insert_glossary_candidate(release_id=release_id, source_term="道教")
+    for model_name, target_term in [
+        ("model-a", "Taoism"),
+        ("model-b", "Daoism"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="道教",
+            model_name=model_name,
+            target_term=target_term,
+        )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    filler = ModelMappedGlossaryFiller({("filler-a", "道教"): "Taoism"})
+
+    result = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+    )
+
+    assert result["translated_count"] == 0
+    assert result["unresolved_count"] == 1
+
+
+def test_glossary_fill_does_not_write_candidate_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-no-snapshot"
+    run_id = "glossary-translate"
+    _insert_glossary_candidate(release_id=release_id, source_term="紫霄宗")
+    for model_name, target_term in [
+        ("model-a", "Purple Firmament Sect"),
+        ("model-b", "Zixiao Sect"),
+    ]:
+        _insert_translation_vote(
+            release_id=release_id,
+            run_id=run_id,
+            source_term="紫霄宗",
+            model_name=model_name,
+            target_term=target_term,
+        )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    filler = ModelMappedGlossaryFiller({("filler-a", "紫霄宗"): "Purple Firmament Sect"})
+
+    def fail_snapshot(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("glossary-fill must not write candidates.json")
+
+    monkeypatch.setattr("resemantica.glossary.pipeline._write_candidate_snapshot", fail_snapshot)
+
+    result = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+    )
+
+    assert result["translated_count"] == 1
+
+
+def test_glossary_fill_prompt_keeps_candidate_data_after_stable_prefix() -> None:
+    template = load_prompt("glossary_fill.txt").template
+    prompt_a = render_named_sections(
+        template,
+        sections={
+            "SOURCE_TERM": "太玄经",
+            "CATEGORY": "item_artifact",
+            "EVIDENCE_SNIPPET": "他翻开太玄经。",
+            "EXISTING_ALTERNATIVES": "- Taixuan Classic",
+        },
+    )
+    prompt_b = render_named_sections(
+        template,
+        sections={
+            "SOURCE_TERM": "镇妖塔",
+            "CATEGORY": "location",
+            "EVIDENCE_SNIPPET": "镇妖塔中。",
+            "EXISTING_ALTERNATIVES": "- Demon-Suppressing Tower",
+        },
+    )
+    marker = "## CANDIDATE"
+
+    assert prompt_a.split(marker)[0] == prompt_b.split(marker)[0]
+    assert prompt_a.index("OUTPUT CONTRACT") < prompt_a.index(marker)
+    assert prompt_a.index("太玄经") > prompt_a.index(marker)
+    assert prompt_a.index("Taixuan Classic", prompt_a.index(marker)) > prompt_a.index(marker)
 
 
 def test_glossary_translation_failure_emits_model_context(

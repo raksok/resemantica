@@ -1,0 +1,42 @@
+# version: 1.0
+
+Fill one unresolved glossary translation vote.
+
+TASK:
+Choose the best concise English rendering for a Chinese glossary candidate whose existing model votes did not produce a deterministic majority.
+
+OUTPUT CONTRACT:
+- Output only the English translation.
+- Use plain text only.
+- Use 1-8 words.
+- Do not include labels, notes, explanations, quotes, parentheses, slashes, semicolons, markdown, or Chinese characters.
+- Prefer stable novel terminology over literal dictionary glosses.
+- If the existing alternatives show a Tao/Dao policy disagreement, choose the alternative you judge best; deterministic resolution may still leave the candidate for human review.
+
+EXAMPLES:
+Source term: 青云门
+Category: faction
+Evidence: 青云门弟子正在山门前等候。
+Existing alternatives:
+- Azure Sect
+- Blue Cloud Gate
+
+Azure Sect
+
+Source term: 镇妖塔
+Category: location
+Evidence: 他被关入镇妖塔三年。
+Existing alternatives:
+- Demon-Suppressing Tower
+- Demon Sealing Pagoda
+
+Demon-Suppressing Tower
+
+## CANDIDATE
+Source term: {SOURCE_TERM}
+Category: {CATEGORY}
+Evidence: {EVIDENCE_SNIPPET}
+Existing alternatives:
+{EXISTING_ALTERNATIVES}
+
+English translation:

@@ -15,6 +15,7 @@ from rich.table import Table
 from resemantica.cli_progress import CliProgressSubscriber
 from resemantica.epub.extractor import extract_epub
 from resemantica.glossary.pipeline import (
+    fill_glossary_translation_votes,
     promote_glossary_candidates,
     resolve_glossary_translation_votes,
     translate_glossary_candidates,
@@ -442,6 +443,28 @@ updates canonical candidate translations without regenerating model votes.""",
     )
     _add_common_release_args(glossary_resolve, default_run="glossary-translate")
 
+    glossary_fill = preprocess_subparsers.add_parser(
+        "glossary-fill", aliases=["gls-fill"],
+        help="Fill unresolved glossary vote cases with extra auditable model votes.",
+        description="""\
+Calls filler model(s) only for unresolved glossary vote cases, writes the
+outputs as normal glossary_translation_votes rows, then re-runs deterministic
+resolution with filler models appended to the configured translator model order.""",
+    )
+    _add_common_release_args(glossary_fill, default_run="glossary-translate")
+    glossary_fill.add_argument(
+        "--model",
+        action="append",
+        required=True,
+        dest="model",
+        help="Filler model name. Repeat to add multiple filler models.",
+    )
+    glossary_fill.add_argument(
+        "-f", "--force",
+        action="store_true",
+        help="Regenerate existing filler votes for the selected filler model name(s).",
+    )
+
     glossary_review = preprocess_subparsers.add_parser(
         "glossary-review", aliases=["gls-review"],
         help="Generate a human-editable review file(s) for translated candidates.",
@@ -804,6 +827,7 @@ _ALIAS_MAP: dict[str, str] = {
     "gls-discover": "glossary-discover",
     "gls-translate": "glossary-translate",
     "gls-resolve": "glossary-resolve",
+    "gls-fill": "glossary-fill",
     "gls-review": "glossary-review",
     "gls-promote": "glossary-promote",
     "sum": "summaries",
@@ -962,6 +986,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"unresolved_count={result['unresolved_count']}")
             print(f"stale_cleared_count={result['stale_cleared_count']}")
             print(f"candidates_artifact={result['candidates_artifact']}")
+            return 0
+
+        if args.preprocess_command == "glossary-fill":
+            result = _with_cli_progress(
+                lambda: fill_glossary_translation_votes(
+                    release_id=args.release,
+                    run_id=args.run,
+                    filler_model_names=list(getattr(args, "model", []) or []),
+                    config=config,
+                    force=bool(getattr(args, "force", False)),
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={result['status']}")
+            print(f"candidate_count={result['candidate_count']}")
+            print(f"filler_vote_count={result['filler_vote_count']}")
+            print(f"skipped_vote_count={result['skipped_vote_count']}")
+            print(f"translated_count={result['translated_count']}")
+            print(f"unresolved_count={result['unresolved_count']}")
             return 0
 
         if args.preprocess_command == "glossary-review":

@@ -60,6 +60,21 @@ This serializes those Qwen calls inside one process while leaving unrelated mode
 
 Existing malformed Qwen glossary votes are already persisted. Regenerate them with `--force` or delete the targeted vote rows before rerunning glossary translation.
 
+### Glossary votes remain unresolved
+
+**Cause:** Configured translator models did not produce a deterministic majority,
+or the disagreement is a style-policy split that the resolver intentionally
+leaves for human review.
+
+**Try:**
+1. Re-run the no-LLM resolver if deterministic rules changed: `uv run rsem preprocess glossary-resolve -r <release> -R glossary-translate`
+2. Add auditable filler votes for only unresolved candidates: `uv run rsem preprocess glossary-fill -r <release> -R glossary-translate --model <filler-model>`
+3. Regenerate review files: `uv run rsem preprocess glossary-review -r <release>`
+
+`glossary-fill` does not run full glossary translation and does not directly
+override canonical translations. If Tao/Dao-style policy disagreements remain
+unresolved, edit the review file and promote with `glossary-promote -F`.
+
 ### Glossary discovery appears stuck after chapters finish
 
 **Cause:** Corpus scoring can be CPU-heavy on large candidate sets. This happens after

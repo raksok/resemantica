@@ -70,6 +70,10 @@ All SQLite connections use WAL mode. The `ensure_full_schema()` function creates
 
 Vote-resume candidate hydration must use `candidate_id` primary-key batches. The `UNIQUE (release_id, normalized_source_term, category)` index is for term identity, not for hydrating large resume ID lists.
 
+Glossary filler outputs are stored in the same `glossary_translation_votes`
+table as translator outputs, keyed by the filler model name. No separate filler
+table or public review schema change is used.
+
 ### Summary System
 
 | Table | PK / Unique | Key Columns |
