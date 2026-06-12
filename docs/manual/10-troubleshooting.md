@@ -80,6 +80,13 @@ leaves for human review.
 override canonical translations. If Tao/Dao-style policy disagreements remain
 unresolved, edit the review file and promote with `glossary-promote -F`.
 
+If the disagreement should be handled like a first human picker pass, run
+`glossary-fill --pick-existing`. Picker mode only accepts an existing vote
+alternative; invented output is rejected and the candidate remains unresolved.
+Configured `glossary.resolution_alias_families` can collapse project-specific
+variants such as English names versus pinyin before saving the preferred display
+term.
+
 Long `glossary-fill` runs emit sampled DEBUG records before filler model calls.
 The records identify the release, run, model, candidate, source term, chapter,
 candidate index, and candidate count. They do not include prompt text or model

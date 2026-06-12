@@ -59,7 +59,13 @@ from resemantica.glossary.validators import (
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.stop import StopRequested, StopToken, raise_if_stop_requested
-from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.settings import (
+    AppConfig,
+    GlossaryConfig,
+    GlossaryResolutionAliasFamily,
+    derive_paths,
+    load_config,
+)
 from resemantica.utils import _build_llm_client, _write_json
 from resemantica.utils import _emit as _emit_shared
 
@@ -1426,6 +1432,7 @@ def translate_glossary_candidates(
                     candidate=candidate,
                     translator_names=translator_names,
                     model_prompt_versions=model_prompt_versions,
+                    resolution_alias_families=config_obj.glossary.resolution_alias_families,
                 )
                 resolution = result["resolution"]
                 resolution_model_name = resolution.get("model_name", "")
@@ -1582,33 +1589,54 @@ def _base_resolution_key(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
-def _dynasty_family(source_term: str) -> tuple[str, tuple[str, ...]] | None:
-    if "大骊" in source_term:
-        return "Great Li", ("great li", "da li", "dalí", "dali")
-    if "大隋" in source_term:
-        return "Great Sui", ("great sui", "da sui", "dasiu")
+def _matching_resolution_alias_family(
+    source_term: str,
+    resolution_alias_families: list[GlossaryResolutionAliasFamily],
+) -> GlossaryResolutionAliasFamily | None:
+    for family in resolution_alias_families:
+        if family.source_contains and family.source_contains in source_term:
+            return family
     return None
 
 
-def _dynasty_resolution_key(value: str, source_term: str) -> str:
+def _alias_family_resolution_key(
+    value: str,
+    source_term: str,
+    resolution_alias_families: list[GlossaryResolutionAliasFamily] | None = None,
+) -> str:
     key = _base_resolution_key(value)
-    family = _dynasty_family(source_term)
+    family = _matching_resolution_alias_family(
+        source_term,
+        resolution_alias_families or GlossaryConfig().resolution_alias_families,
+    )
     if family is None:
         return key
-    _preferred, variants = family
-    for variant in sorted(variants, key=len, reverse=True):
-        key = re.sub(rf"\b{re.escape(variant)}\b", "__dynasty__", key)
+    for variant in sorted(family.variants, key=len, reverse=True):
+        variant_key = _base_resolution_key(variant)
+        if variant_key:
+            key = re.sub(rf"\b{re.escape(variant_key)}\b", "__alias_family__", key)
     return key
 
 
-def _preferred_dynasty_display(value: str, source_term: str) -> str:
-    family = _dynasty_family(source_term)
+def _preferred_alias_family_display(
+    value: str,
+    source_term: str,
+    resolution_alias_families: list[GlossaryResolutionAliasFamily] | None = None,
+) -> str:
+    family = _matching_resolution_alias_family(
+        source_term,
+        resolution_alias_families or GlossaryConfig().resolution_alias_families,
+    )
     if family is None:
         return value
-    preferred, variants = family
     result = value
-    for variant in sorted(variants, key=len, reverse=True):
-        result = re.sub(rf"\b{re.escape(variant)}\b", preferred, result, flags=re.IGNORECASE)
+    for variant in sorted(family.variants, key=len, reverse=True):
+        result = re.sub(
+            rf"\b{re.escape(variant)}\b",
+            family.preferred,
+            result,
+            flags=re.IGNORECASE,
+        )
     return result
 
 
@@ -1627,6 +1655,7 @@ def _resolve_translation_votes(
     model_order: list[str],
     *,
     source_term: str = "",
+    resolution_alias_families: list[GlossaryResolutionAliasFamily] | None = None,
 ) -> dict[str, str]:
     votes_by_model = {vote.model_name: vote for vote in votes}
     ordered_votes = [votes_by_model[name] for name in model_order if name in votes_by_model]
@@ -1639,7 +1668,11 @@ def _resolve_translation_votes(
     for vote in ordered_votes:
         cleaned_output = str(vote.cleaned_output or "").strip()
         if cleaned_output:
-            key = _dynasty_resolution_key(cleaned_output, source_term)
+            key = _alias_family_resolution_key(
+                cleaned_output,
+                source_term,
+                resolution_alias_families,
+            )
             if key:
                 votes_by_key.setdefault(key, []).append(vote)
     if not votes_by_key:
@@ -1677,7 +1710,11 @@ def _resolve_translation_votes(
         for vote in ordered_votes
         if str(vote.cleaned_output).strip() == display_surface and vote in winning_votes
     )
-    target_term = _preferred_dynasty_display(display_surface, source_term)
+    target_term = _preferred_alias_family_display(
+        display_surface,
+        source_term,
+        resolution_alias_families,
+    )
     return {
         "status": status,
         "target_term": target_term,
@@ -1695,6 +1732,7 @@ def _apply_candidate_vote_resolution(
     candidate: GlossaryCandidate,
     translator_names: list[str],
     model_prompt_versions: dict[str, str] | None = None,
+    resolution_alias_families: list[GlossaryResolutionAliasFamily] | None = None,
     clear_stale_translation: bool = False,
 ) -> dict[str, Any]:
     votes = list_translation_votes(
@@ -1707,6 +1745,7 @@ def _apply_candidate_vote_resolution(
         votes,
         translator_names,
         source_term=candidate.source_term,
+        resolution_alias_families=resolution_alias_families,
     )
     set_translation_vote_resolution(
         conn,
@@ -1786,13 +1825,13 @@ def _load_vote_resolution_candidates(
     return candidates
 
 
-def _existing_vote_alternatives_for_prompt(votes: list[Any], model_order: list[str]) -> str:
+def _existing_vote_alternatives(votes: list[Any], model_order: list[str]) -> list[str]:
     votes_by_model = {vote.model_name: vote for vote in votes}
     ordered_votes = [votes_by_model[name] for name in model_order if name in votes_by_model]
     ordered_votes.extend(
         vote
         for vote in votes
-        if vote.model_name not in model_order
+        if vote.model_name not in model_order and not str(vote.model_name).endswith(":picker")
     )
     alternatives: list[str] = []
     seen: set[str] = set()
@@ -1805,7 +1844,38 @@ def _existing_vote_alternatives_for_prompt(votes: list[Any], model_order: list[s
             continue
         seen.add(key)
         alternatives.append(f"- {cleaned}")
+    return alternatives
+
+
+def _existing_vote_alternatives_for_prompt(votes: list[Any], model_order: list[str]) -> str:
+    alternatives = _existing_vote_alternatives(votes, model_order)
     return "\n".join(alternatives) if alternatives else "- None"
+
+
+def _pick_existing_vote_alternative(
+    output: str,
+    alternatives: list[str],
+    *,
+    source_term: str,
+    resolution_alias_families: list[GlossaryResolutionAliasFamily],
+) -> str | None:
+    output_key = _alias_family_resolution_key(output, source_term, resolution_alias_families)
+    if not output_key:
+        return None
+    for alternative in alternatives:
+        cleaned_alternative = alternative.removeprefix("- ").strip()
+        alternative_key = _alias_family_resolution_key(
+            cleaned_alternative,
+            source_term,
+            resolution_alias_families,
+        )
+        if output_key == alternative_key:
+            return _preferred_alias_family_display(
+                cleaned_alternative,
+                source_term,
+                resolution_alias_families,
+            )
+    return None
 
 
 def _load_glossary_fill_candidates(
@@ -1814,6 +1884,7 @@ def _load_glossary_fill_candidates(
     release_id: str,
     translation_run_id: str,
     translator_names: list[str],
+    resolution_alias_families: list[GlossaryResolutionAliasFamily] | None = None,
 ) -> list[GlossaryCandidate]:
     candidates = _load_vote_resolution_candidates(
         conn,
@@ -1839,6 +1910,7 @@ def _load_glossary_fill_candidates(
             votes,
             translator_names,
             source_term=candidate.source_term,
+            resolution_alias_families=resolution_alias_families,
         )
         if not resolution["target_term"]:
             fill_candidates.append(candidate)
@@ -1854,6 +1926,7 @@ def fill_glossary_translation_votes(
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
     force: bool = False,
+    pick_existing: bool = False,
     stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     if not filler_model_names:
@@ -1886,6 +1959,7 @@ def fill_glossary_translation_votes(
             translation_run_id=run_id,
             filler_model_count=len(filler_model_names),
             force=force,
+            pick_existing=pick_existing,
             message="Glossary filler started",
         )
 
@@ -1895,6 +1969,7 @@ def fill_glossary_translation_votes(
             release_id=release_id,
             translation_run_id=run_id,
             translator_names=translator_names,
+            resolution_alias_families=config_obj.glossary.resolution_alias_families,
         )
         _emit(
             run_id,
@@ -1903,6 +1978,7 @@ def fill_glossary_translation_votes(
             candidate_count=len(candidates),
             filler_model_count=len(filler_model_names),
             force=force,
+            pick_existing=pick_existing,
             message=f"Glossary filler loaded {len(candidates)} unresolved candidates",
         )
         raise_if_stop_requested(
@@ -1914,8 +1990,181 @@ def fill_glossary_translation_votes(
         phase = "vote_generation"
         filler_vote_count = 0
         skipped_vote_count = 0
+        picker_vote_count = 0
+        invalid_pick_count = 0
         current_model_name = ""
         current_candidate_id = ""
+        if pick_existing:
+            phase = "pick_existing"
+            pick_prompt = load_prompt("glossary_fill_pick.txt")
+            picked_candidate_ids: set[str] = set()
+            for model_name in filler_model_names:
+                current_model_name = model_name
+                picker_model_name = f"{model_name}:picker"
+                existing_vote_candidate_ids = (
+                    set()
+                    if force
+                    else list_existing_translation_vote_candidate_ids(
+                        conn,
+                        release_id=release_id,
+                        translation_run_id=run_id,
+                        model_name=picker_model_name,
+                    )
+                )
+                model_pending = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.candidate_id not in existing_vote_candidate_ids
+                    and candidate.candidate_id not in picked_candidate_ids
+                ]
+                model_skipped_count = len(candidates) - len(model_pending)
+                skipped_vote_count += model_skipped_count
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.picker_model_started",
+                    model_name=model_name,
+                    picker_model_name=picker_model_name,
+                    candidate_count=len(model_pending),
+                    skipped_count=model_skipped_count,
+                    force=force,
+                    message=f"Glossary filler picker model {model_name} started: {len(model_pending)} candidates",
+                )
+                candidate_count = len(model_pending)
+                sample_every = config_obj.events.progress_sample_every
+                for candidate_index, candidate in enumerate(model_pending, start=1):
+                    current_candidate_id = candidate.candidate_id
+                    votes = [
+                        vote
+                        for vote in list_translation_votes(
+                            conn,
+                            release_id=release_id,
+                            candidate_id=candidate.candidate_id,
+                        )
+                        if vote.translation_run_id == run_id
+                    ]
+                    alternatives = _existing_vote_alternatives(votes, model_order)
+                    if _should_log_glossary_fill_candidate(
+                        candidate_index=candidate_index,
+                        candidate_count=candidate_count,
+                        sample_every=sample_every,
+                    ):
+                        logger.bind(
+                            release_id=release_id,
+                            run_id=run_id,
+                            model_name=model_name,
+                            candidate_id=candidate.candidate_id,
+                            source_term=candidate.source_term,
+                            chapter_number=candidate.first_seen_chapter,
+                            candidate_index=candidate_index,
+                            candidate_count=candidate_count,
+                        ).debug(
+                            "Glossary filler picker processing candidate {}/{} model={} "
+                            "candidate_id={} source_term={} chapter={}",
+                            candidate_index,
+                            candidate_count,
+                            model_name,
+                            candidate.candidate_id,
+                            candidate.source_term,
+                            candidate.first_seen_chapter,
+                        )
+                    translated = client.translate_glossary_fill_candidate(
+                        model_name=model_name,
+                        prompt_template=pick_prompt.template,
+                        source_term=candidate.source_term,
+                        category=candidate.category,
+                        evidence_snippet=candidate.evidence_snippet,
+                        existing_alternatives="\n".join(alternatives) if alternatives else "- None",
+                    )
+                    picked = _pick_existing_vote_alternative(
+                        translated,
+                        alternatives,
+                        source_term=candidate.source_term,
+                        resolution_alias_families=config_obj.glossary.resolution_alias_families,
+                    )
+                    if picked is None:
+                        invalid_pick_count += 1
+                        _emit(
+                            run_id,
+                            release_id,
+                            f"{_STAGE_NAME}.fill.picker_invalid",
+                            severity="warning",
+                            model_name=model_name,
+                            candidate_id=candidate.candidate_id,
+                            source_term=candidate.source_term,
+                            chapter_number=candidate.first_seen_chapter,
+                            message=(
+                                "Glossary filler picker output did not match an existing "
+                                f"alternative for candidate {candidate.candidate_id}"
+                            ),
+                        )
+                        continue
+                    upsert_translation_vote(
+                        conn,
+                        candidate_id=candidate.candidate_id,
+                        release_id=release_id,
+                        translation_run_id=run_id,
+                        model_name=picker_model_name,
+                        prompt_version=pick_prompt.version,
+                        raw_output=translated,
+                        cleaned_output=picked,
+                        normalized_output=normalize_term(picked),
+                        resolution_status="picked",
+                    )
+                    save_candidate_translation(
+                        conn,
+                        candidate_id=candidate.candidate_id,
+                        translation_run_id=run_id,
+                        target_term=picked,
+                        normalized_target_term=normalize_term(picked),
+                        translator_model_name=picker_model_name,
+                        translator_prompt_version=pick_prompt.version,
+                    )
+                    picked_candidate_ids.add(candidate.candidate_id)
+                    picker_vote_count += 1
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.picker_model_completed",
+                    model_name=model_name,
+                    picker_model_name=picker_model_name,
+                    picked_count=picker_vote_count,
+                    skipped_count=model_skipped_count,
+                    invalid_pick_count=invalid_pick_count,
+                    message=f"Glossary filler picker model {model_name} completed",
+                )
+
+            translated_count = len(picked_candidate_ids)
+            unresolved_count = len(candidates) - translated_count
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.fill.completed",
+                translation_run_id=run_id,
+                candidate_count=len(candidates),
+                filler_vote_count=filler_vote_count,
+                picker_vote_count=picker_vote_count,
+                skipped_vote_count=skipped_vote_count,
+                translated_count=translated_count,
+                picked_count=translated_count,
+                invalid_pick_count=invalid_pick_count,
+                unresolved_count=unresolved_count,
+                **usage_payload_delta(client, usage_before),
+            )
+            return {
+                "status": "success",
+                "release_id": release_id,
+                "run_id": run_id,
+                "candidate_count": len(candidates),
+                "filler_vote_count": filler_vote_count,
+                "picker_vote_count": picker_vote_count,
+                "skipped_vote_count": skipped_vote_count,
+                "translated_count": translated_count,
+                "picked_count": translated_count,
+                "invalid_pick_count": invalid_pick_count,
+                "unresolved_count": unresolved_count,
+                **usage_payload_delta(client, usage_before),
+            }
         try:
             for model_name in filler_model_names:
                 current_model_name = model_name
@@ -2052,6 +2301,7 @@ def fill_glossary_translation_votes(
                 translation_run_id=run_id,
                 candidate=candidate,
                 translator_names=model_order,
+                resolution_alias_families=config_obj.glossary.resolution_alias_families,
             )
             if result["translated"]:
                 translated_count += 1
@@ -2095,8 +2345,11 @@ def fill_glossary_translation_votes(
             translation_run_id=run_id,
             candidate_count=len(candidates),
             filler_vote_count=filler_vote_count,
+            picker_vote_count=picker_vote_count,
             skipped_vote_count=skipped_vote_count,
             translated_count=translated_count,
+            picked_count=0,
+            invalid_pick_count=invalid_pick_count,
             unresolved_count=unresolved_count,
             **usage_payload_delta(client, usage_before),
         )
@@ -2123,8 +2376,11 @@ def fill_glossary_translation_votes(
         "run_id": run_id,
         "candidate_count": len(candidates),
         "filler_vote_count": filler_vote_count,
+        "picker_vote_count": picker_vote_count,
         "skipped_vote_count": skipped_vote_count,
         "translated_count": translated_count,
+        "picked_count": 0,
+        "invalid_pick_count": invalid_pick_count,
         "unresolved_count": unresolved_count,
         **usage_payload_delta(client, usage_before),
     }
@@ -2195,6 +2451,7 @@ def resolve_glossary_translation_votes(
                 translation_run_id=run_id,
                 candidate=candidate,
                 translator_names=translator_names,
+                resolution_alias_families=config_obj.glossary.resolution_alias_families,
                 clear_stale_translation=True,
             )
             if result["translated"]:

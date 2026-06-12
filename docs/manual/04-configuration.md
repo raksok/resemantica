@@ -142,6 +142,21 @@ Risk classes: `HIGH` (>= `risk_threshold_high`, default 0.7), `MEDIUM` (>= 0.3),
 | `min_corpus_score` | float | `0.1` | Minimum corpus frequency score |
 | `eval_batch_size` | int | `50` | Batch size for LLM evaluation |
 | `dedup_similarity_threshold` | float | `0.85` | Embedding similarity for alias dedup (0.0–1.0) |
+| `resolution_alias_families` | array | Great Li / Great Sui families | English output equivalence families used by glossary vote resolution and picker mode |
+
+Alias families collapse known English variants for a matching Chinese source term
+when resolving votes or validating `glossary-fill --pick-existing` output:
+
+```toml
+[[glossary.resolution_alias_families]]
+source_contains = "桂花岛"
+preferred = "Osmanthus Island"
+variants = ["Osmanthus Island", "Guihua Island", "Gui Hua Island"]
+```
+
+`source_contains` is a literal substring match against the Chinese source term.
+When it matches, any `variants` occurrence in the English output is treated as
+equivalent for resolution and rewritten to `preferred` when saved.
 
 ## `[packets]` — Chapter Packet Assembly
 
@@ -178,6 +193,7 @@ The system validates configuration at startup (`settings.py:475-539`). Key rules
 | `glossary.min_corpus_score` | Must be >= 0 |
 | `glossary.eval_batch_size` | Must be >= 1 |
 | `glossary.dedup_similarity_threshold` | Must be in [0.0, 1.0] |
+| `glossary.resolution_alias_families` | Each family must have non-empty `source_contains`, `preferred`, and `variants` |
 | `artifact_root`, `db_filename` | Must be non-empty |
 
 ### Effective Context Window

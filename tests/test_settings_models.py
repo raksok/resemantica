@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from resemantica.settings import AppConfig, LLMThrottleGroupConfig, derive_paths, load_config
+from resemantica.settings import (
+    AppConfig,
+    GlossaryResolutionAliasFamily,
+    LLMThrottleGroupConfig,
+    derive_paths,
+    load_config,
+)
 
 QWEN_SYSTEM_PROMPT = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
@@ -502,6 +508,107 @@ db_filename = "test.db"
         ]
         assert config.llm.throttle_groups["qwen"].max_concurrent_requests == 1
         assert config.llm.throttle_groups["qwen"].system_prompt == QWEN_SYSTEM_PROMPT
+
+    def test_accepts_glossary_resolution_alias_families(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+
+[[glossary.resolution_alias_families]]
+source_contains = "桂花岛"
+preferred = "Osmanthus Island"
+variants = ["Osmanthus Island", "Guihua Island", "Gui Hua Island"]
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content, encoding="utf-8")
+
+        config = load_config(config_path)
+
+        assert config.glossary.resolution_alias_families == [
+            GlossaryResolutionAliasFamily(
+                source_contains="桂花岛",
+                preferred="Osmanthus Island",
+                variants=["Osmanthus Island", "Guihua Island", "Gui Hua Island"],
+            )
+        ]
+
+    def test_checked_in_config_keeps_default_glossary_resolution_alias_families(self) -> None:
+        config_path = Path(__file__).resolve().parents[1] / "resemantica.toml"
+
+        config = load_config(config_path)
+
+        assert config.glossary.resolution_alias_families[:2] == [
+            GlossaryResolutionAliasFamily(
+                source_contains="大骊",
+                preferred="Great Li",
+                variants=["Great Li", "Da Li", "Dali", "Dalí"],
+            ),
+            GlossaryResolutionAliasFamily(
+                source_contains="大隋",
+                preferred="Great Sui",
+                variants=["Great Sui", "Da Sui", "Dasiu"],
+            ),
+        ]
+
+    @pytest.mark.parametrize(
+        ("family_body", "match"),
+        [
+            (
+                """
+source_contains = ""
+preferred = "Osmanthus Island"
+variants = ["Guihua Island"]
+""",
+                "source_contains",
+            ),
+            (
+                """
+source_contains = "桂花岛"
+preferred = ""
+variants = ["Guihua Island"]
+""",
+                "preferred",
+            ),
+            (
+                """
+source_contains = "桂花岛"
+preferred = "Osmanthus Island"
+variants = []
+""",
+                "variants",
+            ),
+        ],
+    )
+    def test_rejects_invalid_glossary_resolution_alias_family(
+        self,
+        tmp_path,
+        family_body: str,
+        match: str,
+    ) -> None:
+        toml_content = f"""
+[models]
+translator_name = "t"
+analyst_name = "a"
+embedding_name = "e"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+
+[[glossary.resolution_alias_families]]
+{family_body}
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content, encoding="utf-8")
+
+        with pytest.raises(ValueError, match=match):
+            load_config(config_path)
 
     @pytest.mark.parametrize(
         ("group_body", "match"),

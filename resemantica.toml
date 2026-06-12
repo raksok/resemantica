@@ -55,3 +55,21 @@ translation_chunk_size = 10
 exclude_chapter_patterns = ["titlepage", "nav\\.xhtml", "toc", "book.?2", "front.?matter", "ver-page", "Introdution", "cover", "copyright"]
 chapter_concurrency = 1
 story_compact_max_tokens = 2048
+
+[glossary]
+
+[[glossary.resolution_alias_families]]
+source_contains = "大骊"
+preferred = "Great Li"
+variants = ["Great Li", "Da Li", "Dali", "Dalí"]
+
+[[glossary.resolution_alias_families]]
+source_contains = "大隋"
+preferred = "Great Sui"
+variants = ["Great Sui", "Da Sui", "Dasiu"]
+
+# Example for project-specific English/pinyin equivalence:
+# [[glossary.resolution_alias_families]]
+# source_contains = "桂花岛"
+# preferred = "Osmanthus Island"
+# variants = ["Osmanthus Island", "Guihua Island", "Gui Hua Island"]

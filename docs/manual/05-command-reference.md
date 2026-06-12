@@ -126,7 +126,7 @@ fields and vote `resolution_status` values are updated.
 Call filler model(s) only for unresolved glossary vote cases.
 
 ```bash
-uv run rsem preprocess glossary-fill -r <release> [-R <translation-run>] --model <filler-model> [--model <filler-model>] [--force]
+uv run rsem preprocess glossary-fill -r <release> [-R <translation-run>] --model <filler-model> [--model <filler-model>] [--force] [--pick-existing]
 ```
 
 | Option | Description |
@@ -134,6 +134,7 @@ uv run rsem preprocess glossary-fill -r <release> [-R <translation-run>] --model
 | `-R, --run ID` | Vote scope to fill (default: `glossary-translate`) |
 | `--model NAME` | Filler model name; repeat for multiple filler models |
 | `-f, --force` | Regenerate existing filler votes for the selected filler model name(s) |
+| `--pick-existing` | Use the filler model as an adjudicator that must choose one existing alternative |
 
 `glossary-fill` loads candidates that are still unresolved after deterministic
 saved-vote resolution and have no canonical glossary translation. It writes each
@@ -141,6 +142,13 @@ filler output as a normal `glossary_translation_votes` row, then re-runs the
 deterministic resolver with configured translator models first and filler models
 last. It does not rerun full glossary translation and does not rewrite
 `candidates.json`; regenerate review files afterward if needed.
+
+With `--pick-existing`, `glossary-fill` does not add a normal filler vote.
+Instead, the model must pick one existing vote alternative. Accepted picks update
+the candidate translation and write an auditable `<model>:picker` vote with
+`resolution_status = "picked"`. Invalid or invented picker outputs leave the
+candidate unresolved. Locked glossary entries are still protected by promotion
+validation.
 
 ### `glossary-review` (alias: `gls-review`)
 

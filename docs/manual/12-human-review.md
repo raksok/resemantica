@@ -52,6 +52,18 @@ the filler model names appended after the configured translator models. It does
 not run full glossary translation and does not replace human review for policy
 disagreements that remain unresolved.
 
+For a stronger first-pass review, add `--pick-existing`:
+
+```bash
+uv run rsem preprocess glossary-fill -r v1.0 -R glossary-translate --model <filler-model> --pick-existing
+```
+
+Picker mode asks the model to choose one existing alternative only. Accepted
+picks update the candidate translation and write an auditable `<model>:picker`
+vote; original votes remain unchanged. Promotion still validates against locked
+glossary entries, so picker mode does not overwrite already locked glossary
+terms.
+
 ### Review File Format
 
 **JSON structure:**

@@ -449,7 +449,9 @@ updates canonical candidate translations without regenerating model votes.""",
         description="""\
 Calls filler model(s) only for unresolved glossary vote cases, writes the
 outputs as normal glossary_translation_votes rows, then re-runs deterministic
-resolution with filler models appended to the configured translator model order.""",
+resolution with filler models appended to the configured translator model order.
+With --pick-existing, the filler model must adjudicate by choosing one existing
+vote alternative instead of adding a normal filler vote.""",
     )
     _add_common_release_args(glossary_fill, default_run="glossary-translate")
     glossary_fill.add_argument(
@@ -463,6 +465,11 @@ resolution with filler models appended to the configured translator model order.
         "-f", "--force",
         action="store_true",
         help="Regenerate existing filler votes for the selected filler model name(s).",
+    )
+    glossary_fill.add_argument(
+        "--pick-existing",
+        action="store_true",
+        help="Use the filler model as an adjudicator that must pick one existing vote alternative.",
     )
 
     glossary_review = preprocess_subparsers.add_parser(
@@ -996,6 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
                     filler_model_names=list(getattr(args, "model", []) or []),
                     config=config,
                     force=bool(getattr(args, "force", False)),
+                    pick_existing=bool(getattr(args, "pick_existing", False)),
                     stop_token=stop_token,
                 ),
                 stop_token=stop_token,
@@ -1006,8 +1014,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"status={result['status']}")
             print(f"candidate_count={result['candidate_count']}")
             print(f"filler_vote_count={result['filler_vote_count']}")
+            if "picker_vote_count" in result:
+                print(f"picker_vote_count={result['picker_vote_count']}")
             print(f"skipped_vote_count={result['skipped_vote_count']}")
             print(f"translated_count={result['translated_count']}")
+            if "picked_count" in result:
+                print(f"picked_count={result['picked_count']}")
+            if "invalid_pick_count" in result:
+                print(f"invalid_pick_count={result['invalid_pick_count']}")
             print(f"unresolved_count={result['unresolved_count']}")
             return 0
 

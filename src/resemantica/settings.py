@@ -123,12 +123,37 @@ class PacketConfig:
 
 
 @dataclass(slots=True)
+class GlossaryResolutionAliasFamily:
+    source_contains: str
+    preferred: str
+    variants: list[str] = field(default_factory=list)
+
+
+def _default_glossary_resolution_alias_families() -> list[GlossaryResolutionAliasFamily]:
+    return [
+        GlossaryResolutionAliasFamily(
+            source_contains="大骊",
+            preferred="Great Li",
+            variants=["Great Li", "Da Li", "Dali", "Dalí"],
+        ),
+        GlossaryResolutionAliasFamily(
+            source_contains="大隋",
+            preferred="Great Sui",
+            variants=["Great Sui", "Da Sui", "Dasiu"],
+        ),
+    ]
+
+
+@dataclass(slots=True)
 class GlossaryConfig:
     min_term_length: int = 2
     max_term_length: int = 20
     min_corpus_score: float = 0.1
     eval_batch_size: int = 50
     dedup_similarity_threshold: float = 0.85
+    resolution_alias_families: list[GlossaryResolutionAliasFamily] = field(
+        default_factory=_default_glossary_resolution_alias_families
+    )
 
 
 @dataclass(slots=True)
@@ -267,6 +292,48 @@ def _parse_llm_throttle_groups(llm: dict[str, object]) -> dict[str, LLMThrottleG
                 raw_group.get("system_prompt", LLMThrottleGroupConfig().system_prompt),
                 f"llm.throttle_groups.{group_name}.system_prompt",
             ),
+        )
+    return parsed
+
+
+def _parse_glossary_resolution_alias_families(
+    glossary: dict[str, object],
+) -> list[GlossaryResolutionAliasFamily]:
+    raw_families = glossary.get(
+        "resolution_alias_families",
+        GlossaryConfig().resolution_alias_families,
+    )
+    if not isinstance(raw_families, list):
+        raise ValueError("glossary.resolution_alias_families must be a list of tables.")
+    parsed: list[GlossaryResolutionAliasFamily] = []
+    for index, raw_family in enumerate(raw_families):
+        field_prefix = f"glossary.resolution_alias_families[{index}]"
+        if isinstance(raw_family, GlossaryResolutionAliasFamily):
+            parsed.append(
+                GlossaryResolutionAliasFamily(
+                    source_contains=raw_family.source_contains,
+                    preferred=raw_family.preferred,
+                    variants=list(raw_family.variants),
+                )
+            )
+            continue
+        if not isinstance(raw_family, dict):
+            raise ValueError(f"{field_prefix} must be a table.")
+        parsed.append(
+            GlossaryResolutionAliasFamily(
+                source_contains=_as_str(
+                    raw_family.get("source_contains", ""),
+                    f"{field_prefix}.source_contains",
+                ),
+                preferred=_as_str(
+                    raw_family.get("preferred", ""),
+                    f"{field_prefix}.preferred",
+                ),
+                variants=_as_str_list(
+                    raw_family.get("variants", []),
+                    f"{field_prefix}.variants",
+                ),
+            )
         )
     return parsed
 
@@ -491,6 +558,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 glossary.get("dedup_similarity_threshold", GlossaryConfig().dedup_similarity_threshold),
                 "glossary.dedup_similarity_threshold",
             ),
+            resolution_alias_families=_parse_glossary_resolution_alias_families(glossary),
         ),
         packets=PacketConfig(
             budget_tokens=(
@@ -591,6 +659,17 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("glossary.eval_batch_size must be >= 1.")
     if not (0 <= config.glossary.dedup_similarity_threshold <= 1):
         raise ValueError("glossary.dedup_similarity_threshold must be in [0.0, 1.0].")
+    for index, family in enumerate(config.glossary.resolution_alias_families):
+        prefix = f"glossary.resolution_alias_families[{index}]"
+        family.source_contains = family.source_contains.strip()
+        family.preferred = family.preferred.strip()
+        family.variants = [variant.strip() for variant in family.variants if variant.strip()]
+        if not family.source_contains:
+            raise ValueError(f"{prefix}.source_contains must not be empty.")
+        if not family.preferred:
+            raise ValueError(f"{prefix}.preferred must not be empty.")
+        if not family.variants:
+            raise ValueError(f"{prefix}.variants must not be empty.")
 
     if not config.paths.artifact_root.strip():
         raise ValueError("paths.artifact_root must not be empty.")

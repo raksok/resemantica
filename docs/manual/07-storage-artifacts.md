@@ -74,6 +74,13 @@ Glossary filler outputs are stored in the same `glossary_translation_votes`
 table as translator outputs, keyed by the filler model name. No separate filler
 table or public review schema change is used.
 
+`glossary-fill --pick-existing` writes accepted picker decisions to the same
+table with a synthetic model name `<model>:picker` and
+`resolution_status = "picked"`. The original translator/filler vote rows are not
+rewritten; the accepted picker decision updates the existing
+`glossary_candidates.candidate_translation_en` fields for downstream review and
+promotion.
+
 ### Summary System
 
 | Table | PK / Unique | Key Columns |

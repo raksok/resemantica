@@ -43,7 +43,14 @@ from resemantica.glossary.pipeline import (
 )
 from resemantica.glossary.validators import normalize_term
 from resemantica.llm.prompts import load_prompt, render_named_sections
-from resemantica.settings import AppConfig, EventsConfig, LLMConfig, derive_paths, load_config
+from resemantica.settings import (
+    AppConfig,
+    EventsConfig,
+    GlossaryResolutionAliasFamily,
+    LLMConfig,
+    derive_paths,
+    load_config,
+)
 
 
 class ScriptedGlossaryLLM:
@@ -587,6 +594,49 @@ def test_glossary_vote_resolution_prefers_great_dynasty_family_variants() -> Non
     assert resolution["target_term"] == "Great Li Imperial Palace"
 
 
+def test_glossary_vote_resolution_uses_configured_alias_family_variants() -> None:
+    resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "Guihua Island"),
+            _resolver_vote("model-b", "Gui Hua Island"),
+            _resolver_vote("model-c", "Osmanthus Island"),
+        ],
+        ["model-a", "model-b", "model-c"],
+        source_term="桂花岛",
+        resolution_alias_families=[
+            GlossaryResolutionAliasFamily(
+                source_contains="桂花岛",
+                preferred="Osmanthus Island",
+                variants=["Osmanthus Island", "Guihua Island", "Gui Hua Island"],
+            )
+        ],
+    )
+
+    assert resolution["status"] == "consensus"
+    assert resolution["target_term"] == "Osmanthus Island"
+
+
+def test_glossary_vote_resolution_alias_family_requires_source_match() -> None:
+    resolution = _resolve_translation_votes(
+        [
+            _resolver_vote("model-a", "Guihua Island"),
+            _resolver_vote("model-b", "Osmanthus Island"),
+        ],
+        ["model-a", "model-b"],
+        source_term="别处",
+        resolution_alias_families=[
+            GlossaryResolutionAliasFamily(
+                source_contains="桂花岛",
+                preferred="Osmanthus Island",
+                variants=["Osmanthus Island", "Guihua Island"],
+            )
+        ],
+    )
+
+    assert resolution["status"] == "unresolved"
+    assert resolution["target_term"] == ""
+
+
 def test_glossary_vote_resolution_keeps_different_dynasty_phrases_unresolved() -> None:
     resolution = _resolve_translation_votes(
         [
@@ -762,6 +812,206 @@ def test_glossary_fill_writes_vote_and_resolves_majority(
         ("filler-a", "Azure Sect"),
     }
     assert {vote.resolution_status for vote in votes} == {"majority"}
+
+
+def test_glossary_fill_pick_existing_saves_selected_existing_alternative(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-pick-existing"
+    run_id = "glossary-translate"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="model-a",
+        target_term="Azure Sect",
+    )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="青云门",
+        model_name="model-b",
+        target_term="Blue Cloud Gate",
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    picker = ModelMappedGlossaryFiller({("picker-a", "青云门"): "Blue Cloud Gate"})
+
+    result = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["picker-a"],
+        config=config,
+        llm_client=picker,
+        pick_existing=True,
+    )
+
+    assert result["filler_vote_count"] == 0
+    assert result["picker_vote_count"] == 1
+    assert result["picked_count"] == 1
+    assert result["invalid_pick_count"] == 0
+    assert result["unresolved_count"] == 0
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        row = conn.execute(
+            """
+            SELECT candidate_translation_en, translator_model_name, translator_prompt_version, candidate_status
+            FROM glossary_candidates
+            WHERE release_id = ? AND source_term = ?
+            """,
+            (release_id, "青云门"),
+        ).fetchone()
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["candidate_translation_en"] == "Blue Cloud Gate"
+    assert row["translator_model_name"] == "picker-a:picker"
+    assert row["translator_prompt_version"] == "1.0"
+    assert row["candidate_status"] == "translated"
+    assert {(vote.model_name, vote.cleaned_output, vote.resolution_status) for vote in votes} == {
+        ("model-a", "Azure Sect", "pending"),
+        ("model-b", "Blue Cloud Gate", "pending"),
+        ("picker-a:picker", "Blue Cloud Gate", "picked"),
+    }
+
+
+def test_glossary_fill_pick_existing_saves_preferred_alias_family_display(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-pick-alias"
+    run_id = "glossary-translate"
+    _insert_glossary_candidate(release_id=release_id, source_term="桂花岛", category="location")
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="桂花岛",
+        model_name="model-a",
+        target_term="Guihua Island",
+    )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="桂花岛",
+        model_name="model-b",
+        target_term="Fragrant Isle",
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    config.glossary.resolution_alias_families = [
+        GlossaryResolutionAliasFamily(
+            source_contains="桂花岛",
+            preferred="Osmanthus Island",
+            variants=["Osmanthus Island", "Guihua Island", "Gui Hua Island"],
+        )
+    ]
+    picker = ModelMappedGlossaryFiller({("picker-a", "桂花岛"): "Guihua Island"})
+
+    result = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["picker-a"],
+        config=config,
+        llm_client=picker,
+        pick_existing=True,
+    )
+
+    assert result["picked_count"] == 1
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        row = conn.execute(
+            """
+            SELECT candidate_translation_en, normalized_target_term
+            FROM glossary_candidates
+            WHERE release_id = ? AND source_term = ?
+            """,
+            (release_id, "桂花岛"),
+        ).fetchone()
+        picker_vote = next(
+            vote for vote in list_translation_votes(conn, release_id=release_id)
+            if vote.model_name == "picker-a:picker"
+        )
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["candidate_translation_en"] == "Osmanthus Island"
+    assert row["normalized_target_term"] == "osmanthus island"
+    assert picker_vote.cleaned_output == "Osmanthus Island"
+    assert picker_vote.raw_output == "Guihua Island"
+
+
+def test_glossary_fill_pick_existing_rejects_invented_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m-fill-pick-invalid"
+    run_id = "glossary-translate"
+    _insert_glossary_candidate(release_id=release_id, source_term="苍云门")
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="苍云门",
+        model_name="model-a",
+        target_term="Cangyun Gate",
+    )
+    _insert_translation_vote(
+        release_id=release_id,
+        run_id=run_id,
+        source_term="苍云门",
+        model_name="model-b",
+        target_term="Azure Cloud Sect",
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["model-a", "model-b"]
+    picker = ModelMappedGlossaryFiller({("picker-a", "苍云门"): "Cloudblue Pavilion"})
+
+    result = fill_glossary_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["picker-a"],
+        config=config,
+        llm_client=picker,
+        pick_existing=True,
+    )
+
+    assert result["picker_vote_count"] == 0
+    assert result["picked_count"] == 0
+    assert result["invalid_pick_count"] == 1
+    assert result["unresolved_count"] == 1
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        row = conn.execute(
+            """
+            SELECT candidate_translation_en, candidate_status
+            FROM glossary_candidates
+            WHERE release_id = ? AND source_term = ?
+            """,
+            (release_id, "苍云门"),
+        ).fetchone()
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["candidate_translation_en"] is None
+    assert row["candidate_status"] == "discovered"
+    assert {vote.model_name for vote in votes} == {"model-a", "model-b"}
 
 
 def test_glossary_fill_force_regenerates_existing_filler_votes(

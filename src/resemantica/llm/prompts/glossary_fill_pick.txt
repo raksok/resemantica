@@ -1,0 +1,41 @@
+# version: 1.0
+
+Pick one existing glossary translation alternative.
+
+TASK:
+Choose the best existing English rendering for a Chinese glossary candidate whose model votes did not produce a deterministic majority.
+
+OUTPUT CONTRACT:
+- Output exactly one alternative from the list.
+- Do not invent a new translation.
+- Use plain text only.
+- Do not include labels, notes, explanations, quotes, parentheses, slashes, semicolons, markdown, or Chinese characters.
+- If none of the alternatives are acceptable, output an empty string.
+
+EXAMPLES:
+Source term: 青云门
+Category: faction
+Evidence: 青云门弟子正在山门前等候。
+Existing alternatives:
+- Azure Sect
+- Blue Cloud Gate
+
+Azure Sect
+
+Source term: 镇妖塔
+Category: location
+Evidence: 他被关入镇妖塔三年。
+Existing alternatives:
+- Demon-Suppressing Tower
+- Demon Sealing Pagoda
+
+Demon-Suppressing Tower
+
+## CANDIDATE
+Source term: {SOURCE_TERM}
+Category: {CATEGORY}
+Evidence: {EVIDENCE_SNIPPET}
+Existing alternatives:
+{EXISTING_ALTERNATIVES}
+
+Existing alternative:
