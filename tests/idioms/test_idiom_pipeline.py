@@ -33,9 +33,11 @@ from resemantica.idioms.extractor import extract_idioms
 from resemantica.idioms.matching import match_idioms
 from resemantica.idioms.models import IdiomCandidate, IdiomPolicy
 from resemantica.idioms.pipeline import (
+    fill_idiom_translation_votes,
     preprocess_idioms,
     promote_idiom_candidates,
     resolve_idiom_policy,
+    resolve_idiom_translation_votes,
     review_idiom_candidates,
     translate_idiom_candidates,
 )
@@ -91,6 +93,16 @@ class ModelMappedIdiomTranslator:
         kind = "meaning" if "Translate the following term" in prompt else "rendering"
         self.calls.append((model_name, kind))
         return self.outputs[(model_name, kind)]
+
+
+class ModelMappedIdiomFiller:
+    def __init__(self, outputs: dict[str, str]) -> None:
+        self.outputs = outputs
+        self.calls: list[str] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        self.calls.append(model_name)
+        return self.outputs[model_name]
 
 
 def _write_extracted_chapter(
@@ -887,6 +899,314 @@ def test_idiom_translation_force_regenerates_existing_votes(
         ("rendering", "kill two birds with one stone"),
         ("meaning", "achieve two things at once"),
     }
+
+
+def test_idiom_resolve_replays_saved_votes_without_llm(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-resolve-only"
+    run_id = "idioms"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    for model_name in ["hy", "gemma"]:
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name=model_name,
+            vote_kind="rendering",
+            output="kill two birds with one stone",
+        )
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name=model_name,
+            vote_kind="meaning",
+            output="achieve two things at once",
+        )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+
+    result = resolve_idiom_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        config=config,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        saved = list_candidates(conn, release_id=release_id)[0]
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert result["candidate_count"] == 1
+    assert result["translated_count"] == 1
+    assert result["unresolved_count"] == 0
+    assert saved.preferred_rendering_en == "kill two birds with one stone"
+    assert saved.meaning_en == "achieve two things at once"
+    assert saved.candidate_status == "translated"
+    assert {vote.resolution_status for vote in votes} == {"consensus"}
+
+
+def test_idiom_resolve_clears_stale_rendering_when_votes_become_unresolved(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-resolve-clear"
+    run_id = "idioms"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        save_idiom_translation(
+            conn,
+            candidate_id=candidate_id,
+            translation_run_id=run_id,
+            target_term="old rendering",
+            meaning_en="old meaning",
+            translator_model_name="old-model",
+            translator_prompt_version="old-prompt",
+        )
+    finally:
+        conn.close()
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="kill two birds with one stone",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="gemma",
+        vote_kind="rendering",
+        output="one arrow, two eagles",
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+
+    result = resolve_idiom_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        config=config,
+    )
+
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        saved = list_candidates(conn, release_id=release_id)[0]
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert result["translated_count"] == 0
+    assert result["unresolved_count"] == 1
+    assert result["stale_cleared_count"] == 1
+    assert saved.preferred_rendering_en == ""
+    assert saved.meaning_en == "old meaning"
+    assert saved.candidate_status == "discovered"
+    assert {vote.resolution_status for vote in votes} == {"unresolved"}
+
+
+def test_idiom_fill_writes_rendering_vote_and_resolves_majority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-fill"
+    run_id = "idioms"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    second_id = _insert_idiom_candidate(
+        release_id=release_id,
+        source_text="杯弓蛇影",
+        meaning_zh="疑神疑鬼",
+        candidate_id="ican_second",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="kill two birds with one stone",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="gemma",
+        vote_kind="rendering",
+        output="one arrow, two eagles",
+    )
+    for model_name in ["hy", "gemma"]:
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name=model_name,
+            vote_kind="meaning",
+            output="achieve two things at once",
+        )
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=second_id,
+            model_name=model_name,
+            vote_kind="rendering",
+            output="seeing snakes in shadows",
+        )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+    filler = ModelMappedIdiomFiller({"filler-a": "kill two birds with one stone"})
+
+    result = fill_idiom_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        candidates = {candidate.candidate_id: candidate for candidate in list_candidates(conn, release_id=release_id)}
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert result["candidate_count"] == 1
+    assert result["filler_vote_count"] == 1
+    assert result["translated_count"] == 1
+    assert result["unresolved_count"] == 0
+    assert filler.calls == ["filler-a"]
+    assert candidates[candidate_id].preferred_rendering_en == "kill two birds with one stone"
+    assert candidates[candidate_id].meaning_en == "achieve two things at once"
+    assert candidates[second_id].preferred_rendering_en == ""
+    filler_votes = [vote for vote in votes if vote.model_name == "filler-a"]
+    assert len(filler_votes) == 1
+    assert filler_votes[0].vote_kind == "rendering"
+    assert filler_votes[0].cleaned_output == "kill two birds with one stone"
+
+
+def test_idiom_fill_force_regenerates_existing_filler_vote(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-fill-force"
+    run_id = "idioms"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="hy",
+        vote_kind="rendering",
+        output="kill two birds with one stone",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="gemma",
+        vote_kind="rendering",
+        output="one arrow, two eagles",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="filler-a",
+        vote_kind="rendering",
+        output="old filler output",
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+    filler = ModelMappedIdiomFiller({"filler-a": "kill two birds with one stone"})
+
+    result = fill_idiom_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+        force=True,
+    )
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_idiom_schema(conn)
+    try:
+        votes = list_translation_votes(conn, release_id=release_id)
+    finally:
+        conn.close()
+
+    assert result["filler_vote_count"] == 1
+    assert filler.calls == ["filler-a"]
+    filler_vote = next(vote for vote in votes if vote.model_name == "filler-a")
+    assert filler_vote.cleaned_output == "kill two birds with one stone"
+
+
+def test_idiom_fill_ignores_meaning_only_unresolved_cases(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m42-idiom-fill-rendering-only"
+    run_id = "idioms"
+    candidate_id = _insert_idiom_candidate(release_id=release_id)
+    for model_name in ["hy", "gemma"]:
+        _insert_idiom_vote(
+            release_id=release_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            model_name=model_name,
+            vote_kind="rendering",
+            output="kill two birds with one stone",
+        )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="hy",
+        vote_kind="meaning",
+        output="achieve two things at once",
+    )
+    _insert_idiom_vote(
+        release_id=release_id,
+        run_id=run_id,
+        candidate_id=candidate_id,
+        model_name="gemma",
+        vote_kind="meaning",
+        output="gain two benefits with one action",
+    )
+    config = AppConfig()
+    config.models.preprocess_translator_names = ["hy", "gemma"]
+    filler = ModelMappedIdiomFiller({"filler-a": "unused"})
+
+    result = fill_idiom_translation_votes(
+        release_id=release_id,
+        run_id=run_id,
+        filler_model_names=["filler-a"],
+        config=config,
+        llm_client=filler,
+    )
+
+    assert result["candidate_count"] == 0
+    assert result["filler_vote_count"] == 0
+    assert filler.calls == []
 
 
 def test_idiom_review_csv_written_and_matches_json(tmp_path: Path, monkeypatch) -> None:

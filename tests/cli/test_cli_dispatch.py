@@ -113,6 +113,17 @@ class TestCliDispatch:
         args = _parse_and_resolve(["pre", "idi-review", "--release", "r1"])
         assert args.preprocess_command == "idiom-review"
 
+    def test_idiom_resolve_alias(self):
+        args = _parse_and_resolve(["pre", "idi-resolve", "--release", "r1"])
+        assert args.preprocess_command == "idiom-resolve"
+        assert args.run == "idioms"
+
+    def test_idiom_fill_alias(self):
+        args = _parse_and_resolve(["pre", "idi-fill", "--release", "r1", "--model", "filler-a"])
+        assert args.preprocess_command == "idiom-fill"
+        assert args.run == "idioms"
+        assert args.model == ["filler-a"]
+
     def test_idiom_promote_alias(self):
         args = _parse_and_resolve(["pre", "idi-promote", "--release", "r1"])
         assert args.preprocess_command == "idiom-promote"
@@ -247,6 +258,30 @@ class TestCliDispatch:
         parser = _build_parser()
         args = parser.parse_args(["preprocess", "idioms", "--release", "r1"])
         assert args.preprocess_command == "idioms"
+
+    def test_preprocess_idiom_resolve(self):
+        parser = _build_parser()
+        args = parser.parse_args(["preprocess", "idiom-resolve", "--release", "r1"])
+        assert args.preprocess_command == "idiom-resolve"
+        assert args.run == "idioms"
+
+    def test_preprocess_idiom_fill(self):
+        parser = _build_parser()
+        args = parser.parse_args([
+            "preprocess",
+            "idiom-fill",
+            "--release",
+            "r1",
+            "--model",
+            "filler-a",
+            "--model",
+            "filler-b",
+            "--force",
+        ])
+        assert args.preprocess_command == "idiom-fill"
+        assert args.run == "idioms"
+        assert args.model == ["filler-a", "filler-b"]
+        assert args.force is True
 
     def test_preprocess_graph(self):
         parser = _build_parser()
@@ -667,6 +702,102 @@ class TestCliDispatch:
         assert "unresolved_count=1" in out
         assert captured["release_id"] == "r1"
         assert captured["run_id"] == "glossary-translate"
+        assert captured["filler_model_names"] == ["filler-a", "filler-b"]
+        assert captured["force"] is True
+        assert captured["progress_stop_token"] is not None
+        assert captured["fill_stop_token"] is captured["progress_stop_token"]
+
+    def test_idiom_resolve_dispatches_and_prints_counts(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        def fake_resolve(**kwargs):
+            captured["resolve_stop_token"] = kwargs.get("stop_token")
+            captured["release_id"] = kwargs.get("release_id")
+            captured["run_id"] = kwargs.get("run_id")
+            return {
+                "status": "success",
+                "candidate_count": 3,
+                "translated_count": 2,
+                "unresolved_count": 1,
+                "meaning_unresolved_count": 1,
+                "stale_cleared_count": 1,
+                "candidates_artifact": "artifacts/releases/r1/idioms/candidates.json",
+            }
+
+        def fake_progress(fn, **kwargs):
+            captured["progress_stop_token"] = kwargs.get("stop_token")
+            return fn()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", fake_progress)
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr("resemantica.idioms.pipeline.resolve_idiom_translation_votes", fake_resolve)
+
+        result = cli_mod.main(["preprocess", "idiom-resolve", "--release", "r1"])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "candidate_count=3" in out
+        assert "translated_count=2" in out
+        assert "unresolved_count=1" in out
+        assert "meaning_unresolved_count=1" in out
+        assert "stale_cleared_count=1" in out
+        assert "candidates_artifact=artifacts/releases/r1/idioms/candidates.json" in out
+        assert captured["release_id"] == "r1"
+        assert captured["run_id"] == "idioms"
+        assert captured["progress_stop_token"] is not None
+        assert captured["resolve_stop_token"] is captured["progress_stop_token"]
+
+    def test_idiom_fill_dispatches_models_force_and_prints_counts(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        def fake_fill(**kwargs):
+            captured["fill_stop_token"] = kwargs.get("stop_token")
+            captured["release_id"] = kwargs.get("release_id")
+            captured["run_id"] = kwargs.get("run_id")
+            captured["filler_model_names"] = kwargs.get("filler_model_names")
+            captured["force"] = kwargs.get("force")
+            return {
+                "status": "success",
+                "candidate_count": 3,
+                "filler_vote_count": 2,
+                "skipped_vote_count": 1,
+                "translated_count": 2,
+                "unresolved_count": 1,
+                "meaning_unresolved_count": 1,
+            }
+
+        def fake_progress(fn, **kwargs):
+            captured["progress_stop_token"] = kwargs.get("stop_token")
+            return fn()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", fake_progress)
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr("resemantica.idioms.pipeline.fill_idiom_translation_votes", fake_fill)
+
+        result = cli_mod.main([
+            "preprocess",
+            "idiom-fill",
+            "--release",
+            "r1",
+            "--model",
+            "filler-a",
+            "--model",
+            "filler-b",
+            "--force",
+        ])
+
+        out = capsys.readouterr().out
+        assert result == 0
+        assert "candidate_count=3" in out
+        assert "filler_vote_count=2" in out
+        assert "skipped_vote_count=1" in out
+        assert "translated_count=2" in out
+        assert "unresolved_count=1" in out
+        assert "meaning_unresolved_count=1" in out
+        assert captured["release_id"] == "r1"
+        assert captured["run_id"] == "idioms"
         assert captured["filler_model_names"] == ["filler-a", "filler-b"]
         assert captured["force"] is True
         assert captured["progress_stop_token"] is not None

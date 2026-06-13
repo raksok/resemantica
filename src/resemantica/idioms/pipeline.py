@@ -13,6 +13,7 @@ from loguru import logger
 
 from resemantica.chapters.manifest import list_extracted_chapters
 from resemantica.db.idiom_repo import (
+    clear_idiom_translation_for_run,
     count_complete_translation_vote_pairs_by_model,
     find_exact_policy,
     get_checkpoint,
@@ -26,6 +27,7 @@ from resemantica.db.idiom_repo import (
     list_existing_translation_vote_candidate_ids,
     list_policies,
     list_translation_resume_candidate_ids,
+    list_translation_vote_candidate_ids_for_run,
     list_translation_votes,
     mark_candidates_conflict,
     mark_candidates_promoted,
@@ -614,22 +616,592 @@ def _resolve_translation_votes(votes: list[Any], model_order: list[str]) -> dict
     votes_by_model = {vote.model_name: vote for vote in votes}
     ordered_votes = [votes_by_model[name] for name in model_order if name in votes_by_model]
     if not ordered_votes:
-        return {"status": "unresolved", "target_term": "", "model_name": ""}
+        return {"status": "unresolved", "target_term": "", "model_name": "", "prompt_version": ""}
     counts: dict[str, int] = {}
     for vote in ordered_votes:
         if vote.normalized_output:
             counts[vote.normalized_output] = counts.get(vote.normalized_output, 0) + 1
     if not counts:
-        return {"status": "unresolved", "target_term": "", "model_name": ""}
+        return {"status": "unresolved", "target_term": "", "model_name": "", "prompt_version": ""}
     winning_normalized, winning_count = max(counts.items(), key=lambda item: item[1])
     if winning_count <= len(ordered_votes) // 2:
-        return {"status": "unresolved", "target_term": "", "model_name": ""}
+        return {"status": "unresolved", "target_term": "", "model_name": "", "prompt_version": ""}
     status = "consensus" if winning_count == len(ordered_votes) else "majority"
     display_vote = next(vote for vote in ordered_votes if vote.normalized_output == winning_normalized)
     return {
         "status": status,
         "target_term": display_vote.cleaned_output,
         "model_name": display_vote.model_name,
+        "prompt_version": display_vote.prompt_version,
+    }
+
+
+def _load_vote_resolution_candidates(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> list[IdiomCandidate]:
+    candidate_ids = list_translation_vote_candidate_ids_for_run(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+    )
+    candidates = [
+        candidate
+        for candidate_id_batch in _chunks(candidate_ids, _TRANSLATION_RESUME_FETCH_CHUNK_SIZE)
+        for candidate in list_candidates_by_ids(
+            conn,
+            release_id=release_id,
+            candidate_ids=candidate_id_batch,
+            preserve_input_order=False,
+        )
+    ]
+    candidates.sort(
+        key=lambda candidate: (
+            candidate.first_seen_chapter,
+            candidate.normalized_source_text,
+        )
+    )
+    return candidates
+
+
+def _apply_idiom_candidate_vote_resolution(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    candidate: IdiomCandidate,
+    translator_names: list[str],
+    clear_stale_translation: bool = False,
+) -> dict[str, object]:
+    votes = [
+        vote
+        for vote in list_translation_votes(
+            conn,
+            release_id=release_id,
+            candidate_id=candidate.candidate_id,
+        )
+        if vote.translation_run_id == translation_run_id
+    ]
+    rendering_resolution = _resolve_translation_votes(
+        [vote for vote in votes if vote.vote_kind == "rendering"],
+        translator_names,
+    )
+    meaning_resolution = _resolve_translation_votes(
+        [vote for vote in votes if vote.vote_kind == "meaning"],
+        translator_names,
+    )
+    set_translation_vote_resolution(
+        conn,
+        candidate_id=candidate.candidate_id,
+        translation_run_id=translation_run_id,
+        vote_kind="rendering",
+        resolution_status=rendering_resolution["status"],
+    )
+    set_translation_vote_resolution(
+        conn,
+        candidate_id=candidate.candidate_id,
+        translation_run_id=translation_run_id,
+        vote_kind="meaning",
+        resolution_status=meaning_resolution["status"],
+    )
+    if rendering_resolution["target_term"]:
+        save_idiom_translation(
+            conn,
+            candidate_id=candidate.candidate_id,
+            translation_run_id=translation_run_id,
+            target_term=rendering_resolution["target_term"],
+            meaning_en=meaning_resolution["target_term"] or candidate.meaning_en,
+            translator_model_name=rendering_resolution["model_name"],
+            translator_prompt_version=rendering_resolution["prompt_version"] or "unknown",
+        )
+        return {
+            "rendering_resolution": rendering_resolution,
+            "meaning_resolution": meaning_resolution,
+            "translated": True,
+            "unresolved": False,
+            "cleared_stale": False,
+        }
+
+    cleared_stale = False
+    if (
+        clear_stale_translation
+        and candidate.translation_run_id == translation_run_id
+        and (candidate.preferred_rendering_en or "").strip()
+    ):
+        clear_idiom_translation_for_run(
+            conn,
+            candidate_id=candidate.candidate_id,
+            translation_run_id=translation_run_id,
+        )
+        cleared_stale = True
+    return {
+        "rendering_resolution": rendering_resolution,
+        "meaning_resolution": meaning_resolution,
+        "translated": False,
+        "unresolved": True,
+        "cleared_stale": cleared_stale,
+    }
+
+
+def _load_idiom_fill_candidates(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+    translator_names: list[str],
+) -> list[IdiomCandidate]:
+    candidates = _load_vote_resolution_candidates(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+    )
+    fill_candidates: list[IdiomCandidate] = []
+    for candidate in candidates:
+        if candidate.candidate_status == "approved":
+            continue
+        if (candidate.preferred_rendering_en or "").strip():
+            continue
+        votes = [
+            vote
+            for vote in list_translation_votes(
+                conn,
+                release_id=release_id,
+                candidate_id=candidate.candidate_id,
+            )
+            if vote.translation_run_id == translation_run_id and vote.vote_kind == "rendering"
+        ]
+        resolution = _resolve_translation_votes(votes, translator_names)
+        if not resolution["target_term"]:
+            fill_candidates.append(candidate)
+    return fill_candidates
+
+
+def resolve_idiom_translation_votes(
+    *,
+    release_id: str,
+    run_id: str,
+    config: AppConfig | None = None,
+    project_root: Path | None = None,
+    stop_token: StopToken | None = None,
+) -> dict[str, Any]:
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    translator_names = config_obj.models.effective_preprocess_translator_names()
+    phase = "start"
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "idioms")
+    try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"resolve_completed": False},
+            message="Idiom vote resolution stopped before starting",
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.started",
+            translation_run_id=run_id,
+            model_count=len(translator_names),
+            message="Idiom saved-vote resolution started",
+        )
+
+        phase = "load_candidates"
+        candidates = [
+            candidate
+            for candidate in _load_vote_resolution_candidates(
+                conn,
+                release_id=release_id,
+                translation_run_id=run_id,
+            )
+            if candidate.candidate_status != "approved"
+        ]
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_loaded", "candidate_count": len(candidates)},
+            message="Idiom vote resolution stopped after loading candidates",
+        )
+
+        phase = "resolve_votes"
+        translated_count = 0
+        unresolved_count = 0
+        stale_cleared_count = 0
+        meaning_unresolved_count = 0
+        for candidate in candidates:
+            result = _apply_idiom_candidate_vote_resolution(
+                conn,
+                release_id=release_id,
+                translation_run_id=run_id,
+                candidate=candidate,
+                translator_names=translator_names,
+                clear_stale_translation=True,
+            )
+            meaning_resolution = result["meaning_resolution"]
+            if isinstance(meaning_resolution, dict) and not meaning_resolution.get("target_term"):
+                meaning_unresolved_count += 1
+            if result["translated"]:
+                translated_count += 1
+            else:
+                unresolved_count += 1
+                if result["cleared_stale"]:
+                    stale_cleared_count += 1
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.resolve.unresolved",
+                    severity="warning",
+                    candidate_id=candidate.candidate_id,
+                    source_text=candidate.source_text,
+                    chapter_number=candidate.first_seen_chapter,
+                    vote_kind="rendering",
+                    unresolved_count=unresolved_count,
+                    message=(
+                        "Idiom saved-vote resolution unresolved for candidate "
+                        f"{candidate.candidate_id}: no rendering majority vote"
+                    ),
+                )
+                logger.warning(
+                    "Idiom saved-vote resolution unresolved for candidate {} ({})",
+                    candidate.candidate_id,
+                    candidate.source_text,
+                )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "phase": "resolve_votes",
+                    "translated_count": translated_count,
+                    "unresolved_count": unresolved_count,
+                },
+                message="Idiom vote resolution stopped while resolving candidates",
+            )
+
+        phase = "write_candidates_snapshot"
+        snapshot_count = _write_candidate_snapshot(
+            conn,
+            release_id=release_id,
+            output_path=paths.idiom_candidates_path,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.snapshot.artifact_written",
+            artifact_path=str(paths.idiom_candidates_path),
+            artifact_format="json",
+            candidate_count=snapshot_count,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.completed",
+            translation_run_id=run_id,
+            candidate_count=len(candidates),
+            translated_count=translated_count,
+            unresolved_count=unresolved_count,
+            meaning_unresolved_count=meaning_unresolved_count,
+            stale_cleared_count=stale_cleared_count,
+            candidates_artifact=str(paths.idiom_candidates_path),
+        )
+    except StopRequested:
+        raise
+    except Exception as exc:
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.resolve.failed",
+            severity="error",
+            phase=phase,
+            error=str(exc),
+            message=f"Idiom saved-vote resolution failed during {phase}: {exc}",
+        )
+        logger.opt(exception=True).error(
+            "Idiom saved-vote resolution failed during {}: {}",
+            phase,
+            exc,
+        )
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "status": "success",
+        "release_id": release_id,
+        "run_id": run_id,
+        "candidate_count": len(candidates),
+        "translated_count": translated_count,
+        "unresolved_count": unresolved_count,
+        "meaning_unresolved_count": meaning_unresolved_count,
+        "stale_cleared_count": stale_cleared_count,
+        "candidates_artifact": str(paths.idiom_candidates_path),
+    }
+
+
+def fill_idiom_translation_votes(
+    *,
+    release_id: str,
+    run_id: str,
+    filler_model_names: list[str],
+    config: AppConfig | None = None,
+    project_root: Path | None = None,
+    llm_client: LLMClient | None = None,
+    force: bool = False,
+    stop_token: StopToken | None = None,
+) -> dict[str, Any]:
+    if not filler_model_names:
+        raise ValueError("At least one filler model is required.")
+    filler_model_names = list(dict.fromkeys(filler_model_names))
+    config_obj = config or load_config()
+    paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
+    translator_names = config_obj.models.effective_preprocess_translator_names()
+    duplicate_models = set(translator_names).intersection(filler_model_names)
+    if duplicate_models:
+        names = ", ".join(sorted(duplicate_models))
+        raise ValueError(f"Filler models must be distinct from translator models: {names}")
+    model_order = [*translator_names, *filler_model_names]
+    client = _build_llm_client(config_obj, llm_client)
+    usage_before = capture_usage_snapshot(client)
+    prompt = load_prompt("idiom_translate.txt")
+    phase = "start"
+    conn = open_connection(paths.db_path)
+    ensure_schema(conn, "idioms")
+    try:
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"fill_completed": False},
+            message="Idiom filler stopped before starting",
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.started",
+            translation_run_id=run_id,
+            filler_model_count=len(filler_model_names),
+            force=force,
+            vote_kind="rendering",
+            message="Idiom filler started",
+        )
+
+        phase = "load_candidates"
+        candidates = _load_idiom_fill_candidates(
+            conn,
+            release_id=release_id,
+            translation_run_id=run_id,
+            translator_names=translator_names,
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.loading_completed",
+            candidate_count=len(candidates),
+            filler_model_count=len(filler_model_names),
+            force=force,
+            vote_kind="rendering",
+            message=f"Idiom filler loaded {len(candidates)} unresolved rendering candidates",
+        )
+        raise_if_stop_requested(
+            stop_token,
+            checkpoint={"phase": "candidates_loaded", "candidate_count": len(candidates)},
+            message="Idiom filler stopped after loading candidates",
+        )
+
+        phase = "vote_generation"
+        filler_vote_count = 0
+        skipped_vote_count = 0
+        current_model_name = ""
+        current_candidate_id = ""
+        try:
+            for model_name in filler_model_names:
+                current_model_name = model_name
+                existing_vote_candidate_ids = (
+                    set()
+                    if force
+                    else list_existing_translation_vote_candidate_ids(
+                        conn,
+                        release_id=release_id,
+                        translation_run_id=run_id,
+                        model_name=model_name,
+                        vote_kind="rendering",
+                    )
+                )
+                model_pending = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.candidate_id not in existing_vote_candidate_ids
+                ]
+                model_skipped_count = len(candidates) - len(model_pending)
+                skipped_vote_count += model_skipped_count
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.model_started",
+                    model_name=model_name,
+                    candidate_count=len(model_pending),
+                    skipped_count=model_skipped_count,
+                    force=force,
+                    vote_kind="rendering",
+                    message=f"Idiom filler model {model_name} started: {len(model_pending)} renderings",
+                )
+                generated_count = 0
+                for candidate in model_pending:
+                    current_candidate_id = candidate.candidate_id
+                    rendering_prompt = render_named_sections(
+                        prompt.template,
+                        sections={
+                            "SOURCE_TEXT": candidate.source_text,
+                            "EVIDENCE_SNIPPET": candidate.evidence_snippet,
+                        },
+                    )
+                    raw_rendered = client.generate_text(
+                        model_name=model_name,
+                        prompt=rendering_prompt,
+                    )
+                    rendered = _clean_llm_response(raw_rendered)
+                    upsert_translation_vote(
+                        conn,
+                        candidate_id=candidate.candidate_id,
+                        release_id=release_id,
+                        translation_run_id=run_id,
+                        model_name=model_name,
+                        prompt_version=prompt.version,
+                        vote_kind="rendering",
+                        raw_output=raw_rendered,
+                        cleaned_output=rendered,
+                        normalized_output=_normalize_translation(rendered),
+                    )
+                    generated_count += 1
+                filler_vote_count += generated_count
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.model_completed",
+                    model_name=model_name,
+                    candidate_count=generated_count,
+                    skipped_count=model_skipped_count,
+                    vote_kind="rendering",
+                    message=f"Idiom filler model {model_name} completed: {generated_count} rendering votes",
+                )
+        except Exception as exc:
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.fill.failed",
+                severity="error",
+                phase=phase,
+                model_name=current_model_name,
+                candidate_id=current_candidate_id,
+                vote_kind="rendering",
+                error=str(exc),
+                message=(
+                    "Idiom filler failed"
+                    f" for model {current_model_name}, candidate {current_candidate_id}: {exc}"
+                ),
+            )
+            raise
+
+        phase = "resolve_votes"
+        translated_count = 0
+        unresolved_count = 0
+        meaning_unresolved_count = 0
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.resolution.started",
+            candidate_count=len(candidates),
+            filler_vote_count=filler_vote_count,
+            skipped_vote_count=skipped_vote_count,
+            vote_kind="rendering",
+        )
+        for candidate in candidates:
+            result = _apply_idiom_candidate_vote_resolution(
+                conn,
+                release_id=release_id,
+                translation_run_id=run_id,
+                candidate=candidate,
+                translator_names=model_order,
+            )
+            meaning_resolution = result["meaning_resolution"]
+            if isinstance(meaning_resolution, dict) and not meaning_resolution.get("target_term"):
+                meaning_unresolved_count += 1
+            if result["translated"]:
+                translated_count += 1
+            else:
+                unresolved_count += 1
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.fill.unresolved",
+                    severity="warning",
+                    candidate_id=candidate.candidate_id,
+                    source_text=candidate.source_text,
+                    chapter_number=candidate.first_seen_chapter,
+                    vote_kind="rendering",
+                    unresolved_count=unresolved_count,
+                    message=(
+                        "Idiom filler unresolved for candidate "
+                        f"{candidate.candidate_id}: no rendering majority vote"
+                    ),
+                )
+            raise_if_stop_requested(
+                stop_token,
+                checkpoint={
+                    "phase": "resolve_votes",
+                    "translated_count": translated_count,
+                    "unresolved_count": unresolved_count,
+                },
+                message="Idiom filler stopped while resolving candidates",
+            )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.resolution.completed",
+            candidate_count=len(candidates),
+            translated_count=translated_count,
+            unresolved_count=unresolved_count,
+            meaning_unresolved_count=meaning_unresolved_count,
+            vote_kind="rendering",
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.fill.completed",
+            translation_run_id=run_id,
+            candidate_count=len(candidates),
+            filler_vote_count=filler_vote_count,
+            skipped_vote_count=skipped_vote_count,
+            translated_count=translated_count,
+            unresolved_count=unresolved_count,
+            meaning_unresolved_count=meaning_unresolved_count,
+            vote_kind="rendering",
+            **usage_payload_delta(client, usage_before),
+        )
+    except StopRequested:
+        raise
+    except Exception as exc:
+        if phase != "vote_generation":
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.fill.failed",
+                severity="error",
+                phase=phase,
+                error=str(exc),
+                message=f"Idiom filler failed during {phase}: {exc}",
+            )
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "status": "success",
+        "release_id": release_id,
+        "run_id": run_id,
+        "candidate_count": len(candidates),
+        "filler_vote_count": filler_vote_count,
+        "skipped_vote_count": skipped_vote_count,
+        "translated_count": translated_count,
+        "unresolved_count": unresolved_count,
+        "meaning_unresolved_count": meaning_unresolved_count,
+        **usage_payload_delta(client, usage_before),
     }
 
 

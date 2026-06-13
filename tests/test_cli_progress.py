@@ -73,6 +73,33 @@ def test_cli_progress_updates_generic_progress_task() -> None:
     assert task.completed == 40
 
 
+def test_cli_progress_logs_model_payload_details_without_new_events() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=1)
+
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-idioms.fill.model_started",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-idioms",
+            message="Idiom filler model filler-a started: 12 renderings",
+            payload={
+                "model_name": "filler-a",
+                "candidate_count": 12,
+                "skipped_count": 3,
+                "vote_kind": "rendering",
+            },
+        )
+    )
+
+    lines = list(subscriber._log_buffer)
+    assert len(lines) == 1
+    assert lines[0] == (
+        "Idiom filler model filler-a started: 12 renderings "
+        "(candidates=12, skipped=3, vote=rendering)"
+    )
+
+
 def test_cli_progress_counts_warnings_and_skips() -> None:
     subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
 

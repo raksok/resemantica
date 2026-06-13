@@ -530,6 +530,38 @@ policies with preferred English renderings to resemantica.db.""",
     _add_force_arg(idioms)
     _add_allow_rewind_arg(idioms)
 
+    idiom_resolve = preprocess_subparsers.add_parser(
+        "idiom-resolve", aliases=["idi-resolve"],
+        help="Re-resolve saved idiom translation votes without calling LLMs.",
+        description="""\
+Replays existing idiom translation votes for the selected release/run and
+updates canonical idiom renderings without regenerating model votes.""",
+    )
+    _add_common_release_args(idiom_resolve, default_run="idioms")
+
+    idiom_fill = preprocess_subparsers.add_parser(
+        "idiom-fill", aliases=["idi-fill"],
+        help="Fill unresolved idiom rendering vote cases with extra auditable model votes.",
+        description="""\
+Calls filler model(s) only for unresolved idiom rendering vote cases, writes the
+outputs as normal idiom_translation_votes rows, then re-runs deterministic
+rendering resolution with filler models appended to the configured translator
+model order.""",
+    )
+    _add_common_release_args(idiom_fill, default_run="idioms")
+    idiom_fill.add_argument(
+        "--model",
+        action="append",
+        required=True,
+        dest="model",
+        help="Filler model name. Repeat to add multiple filler models.",
+    )
+    idiom_fill.add_argument(
+        "-f", "--force",
+        action="store_true",
+        help="Regenerate existing filler rendering votes for the selected filler model name(s).",
+    )
+
     idiom_review = preprocess_subparsers.add_parser(
         "idiom-review", aliases=["idi-review"],
         help="Generate a human-editable review file for translated idiom candidates.",
@@ -838,6 +870,8 @@ _ALIAS_MAP: dict[str, str] = {
     "gls-review": "glossary-review",
     "gls-promote": "glossary-promote",
     "sum": "summaries",
+    "idi-resolve": "idiom-resolve",
+    "idi-fill": "idiom-fill",
     "idi-review": "idiom-review",
     "idi-promote": "idiom-promote",
     "scf": "set-chapter-flag",
@@ -1113,6 +1147,56 @@ def main(argv: list[str] | None = None) -> int:
                 return 130
             _print_stage_result(stage_result)
             return _exit_code(stage_result)
+
+        if args.preprocess_command == "idiom-resolve":
+            from resemantica.idioms.pipeline import resolve_idiom_translation_votes
+
+            result = _with_cli_progress(
+                lambda: resolve_idiom_translation_votes(
+                    release_id=args.release,
+                    run_id=args.run,
+                    config=config,
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={result['status']}")
+            print(f"candidate_count={result['candidate_count']}")
+            print(f"translated_count={result['translated_count']}")
+            print(f"unresolved_count={result['unresolved_count']}")
+            print(f"meaning_unresolved_count={result['meaning_unresolved_count']}")
+            print(f"stale_cleared_count={result['stale_cleared_count']}")
+            print(f"candidates_artifact={result['candidates_artifact']}")
+            return 0
+
+        if args.preprocess_command == "idiom-fill":
+            from resemantica.idioms.pipeline import fill_idiom_translation_votes
+
+            result = _with_cli_progress(
+                lambda: fill_idiom_translation_votes(
+                    release_id=args.release,
+                    run_id=args.run,
+                    filler_model_names=list(getattr(args, "model", []) or []),
+                    config=config,
+                    force=bool(getattr(args, "force", False)),
+                    stop_token=stop_token,
+                ),
+                stop_token=stop_token,
+                verbosity=int(getattr(args, "verbose", 0) or 0),
+            )
+            if result is _INTERRUPTED_STOP:
+                return 130
+            print(f"status={result['status']}")
+            print(f"candidate_count={result['candidate_count']}")
+            print(f"filler_vote_count={result['filler_vote_count']}")
+            print(f"skipped_vote_count={result['skipped_vote_count']}")
+            print(f"translated_count={result['translated_count']}")
+            print(f"unresolved_count={result['unresolved_count']}")
+            print(f"meaning_unresolved_count={result['meaning_unresolved_count']}")
+            return 0
 
         if args.preprocess_command == "idiom-review":
             from resemantica.idioms.pipeline import review_idiom_candidates

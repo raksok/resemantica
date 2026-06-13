@@ -169,8 +169,54 @@ class CliProgressSubscriber:
         text = str(msg)
         _, _, resolved = text.partition(" | ")
         display = resolved.strip() if resolved else text.strip()
+        self._append_log_line(display)
+
+    def _append_log_line(self, display: str) -> None:
+        if not display:
+            return
         with self._log_lock:
             self._log_buffer.append(display)
+
+    def _format_event_log_line(self, event: Event) -> str:
+        event_type = event.event_type
+        payload = event.payload or {}
+        if not (
+            event_type.endswith(".loading_completed")
+            or event_type.endswith(".model_started")
+            or event_type.endswith(".model_completed")
+            or event_type.endswith(".picker_model_started")
+            or event_type.endswith(".picker_model_completed")
+            or event_type.endswith(".resolution.started")
+            or event_type.endswith(".resolution.completed")
+        ):
+            return ""
+
+        message = event.message.strip()
+        if not message:
+            message = event_type
+
+        details: list[str] = []
+        model_name = payload.get("model_name")
+        if isinstance(model_name, str) and model_name and model_name not in message:
+            details.append(f"model={model_name}")
+        candidate_count = payload.get("candidate_count")
+        if isinstance(candidate_count, int) and "candidate" not in message.lower():
+            details.append(f"candidates={candidate_count}")
+        skipped_count = payload.get("skipped_count")
+        if isinstance(skipped_count, int):
+            details.append(f"skipped={skipped_count}")
+        vote_kind = payload.get("vote_kind")
+        if isinstance(vote_kind, str) and vote_kind:
+            details.append(f"vote={vote_kind}")
+        translated_count = payload.get("translated_count")
+        unresolved_count = payload.get("unresolved_count")
+        if isinstance(translated_count, int):
+            details.append(f"translated={translated_count}")
+        if isinstance(unresolved_count, int):
+            details.append(f"unresolved={unresolved_count}")
+        if details:
+            return f"{message} ({', '.join(details)})"
+        return message
 
     def _ensure_task(self, stage: str, *, total: int | None = None) -> TaskID:
         task_id = self.tasks_by_stage.get(stage)
@@ -210,6 +256,7 @@ class CliProgressSubscriber:
             return
         event_type = event.event_type
         payload = event.payload or {}
+        self._append_log_line(self._format_event_log_line(event))
 
         if event_type.endswith(".validation_failed") or event_type.endswith(".risk_detected"):
             self.warning_count += 1

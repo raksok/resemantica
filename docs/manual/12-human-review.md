@@ -139,6 +139,26 @@ translation without creating a promotion conflict.
 
 ## Idiom Review
 
+If only the idiom voter logic changed and existing model votes are still valid,
+replay saved votes before regenerating review files:
+
+```bash
+uv run rsem preprocess idiom-resolve -r v1.0 -R idioms
+uv run rsem preprocess idiom-review -r v1.0
+```
+
+For releases with many unresolved rendering disagreements, add an auditable
+filler pass before review:
+
+```bash
+uv run rsem preprocess idiom-fill -r v1.0 -R idioms --model <filler-model>
+uv run rsem preprocess idiom-review -r v1.0
+```
+
+`idiom-fill` targets unresolved renderings only. Rendering is the field that
+blocks idiom promotion; saved meaning votes are still replayed by
+`idiom-resolve` or during fill resolution when they already have a majority.
+
 ### Generate Review Files
 
 ```bash

@@ -196,6 +196,40 @@ Detect and validate idiom policies.
 uv run rsem preprocess idioms -r <release> [options]
 ```
 
+### `idiom-resolve` (alias: `idi-resolve`)
+
+Re-run the deterministic idiom voter over saved translation votes without
+calling translation models.
+
+```bash
+uv run rsem preprocess idiom-resolve -r <release> [-R <translation-run>]
+```
+
+Output: updated `idioms/candidates.json`
+
+The default run scope is `idioms`, matching the normal `preprocess idioms`
+vote scope. Rendering votes decide whether a candidate can promote; meaning
+votes are also replayed when saved votes already have a majority.
+
+### `idiom-fill` (alias: `idi-fill`)
+
+Call filler model(s) only for unresolved idiom rendering vote cases.
+
+```bash
+uv run rsem preprocess idiom-fill -r <release> [-R <translation-run>] --model <filler-model> [--model <filler-model>] [--force]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-R, --run ID` | Vote scope to fill (default: `idioms`) |
+| `--model NAME` | Filler model name; repeat for multiple filler models |
+| `-f, --force` | Regenerate existing filler rendering votes for the selected filler model name(s) |
+
+`idiom-fill` targets rendering only, because rendering is what blocks idiom
+promotion. It writes filler outputs as normal `idiom_translation_votes` rows
+with `vote_kind = "rendering"` and then re-runs deterministic resolution with
+configured translator models first and filler models last.
+
 ### `idiom-review` (alias: `idi-review`)
 
 Generate idiom review files.

@@ -311,6 +311,19 @@ def list_translation_resume_candidate_ids(
     return [str(row["candidate_id"]) for row in rows]
 
 
+def list_translation_vote_candidate_ids_for_run(
+    conn: sqlite3.Connection,
+    *,
+    release_id: str,
+    translation_run_id: str,
+) -> list[str]:
+    return list_translation_resume_candidate_ids(
+        conn,
+        release_id=release_id,
+        translation_run_id=translation_run_id,
+    )
+
+
 def list_translation_vote_candidate_ids(
     conn: sqlite3.Connection,
     *,
@@ -441,6 +454,31 @@ def save_idiom_translation(
                 target_term, meaning_en, translation_run_id,
                 translator_model_name, translator_prompt_version, candidate_id,
             ),
+        )
+
+
+def clear_idiom_translation_for_run(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    translation_run_id: str,
+) -> None:
+    with conn:
+        conn.execute(
+            """
+            UPDATE idiom_candidates
+            SET preferred_rendering_en = '',
+                translator_model_name = NULL,
+                translator_prompt_version = NULL,
+                candidate_status = 'discovered',
+                validation_status = 'pending',
+                conflict_reason = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE candidate_id = ?
+              AND translation_run_id = ?
+              AND candidate_status = 'translated'
+            """,
+            (candidate_id, translation_run_id),
         )
 
 

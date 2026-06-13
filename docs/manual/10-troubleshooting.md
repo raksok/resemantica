@@ -94,6 +94,21 @@ output. JSONL logs capture DEBUG by default, but the records are sampled using
 `events.progress_sample_every` to avoid one JSONL row per candidate; console
 DEBUG output requires `-vvv` or higher.
 
+### Idiom rendering votes remain unresolved
+
+**Cause:** Idiom renderings did not reach a deterministic majority. Meaning-only
+disagreements do not block idiom promotion, but unresolved renderings do.
+
+**Try:**
+1. Re-run the no-LLM resolver if deterministic rules changed: `uv run rsem preprocess idiom-resolve -r <release> -R idioms`
+2. Add auditable filler rendering votes for only unresolved rendering candidates: `uv run rsem preprocess idiom-fill -r <release> -R idioms --model <filler-model>`
+3. Regenerate review files: `uv run rsem preprocess idiom-review -r <release>`
+
+`idiom-fill` does not run full idiom translation and does not generate meaning
+votes. It writes normal `idiom_translation_votes` rows with
+`vote_kind = "rendering"`, then reuses deterministic resolution with filler
+models appended after the configured preprocess translators.
+
 ### Locked glossary still rejects shared English targets
 
 **Cause:** The release database was created before `locked_glossary` became
