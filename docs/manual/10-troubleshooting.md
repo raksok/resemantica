@@ -94,6 +94,41 @@ output. JSONL logs capture DEBUG by default, but the records are sampled using
 `events.progress_sample_every` to avoid one JSONL row per candidate; console
 DEBUG output requires `-vvv` or higher.
 
+### Locked glossary still rejects shared English targets
+
+**Cause:** The release database was created before `locked_glossary` became
+source-term unique only. Deleting rows from `locked_glossary` is not enough,
+because SQLite keeps the old target-term unique index in the table schema.
+
+**Fix:** Repair the release DB schema, then rerun resolve and promote from the
+existing candidates and votes. This avoids rerunning glossary discovery:
+
+```bash
+uv run python scripts/repair_locked_glossary_schema.py --release <release> --dry-run
+```
+```bash
+uv run python scripts/repair_locked_glossary_schema.py --release <release> --apply
+```
+```bash
+uv run rsem preprocess glossary-resolve -r <release> -R glossary-translate
+```
+```bash
+uv run rsem preprocess glossary-promote -r <release> --force
+```
+
+The helper creates a timestamped copy of `resemantica.db` before applying by
+default. It rebuilds only `locked_glossary`, preserves existing locked rows,
+clears stale `glossary_conflicts` for the selected release, and resets
+translated `promoted`/`conflict` candidates back to `translated` so promotion
+can regenerate conflict state under the new rules.
+
+If you are promoting from a reviewed file, run the same repair first and then
+promote with the review file:
+
+```bash
+uv run rsem preprocess glossary-promote -r <release> -F artifacts/releases/<release>/glossary/review.csv --force
+```
+
 ### Glossary discovery appears stuck after chapters finish
 
 **Cause:** Corpus scoring can be CPU-heavy on large candidate sets. This happens after

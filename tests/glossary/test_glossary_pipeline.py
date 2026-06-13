@@ -2859,11 +2859,11 @@ def test_glossary_discovery_failure_emits_phase_context(
     assert failed.payload["error"] == "filter exploded"
 
 
-def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch) -> None:
+def test_duplicate_target_with_different_sources_promotes(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _extract_one_chapter(
         tmp_path,
-        release_id="m3-conflict",
+        release_id="m3-shared-target",
         source_text="紫霄宗。青冥宗。",
     )
 
@@ -2875,32 +2875,83 @@ def test_duplicate_target_conflict_blocks_promotion(tmp_path: Path, monkeypatch)
     })
 
     monkeypatch.setattr("resemantica.glossary.pipeline.evaluate_candidate_batch", _eval_all_keep)
-    discover_glossary_candidates(release_id="m3-conflict", run_id="discover-001", llm_client=llm)
+    discover_glossary_candidates(release_id="m3-shared-target", run_id="discover-001", llm_client=llm)
     translate_glossary_candidates(
-        release_id="m3-conflict",
+        release_id="m3-shared-target",
         run_id="translate-001",
         llm_client=StaticGlossaryTranslator("Azure Sect"),
     )
     result = promote_glossary_candidates(
-        release_id="m3-conflict",
+        release_id="m3-shared-target",
         run_id="promote-001",
     )
 
-    # Some non-conflicting candidates may still promote; verify conflict exists
-    assert result["conflict_count"] > 0
+    assert result["conflict_count"] == 0
 
     config = load_config()
-    paths = derive_paths(config, release_id="m3-conflict")
+    paths = derive_paths(config, release_id="m3-shared-target")
     conn = open_connection(paths.db_path)
     ensure_glossary_schema(conn)
     try:
-        locked = list_locked_entries(conn, release_id="m3-conflict")
-        conflicts = list_conflicts(conn, release_id="m3-conflict")
+        locked = list_locked_entries(conn, release_id="m3-shared-target")
+        conflicts = list_conflicts(conn, release_id="m3-shared-target")
         azure_factions = [e for e in locked if e.target_term == "Azure Sect" and e.category == "faction"]
-        assert len(azure_factions) == 0, (
-            f"Duplicate-target conflict should block Azure Sect faction entries (got {len(azure_factions)})"
-        )
-        assert any(conflict.conflict_type == "duplicate_target" for conflict in conflicts)
+        assert {entry.source_term for entry in azure_factions} == {"紫霄宗", "青冥宗"}
+        assert conflicts == []
+    finally:
+        conn.close()
+
+
+def test_existing_source_with_different_target_still_conflicts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m3-source-conflict"
+    _insert_glossary_candidate(release_id=release_id, source_term="青云门")
+
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        with conn:
+            promote_locked_entries(
+                conn,
+                entries=[
+                    LockedGlossaryEntry(
+                        glossary_entry_id="glex_source_conflict",
+                        release_id=release_id,
+                        source_term="青云门",
+                        normalized_source_term=normalize_term("青云门"),
+                        target_term="Azure Sect",
+                        normalized_target_term=normalize_term("Azure Sect"),
+                        category="faction",
+                        status="approved",
+                        approved_at=datetime.now(UTC).isoformat(),
+                        approval_run_id="promote-existing",
+                        source_candidate_id="gcan_existing",
+                        schema_version=1,
+                    )
+                ],
+            )
+    finally:
+        conn.close()
+
+    translate_glossary_candidates(
+        release_id=release_id,
+        run_id="translate-001",
+        llm_client=StaticGlossaryTranslator("Blue Cloud Gate"),
+    )
+    result = promote_glossary_candidates(release_id=release_id, run_id="promote-001")
+
+    assert result["conflict_count"] == 1
+
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        conflicts = list_conflicts(conn, release_id=release_id)
+        locked = list_locked_entries(conn, release_id=release_id)
+        assert len(conflicts) == 1
+        assert conflicts[0].conflict_type == "canon_conflict"
+        assert "source term already approved" in conflicts[0].conflict_reason
+        assert {entry.target_term for entry in locked} == {"Azure Sect"}
     finally:
         conn.close()
 
@@ -2930,10 +2981,10 @@ def test_promotion_insert_is_transactional(tmp_path: Path, monkeypatch) -> None:
     entry_b = LockedGlossaryEntry(
         glossary_entry_id="glex_txn_b",
         release_id="m3-transaction",
-        source_term="苍云门",
-        normalized_source_term=normalize_term("苍云门"),
-        target_term="Azure Sect",
-        normalized_target_term=normalize_term("Azure Sect"),
+        source_term="青云门",
+        normalized_source_term=normalize_term("青云门"),
+        target_term="Blue Cloud Gate",
+        normalized_target_term=normalize_term("Blue Cloud Gate"),
         category="faction",
         status="approved",
         approved_at=approved_at,

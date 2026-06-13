@@ -10,6 +10,16 @@ def _columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
 
 
+def _unique_index_columns(conn: sqlite3.Connection, table_name: str) -> set[tuple[str, ...]]:
+    columns: set[tuple[str, ...]] = set()
+    for index in conn.execute(f"PRAGMA index_list({table_name})"):
+        if int(index["unique"]) != 1:
+            continue
+        rows = conn.execute(f"PRAGMA index_info({index['name']})").fetchall()
+        columns.add(tuple(str(row["name"]) for row in rows))
+    return columns
+
+
 def test_ensure_schema_creates_absorbed_columns_on_fresh_db() -> None:
     conn = open_connection(":memory:")
     try:
@@ -33,6 +43,18 @@ def test_ensure_schema_creates_absorbed_columns_on_fresh_db() -> None:
             "glossary_discovery_chapter_state",
         )
         assert {"dictionary_match", "existing_policy_id"} <= _columns(conn, "idiom_candidates")
+    finally:
+        conn.close()
+
+
+def test_locked_glossary_fresh_schema_allows_shared_targets() -> None:
+    conn = open_connection(":memory:")
+    try:
+        ensure_schema(conn, "glossary")
+        unique_columns = _unique_index_columns(conn, "locked_glossary")
+
+        assert ("release_id", "normalized_source_term", "category") in unique_columns
+        assert ("release_id", "normalized_target_term", "category") not in unique_columns
     finally:
         conn.close()
 

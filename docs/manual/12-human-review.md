@@ -130,8 +130,12 @@ uv run rsem preprocess glossary-promote -r v1.0 -F artifacts/v1.0/glossary/revie
      - Generates synthetic ID `gcan_review_<sha256_prefix>`.
      - Creates candidate with `discovery_run_id="review"`, `translator_model_name="human"`.
      - Upserts into `glossary_candidates` table.
-3. **Validate** — `validate_candidates_for_promotion()` checks for conflicts against existing `locked_glossary` entries.
+3. **Validate** — `validate_candidates_for_promotion()` checks for policy and source-term conflicts against existing `locked_glossary` entries.
 4. **Promote** — Conflict-free entries are promoted to `locked_glossary` and marked `candidate_status = 'promoted'`. Conflicts are written to `conflicts.json`.
+
+The locked glossary is canonical by Chinese source term and category, not by
+English target term. Different source terms can share the same English
+translation without creating a promotion conflict.
 
 ## Idiom Review
 

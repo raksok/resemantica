@@ -299,7 +299,7 @@ Retry failed pipeline units. The system classifies failures as **retryable** (au
 | Stage | Retryable if... | Non-retryable if... |
 |-------|-----------------|---------------------|
 | `preprocess-summaries` | Chapter has `validation_status = 'failed'` or missing `validated_summaries_zh` rows | — |
-| `preprocess-glossary` | Candidate not in a terminal state | Entries in `glossary_conflicts` table (need human review) |
+| `preprocess-glossary` | Candidate not in a terminal state | Entries in `glossary_conflicts` table for policy/source conflicts (need human review) |
 | `preprocess-idioms` | Candidate not in a terminal state | Entries in `idiom_conflicts` table (need human review) |
 | `preprocess-graph` | Chapter missing `graph_extraction_drafts` or has failed events | — |
 | `preprocess-continuity` | Chapter missing compact continuity summary or has failed events | — |

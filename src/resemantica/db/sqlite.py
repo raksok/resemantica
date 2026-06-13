@@ -182,8 +182,7 @@ def ensure_full_schema(conn: sqlite3.Connection) -> None:
             approval_run_id TEXT NOT NULL,
             source_candidate_id TEXT NOT NULL,
             schema_version INTEGER NOT NULL DEFAULT 1,
-            UNIQUE (release_id, normalized_source_term, category),
-            UNIQUE (release_id, normalized_target_term, category)
+            UNIQUE (release_id, normalized_source_term, category)
         );
 
         CREATE TABLE IF NOT EXISTS glossary_conflicts (
