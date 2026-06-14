@@ -171,6 +171,12 @@ rather than stuck.
 
 **Fix:** Restart the model server and rerun the same graph command with the same `-r` and `-R`, without `--force`. Fresh per-chapter drafts are reused; only missing or stale drafts are regenerated. `run retry-failed --stage preprocess-graph` detects stale drafts by chapter source hash and graph prompt version.
 
+### Graph extraction rebuilds drafts after updating
+
+**Cause:** `graph_extract.txt` prompt version `2.4` makes older graph extraction drafts stale once. This is expected because graph draft and LLM cache identities are prompt-version keyed.
+
+**Fix:** Rerun the same graph command. Fresh `2.4` drafts are written and reused on later runs unless the chapter source hash or graph prompt version changes again.
+
 ### Checkpoint mismatch after config change
 
 **Cause:** Changing `--run` or config creates a new checkpoint namespace.

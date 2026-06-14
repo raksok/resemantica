@@ -113,8 +113,10 @@ promotion.
 
 `graph_extraction_drafts` are the graph resume authority. A row is fresh only
 when the current extracted chapter source hash and `graph_extract.txt` prompt
-version match the stored key. Graph snapshot and warnings JSON writes emit
-artifact events for CLI/TUI counters.
+version match the stored key. The graph prompt's locked glossary context is
+chapter-local, but draft freshness is still governed by the prompt version and
+source hash, not by a separate glossary-context hash. Graph snapshot and
+warnings JSON writes emit artifact events for CLI/TUI counters.
 
 ### Packet System
 

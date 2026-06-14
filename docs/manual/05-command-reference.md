@@ -268,6 +268,11 @@ reusable only when release, run, chapter number, chapter source hash, and
 rebuilding. Console progress shows chapter position, cache hits, extracted
 entity/relationship counts, and deferred glossary terms.
 
+The graph prompt includes a chapter-local locked glossary context: only
+graph-relevant locked source terms that literally appear in the current chapter
+source text are rendered. Deterministic post-LLM matching still uses the full
+graph-relevant locked glossary loaded for the release.
+
 ### `continuity`
 
 Refresh graph-grounded compact continuity.

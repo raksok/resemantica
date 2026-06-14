@@ -124,9 +124,11 @@ class ScriptedGraphLLM:
         self.entities_by_chapter = entities_by_chapter
         self.relationships_by_chapter = relationships_by_chapter or {}
         self.calls = 0
+        self.prompts: list[str] = []
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
         self.calls += 1
+        self.prompts.append(prompt)
         chapter_match = re.search(r"## CHAPTER NUMBER\s+(\d+)", prompt)
         if chapter_match is None:
             return '{"entities": [], "relationships": []}'
@@ -630,7 +632,7 @@ def test_graph_resume_uses_persisted_chapter_drafts(
             run_id="graph-001",
             chapter_number=1,
             chapter_source_hash="hash-1",
-            prompt_version="2.3",
+            prompt_version="2.4",
         )
         assert draft is not None
     finally:
@@ -651,6 +653,64 @@ def test_graph_resume_uses_persisted_chapter_drafts(
     assert second["draft_reusable_count"] == 1
     assert second["draft_stale_count"] == 0
     assert second["draft_missing_count"] == 0
+
+
+def test_graph_prompt_uses_chapter_local_glossary_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m66-local-glossary"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="青云门今日议事。",
+    )
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=2,
+        source_text="散修独自入城。",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="青云门",
+        target_term="Azure Sect",
+        category="faction",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="黑风寨",
+        target_term="Black Wind Stronghold",
+        category="faction",
+    )
+
+    mock_llm = ScriptedGraphLLM({
+        1: [
+            {"source_term": "青云门", "entity_type": "faction", "aliases": [], "evidence_snippet": "青云门今日议事。"},
+        ],
+        2: [],
+    })
+    client = GraphClient(backend=InMemoryGraphBackend())
+
+    result = preprocess_graph(
+        release_id=release_id,
+        run_id="graph-001",
+        graph_client=client,
+        llm_client=mock_llm,
+    )
+
+    assert result["status"] == "success"
+    assert len(mock_llm.prompts) == 2
+    chapter_1_prompt = mock_llm.prompts[0]
+    chapter_2_prompt = mock_llm.prompts[1]
+    assert "青云门 | faction" in chapter_1_prompt
+    assert "黑风寨 | faction" not in chapter_1_prompt
+    assert "## LOCKED GLOSSARY (known entities in this release)\n(none)" in chapter_2_prompt
+
+    confirmed_entities = client.list_entities(status="confirmed")
+    assert len(confirmed_entities) == 1
+    assert confirmed_entities[0].canonical_name == "Azure Sect"
+    assert confirmed_entities[0].glossary_entry_id == "glex_faction_青云门"
 
 
 def test_graph_progress_resume_and_artifact_events(

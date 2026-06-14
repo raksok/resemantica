@@ -83,3 +83,4 @@ Always follow the milestone sequence below.
 | M63 | task-63 | M62 | Review/Promote Event Coverage |
 | M64 | task-64 | M63 | Review/Promote Interrupt Coverage |
 | M65 | task-65 | M64 | Graph Progress And Resume QoL |
+| M66 | task-66 | M65 | Graph Chapter-Local Glossary Context |

@@ -437,8 +437,6 @@ def extract_entities(
             for path in chapter_files
         ]
 
-    glossary_context_str = _build_glossary_context(tracked_entries)
-
     for chapter_ref in refs:
         chapter_file = chapter_ref.chapter_path
         payload = json.loads(chapter_file.read_text(encoding="utf-8"))
@@ -469,12 +467,17 @@ def extract_entities(
                 event_callback("chapter_skipped", chapter_number, {"reason": "empty_source_text"})
             continue
 
+        chapter_glossary_context = _build_glossary_context([
+            entry
+            for entry in tracked_entries
+            if entry.source_term in source_text
+        ])
         static_prompt = render_named_sections(
             prompt_template,
             {
                 "CHAPTER_NUMBER": str(chapter_number),
                 "SOURCE_TEXT_ZH": "",
-                "GLOSSARY_CONTEXT": glossary_context_str,
+                "GLOSSARY_CONTEXT": chapter_glossary_context,
             },
         )
         try:
@@ -504,7 +507,7 @@ def extract_entities(
                 {
                     "CHAPTER_NUMBER": str(chapter_number),
                     "SOURCE_TEXT_ZH": chunk_text,
-                    "GLOSSARY_CONTEXT": glossary_context_str,
+                    "GLOSSARY_CONTEXT": chapter_glossary_context,
                 },
             )
             try:
