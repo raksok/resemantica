@@ -9,6 +9,7 @@ from typing import Iterable, Literal
 
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import get_summary_checkpoint, set_summary_checkpoint
+from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.models import StageResult
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -115,6 +116,34 @@ def _list_extracted_chapter_numbers(
         if (number := _chapter_number_from_file(path)) is not None
     ]
     return _scoped_numbers(numbers, start, end)
+
+
+def _list_extracted_chapter_hashes(
+    *,
+    config: AppConfig,
+    release_id: str,
+    start: int | None,
+    end: int | None,
+) -> dict[int, str]:
+    paths = derive_paths(config, release_id=release_id)
+    if not paths.extracted_chapters_dir.exists():
+        return {}
+    chapter_hashes: dict[int, str] = {}
+    for path in paths.extracted_chapters_dir.glob("chapter-*.json"):
+        number = _chapter_number_from_file(path)
+        if number is None:
+            continue
+        if (start is not None and number < start) or (end is not None and number > end):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            payload = {}
+        chapter_source_hash = ""
+        if isinstance(payload, dict):
+            chapter_source_hash = str(payload.get("chapter_source_hash") or "")
+        chapter_hashes[number] = chapter_source_hash
+    return dict(sorted(chapter_hashes.items()))
 
 
 def _command(
@@ -376,29 +405,34 @@ def _plan_graph(
     start: int | None,
     end: int | None,
 ) -> tuple[list[RetryUnit], list[RetryUnit]]:
-    chapters = _list_extracted_chapter_numbers(
+    chapter_hashes = _list_extracted_chapter_hashes(
         config=config,
         release_id=release_id,
         start=start,
         end=end,
     )
+    prompt_version = load_prompt("graph_extract.txt").version
     missing = []
-    for chapter_number in chapters:
+    for chapter_number, chapter_source_hash in chapter_hashes.items():
         try:
             row = conn.execute(
                 """
                 SELECT 1 FROM graph_extraction_drafts
-                WHERE release_id = ? AND run_id = ? AND chapter_number = ?
+                WHERE release_id = ?
+                  AND run_id = ?
+                  AND chapter_number = ?
+                  AND chapter_source_hash = ?
+                  AND prompt_version = ?
                 LIMIT 1
                 """,
-                (release_id, run_id, chapter_number),
+                (release_id, run_id, chapter_number, chapter_source_hash, prompt_version),
             ).fetchone()
         except sqlite3.OperationalError:
             row = None
         if row is None:
             missing.append(chapter_number)
     if not missing:
-        failed_events = _failed_event_chapters(release_id, run_id, "preprocess-graph", start, end)
+        failed_events = _graph_failed_event_chapters(release_id, run_id, start, end)
         missing = failed_events
     if not missing:
         return [], []
@@ -408,7 +442,7 @@ def _plan_graph(
             run_id=run_id,
             stage="preprocess-graph",
             chapters=missing,
-            reason="missing_graph_draft_or_failed_validation",
+            reason="missing_or_stale_graph_draft_or_failed_validation",
         )
     ], []
 
@@ -431,6 +465,30 @@ def _failed_event_chapters(
         if event.chapter_number is not None
         and event.stage_name == stage
         and event.event_type.endswith(".failed")
+    ]
+    return _scoped_numbers(numbers, start, end)
+
+
+def _graph_failed_event_chapters(
+    release_id: str,
+    run_id: str,
+    start: int | None,
+    end: int | None,
+) -> list[int]:
+    tracking = ensure_tracking_db(release_id)
+    try:
+        events = load_events(tracking, run_id=run_id, release_id=release_id, limit=10000)
+    finally:
+        tracking.close()
+    numbers = [
+        int(event.chapter_number)
+        for event in events
+        if event.chapter_number is not None
+        and event.stage_name == "preprocess-graph"
+        and (
+            event.event_type.endswith(".failed")
+            or event.event_type == "preprocess-graph.validation_failed"
+        )
     ]
     return _scoped_numbers(numbers, start, end)
 

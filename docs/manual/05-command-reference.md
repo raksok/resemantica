@@ -262,6 +262,12 @@ uv run rsem preprocess graph -r <release> [options]
 
 Output: `graph.ladybug` (LadybugDB), `snapshot.json`, `warnings.json`
 
+Graph extraction resumes by default from matching per-chapter drafts. A draft is
+reusable only when release, run, chapter number, chapter source hash, and
+`graph_extract.txt` prompt version match. `--force` deletes scoped drafts before
+rebuilding. Console progress shows chapter position, cache hits, extracted
+entity/relationship counts, and deferred glossary terms.
+
 ### `continuity`
 
 Refresh graph-grounded compact continuity.
@@ -335,7 +341,7 @@ Retry failed pipeline units. The system classifies failures as **retryable** (au
 | `preprocess-summaries` | Chapter has `validation_status = 'failed'` or missing `validated_summaries_zh` rows | — |
 | `preprocess-glossary` | Candidate not in a terminal state | Entries in `glossary_conflicts` table for policy/source conflicts (need human review) |
 | `preprocess-idioms` | Candidate not in a terminal state | Entries in `idiom_conflicts` table (need human review) |
-| `preprocess-graph` | Chapter missing `graph_extraction_drafts` or has failed events | — |
+| `preprocess-graph` | Chapter missing fresh `graph_extraction_drafts`, stale graph prompt/source hash, or failed events | — |
 | `preprocess-continuity` | Chapter missing compact continuity summary or has failed events | — |
 | `packets-build` | Chapter missing `packet_metadata` or has failed events | — |
 | `translate-range` | Chapter has `status = 'failed'` in `translation_checkpoints` | — |

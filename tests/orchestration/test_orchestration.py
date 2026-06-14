@@ -670,6 +670,120 @@ class TestRetryFailed:
         assert len(plan.non_retryable) == 1
         assert "conflict" in plan.non_retryable[0].reason
 
+    def test_retry_failed_reports_missing_graph_draft(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-graph-missing"
+        run_id = "production"
+        self._write_extracted_chapter(release_id, 1)
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-graph",
+        )
+
+        assert len(plan.retryable) == 1
+        assert plan.retryable[0].stage == "preprocess-graph"
+        assert plan.retryable[0].chapters == [1]
+        assert plan.retryable[0].reason == "missing_or_stale_graph_draft_or_failed_validation"
+
+    def test_retry_failed_reports_stale_graph_prompt_draft(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-graph-stale-prompt"
+        run_id = "production"
+        self._write_extracted_chapter(release_id, 1)
+
+        from resemantica.db.graph_repo import ensure_graph_schema, save_graph_extraction_draft
+        from resemantica.db.sqlite import open_connection
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        ensure_graph_schema(conn)
+        try:
+            save_graph_extraction_draft(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=1,
+                chapter_source_hash="hash-ch1",
+                prompt_version="stale",
+                payload={
+                    "provisional_entities": [],
+                    "provisional_aliases": [],
+                    "provisional_appearances": [],
+                    "provisional_relationships": [],
+                    "deferred_entities": [],
+                    "warnings": [],
+                },
+            )
+        finally:
+            conn.close()
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-graph",
+        )
+
+        assert len(plan.retryable) == 1
+        assert plan.retryable[0].chapters == [1]
+        assert plan.retryable[0].reason == "missing_or_stale_graph_draft_or_failed_validation"
+
+    def test_retry_failed_reuses_fresh_graph_draft_after_validation_failure(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-graph-validation"
+        run_id = "production"
+        self._write_extracted_chapter(release_id, 1)
+
+        from resemantica.db.graph_repo import ensure_graph_schema, save_graph_extraction_draft
+        from resemantica.db.sqlite import open_connection
+        from resemantica.llm.prompts import load_prompt
+        from resemantica.orchestration.events import emit_event as emit_tracking_event
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        ensure_graph_schema(conn)
+        try:
+            save_graph_extraction_draft(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=1,
+                chapter_source_hash="hash-ch1",
+                prompt_version=load_prompt("graph_extract.txt").version,
+                payload={
+                    "provisional_entities": [],
+                    "provisional_aliases": [],
+                    "provisional_appearances": [],
+                    "provisional_relationships": [],
+                    "deferred_entities": [],
+                    "warnings": [],
+                },
+            )
+        finally:
+            conn.close()
+        emit_tracking_event(
+            run_id,
+            release_id,
+            "preprocess-graph.validation_failed",
+            "preprocess-graph",
+            severity="error",
+            chapter_number=1,
+            message="Graph validation failed",
+        )
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-graph",
+        )
+
+        assert len(plan.retryable) == 1
+        assert plan.retryable[0].chapters == [1]
+        assert plan.retryable[0].reason == "missing_or_stale_graph_draft_or_failed_validation"
+
 
 class TestM11CleanupScopes:
     def _create_test_artifacts(self, release_id: str, run_id: str):

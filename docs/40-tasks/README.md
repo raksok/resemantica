@@ -82,3 +82,4 @@ Always follow the milestone sequence below.
 | M62 | task-62 | M61 | KV-Cache Prompt Prefix Optimization |
 | M63 | task-63 | M62 | Review/Promote Event Coverage |
 | M64 | task-64 | M63 | Review/Promote Interrupt Coverage |
+| M65 | task-65 | M64 | Graph Progress And Resume QoL |

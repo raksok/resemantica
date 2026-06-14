@@ -111,6 +111,11 @@ promotion.
 | `graph_extraction_drafts` | `draft_id`; UNIQUE `(release_id, run_id, chapter_number, chapter_source_hash, prompt_version)` | `payload_json` |
 | `deferred_entities` | `deferred_id`; UNIQUE `(release_id, normalized_term_text, category)` | `term_text`, `category`, `status` (for entities not yet in LadybugDB) |
 
+`graph_extraction_drafts` are the graph resume authority. A row is fresh only
+when the current extracted chapter source hash and `graph_extract.txt` prompt
+version match the stored key. Graph snapshot and warnings JSON writes emit
+artifact events for CLI/TUI counters.
+
 ### Packet System
 
 | Table | PK / Unique | Key Columns |

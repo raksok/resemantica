@@ -161,6 +161,16 @@ rather than stuck.
 
 **Fix:** Restart the model server and rerun the same command with the same `-r`, same `-R`, and same config, without `--force`. Existing per-model votes are skipped and the interrupted model continues from its first missing vote. When a complete seed model vote set exists, resume avoids a full candidate-table scan and loads candidate rows later by `candidate_id` primary key. Change the configured model list only when intentionally abandoning the crashing model.
 
+### Graph extraction appears stuck
+
+**Cause:** Graph extraction can spend a long time in chapter LLM calls or in merge/validation after drafts have been loaded.
+
+**Check:** Look for `preprocess-graph.extract.progress` events or console messages like `Graph extract 12/80 chapter=12: entities=4, relationships=2`. The resume summary also reports reusable, stale, and missing draft counts before chapter work starts.
+
+### Graph extraction fails after a local model crash
+
+**Fix:** Restart the model server and rerun the same graph command with the same `-r` and `-R`, without `--force`. Fresh per-chapter drafts are reused; only missing or stale drafts are regenerated. `run retry-failed --stage preprocess-graph` detects stale drafts by chapter source hash and graph prompt version.
+
 ### Checkpoint mismatch after config change
 
 **Cause:** Changing `--run` or config creates a new checkpoint namespace.

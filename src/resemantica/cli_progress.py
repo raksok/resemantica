@@ -180,6 +180,15 @@ class CliProgressSubscriber:
     def _format_event_log_line(self, event: Event) -> str:
         event_type = event.event_type
         payload = event.payload or {}
+        if event_type == "preprocess-graph.extract.resume_summary":
+            return self._format_graph_resume_summary(event)
+        if event_type == "preprocess-graph.extract.progress":
+            return self._format_graph_extract_progress(event)
+        if event_type in {
+            "preprocess-graph.snapshot.artifact_written",
+            "preprocess-graph.warnings.artifact_written",
+        }:
+            return self._format_graph_artifact(event)
         if not (
             event_type.endswith(".loading_completed")
             or event_type.endswith(".model_started")
@@ -217,6 +226,68 @@ class CliProgressSubscriber:
         if details:
             return f"{message} ({', '.join(details)})"
         return message
+
+    def _format_graph_resume_summary(self, event: Event) -> str:
+        payload = event.payload or {}
+        reusable = payload.get("reusable_draft_count")
+        stale = payload.get("stale_draft_count")
+        missing = payload.get("missing_draft_count")
+        forced = payload.get("forced_rebuild_count")
+        parts: list[str] = []
+        if isinstance(reusable, int):
+            parts.append(f"reusable={reusable}")
+        if isinstance(stale, int):
+            parts.append(f"stale={stale}")
+        if isinstance(missing, int):
+            parts.append(f"missing={missing}")
+        if isinstance(forced, int) and forced:
+            parts.append(f"forced={forced}")
+        if parts:
+            return f"Graph resume: {', '.join(parts)}"
+        return event.message.strip() or event.event_type
+
+    def _format_graph_extract_progress(self, event: Event) -> str:
+        payload = event.payload or {}
+        chapter_number = event.chapter_number or payload.get("chapter_number")
+        chapter_index = payload.get("chapter_index")
+        total = payload.get("total_count")
+        chapter_entity_count = payload.get("chapter_entity_count")
+        chapter_relationship_count = payload.get("chapter_relationship_count")
+        chapter_deferred_count = payload.get("chapter_deferred_count")
+        cache_hit = payload.get("cache_hit")
+
+        label = "Graph extract"
+        if isinstance(chapter_index, int) and isinstance(total, int):
+            label += f" {chapter_index}/{total}"
+        if isinstance(chapter_number, int):
+            label += f" chapter={chapter_number}"
+        details: list[str] = []
+        if cache_hit is True:
+            details.append("cache=hit")
+        if isinstance(chapter_entity_count, int):
+            details.append(f"entities={chapter_entity_count}")
+        if isinstance(chapter_relationship_count, int):
+            details.append(f"relationships={chapter_relationship_count}")
+        if isinstance(chapter_deferred_count, int):
+            details.append(f"deferred={chapter_deferred_count}")
+        return f"{label}: {', '.join(details)}" if details else label
+
+    def _format_graph_artifact(self, event: Event) -> str:
+        payload = event.payload or {}
+        artifact_path = payload.get("artifact_path")
+        label = "Graph artifact written"
+        if isinstance(artifact_path, str) and artifact_path:
+            label = f"{label}: {artifact_path}"
+        details: list[str] = []
+        for key, display in (
+            ("entity_count", "entities"),
+            ("relationship_count", "relationships"),
+            ("warning_count", "warnings"),
+        ):
+            value = payload.get(key)
+            if isinstance(value, int):
+                details.append(f"{display}={value}")
+        return f"{label} ({', '.join(details)})" if details else label
 
     def _ensure_task(self, stage: str, *, total: int | None = None) -> TaskID:
         task_id = self.tasks_by_stage.get(stage)

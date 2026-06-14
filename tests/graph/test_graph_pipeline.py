@@ -647,6 +647,115 @@ def test_graph_resume_uses_persisted_chapter_drafts(
 
     assert second["status"] == "success"
     assert second_llm.calls == 0
+    assert second["draft_cache_hit_count"] == 1
+    assert second["draft_reusable_count"] == 1
+    assert second["draft_stale_count"] == 0
+    assert second["draft_missing_count"] == 0
+
+
+def test_graph_progress_resume_and_artifact_events(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m65-graph-progress"
+    run_id = "graph-001"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="青云门今日议事。",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="青云门",
+        target_term="Azure Sect",
+        category="faction",
+    )
+
+    mock_llm = ScriptedGraphLLM({
+        1: [
+            {"source_term": "青云门", "entity_type": "faction", "aliases": [], "evidence_snippet": "青云门今日议事。"},
+        ],
+    })
+
+    result = preprocess_graph(
+        release_id=release_id,
+        run_id=run_id,
+        graph_client=GraphClient(backend=InMemoryGraphBackend()),
+        llm_client=mock_llm,
+        resume=True,
+    )
+
+    assert result["status"] == "success"
+    assert result["draft_cache_hit_count"] == 0
+    assert result["draft_missing_count"] == 1
+    assert result["relationship_count"] == 0
+
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id=run_id, release_id=release_id, limit=100)
+    finally:
+        conn.close()
+
+    by_type = {event.event_type: event for event in events}
+    assert "preprocess-graph.extract.resume_summary" in by_type
+    assert "preprocess-graph.extract.started" in by_type
+    assert "preprocess-graph.extract.progress" in by_type
+    assert "preprocess-graph.extract.completed" in by_type
+    assert "preprocess-graph.snapshot.artifact_written" in by_type
+    assert "preprocess-graph.warnings.artifact_written" in by_type
+
+    progress = by_type["preprocess-graph.extract.progress"]
+    assert progress.payload["processed_count"] == 1
+    assert progress.payload["total_count"] == 1
+    assert progress.payload["chapter_entity_count"] == 1
+    assert progress.payload["cache_hit"] is False
+
+
+def test_graph_force_reports_forced_rebuild_count(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m65-graph-force"
+    run_id = "graph-001"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="青云门今日议事。",
+    )
+    _insert_locked_glossary_entry(
+        release_id=release_id,
+        source_term="青云门",
+        target_term="Azure Sect",
+        category="faction",
+    )
+
+    mock_llm = ScriptedGraphLLM({
+        1: [
+            {"source_term": "青云门", "entity_type": "faction", "aliases": [], "evidence_snippet": "青云门今日议事。"},
+        ],
+    })
+    preprocess_graph(
+        release_id=release_id,
+        run_id=run_id,
+        graph_client=GraphClient(backend=InMemoryGraphBackend()),
+        llm_client=mock_llm,
+        resume=True,
+    )
+
+    forced = preprocess_graph(
+        release_id=release_id,
+        run_id=run_id,
+        graph_client=GraphClient(backend=InMemoryGraphBackend()),
+        llm_client=mock_llm,
+        resume=True,
+        force=True,
+    )
+
+    assert forced["status"] == "success"
+    assert forced["forced_rebuild_count"] == 1
+    assert forced["draft_cache_hit_count"] == 0
 
 
 def test_role_state_transition_across_chapters(

@@ -73,6 +73,75 @@ def test_cli_progress_updates_generic_progress_task() -> None:
     assert task.completed == 40
 
 
+def test_cli_progress_formats_graph_extract_progress_log_line() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
+
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-graph.extract.progress",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-graph",
+            chapter_number=12,
+            payload={
+                "chapter_index": 3,
+                "total_count": 10,
+                "cache_hit": True,
+                "chapter_entity_count": 4,
+                "chapter_relationship_count": 2,
+                "chapter_deferred_count": 1,
+                "processed_count": 3,
+            },
+        )
+    )
+
+    assert list(subscriber._log_buffer) == [
+        "Graph extract 3/10 chapter=12: cache=hit, entities=4, relationships=2, deferred=1"
+    ]
+    task_id = subscriber.tasks_by_stage["preprocess-graph.extract"]
+    task = subscriber.progress.tasks[task_id]
+    assert task.total == 10
+    assert task.completed == 3
+
+
+def test_cli_progress_formats_graph_resume_and_artifact_logs() -> None:
+    subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=4)
+
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-graph.extract.resume_summary",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-graph",
+            payload={
+                "reusable_draft_count": 7,
+                "stale_draft_count": 1,
+                "missing_draft_count": 2,
+                "forced_rebuild_count": 0,
+            },
+        )
+    )
+    subscriber._on_event(
+        Event(
+            event_type="preprocess-graph.snapshot.artifact_written",
+            run_id="run",
+            release_id="rel",
+            stage_name="preprocess-graph",
+            payload={
+                "artifact_path": "artifacts/releases/rel/graph/snapshot.json",
+                "entity_count": 12,
+                "relationship_count": 5,
+            },
+        )
+    )
+
+    assert list(subscriber._log_buffer) == [
+        "Graph resume: reusable=7, stale=1, missing=2",
+        "Graph artifact written: artifacts/releases/rel/graph/snapshot.json (entities=12, relationships=5)",
+    ]
+    assert subscriber.artifact_count == 1
+
+
 def test_cli_progress_logs_model_payload_details_without_new_events() -> None:
     subscriber = CliProgressSubscriber(event_bus=EventBus(), progress=_progress(), verbosity=1)
 

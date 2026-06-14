@@ -132,6 +132,11 @@ Glossary discovery emits chapter-level progress while extracting candidates. It 
 corpus scoring, with `.progress` payloads reporting `phase`, `processed_count`,
 `total_count`, and `percent`.
 
+Graph extraction emits a resume summary before chapter work, then
+`preprocess-graph.extract.progress` events while processing or reusing chapter
+drafts. These progress payloads report processed/total chapters, cache hits,
+skips, and extracted graph counts.
+
 ## Translation Sub-flow
 
 For each chapter, the translation sub-stage runs:

@@ -49,6 +49,35 @@ def _build_graph_client(paths: Any, graph_client: GraphClient | None) -> GraphCl
     return GraphClient.from_ladybug(db_path=paths.graph_db_path)
 
 
+def _chapter_source_hash(ref: Any) -> str:
+    chapter_source_hash = ref.chapter_source_hash
+    if chapter_source_hash:
+        return str(chapter_source_hash)
+    payload = json.loads(ref.chapter_path.read_text(encoding="utf-8"))
+    return str(payload.get("chapter_source_hash") or "")
+
+
+def _has_graph_extraction_draft_for_chapter(
+    conn: Any,
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM graph_extraction_drafts
+        WHERE release_id = ?
+          AND run_id = ?
+          AND chapter_number = ?
+        LIMIT 1
+        """,
+        (release_id, run_id, chapter_number),
+    ).fetchone()
+    return row is not None
+
+
 def _entity_id(*, release_id: str, category: str, normalized_source: str) -> str:
     digest = sha256(f"{release_id}:{category}:{normalized_source}".encode("utf-8")).hexdigest()[:24]
     return f"ent_{digest}"
@@ -240,6 +269,52 @@ def preprocess_graph(
         for row in cursor.fetchall():
             skip_chapters.add(int(row[0]))
 
+        chapter_hashes = {
+            ref.chapter_number: _chapter_source_hash(ref)
+            for ref in chapter_refs
+        }
+        reusable_draft_count = 0
+        stale_draft_count = 0
+        missing_draft_count = 0
+        for ref in chapter_refs:
+            matching_draft = get_graph_extraction_draft(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=ref.chapter_number,
+                chapter_source_hash=chapter_hashes[ref.chapter_number],
+                prompt_version=prompt.version,
+            )
+            if matching_draft is not None:
+                reusable_draft_count += 1
+            elif _has_graph_extraction_draft_for_chapter(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=ref.chapter_number,
+            ):
+                stale_draft_count += 1
+            else:
+                missing_draft_count += 1
+        forced_rebuild_count = len(chapter_refs) if force else 0
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.extract.resume_summary",
+            reusable_draft_count=reusable_draft_count,
+            stale_draft_count=stale_draft_count,
+            missing_draft_count=missing_draft_count,
+            forced_rebuild_count=forced_rebuild_count,
+            prompt_version=prompt.version,
+            resume=resume,
+            force=force,
+            message=(
+                "Graph extraction resume summary: "
+                f"{reusable_draft_count} reusable, {stale_draft_count} stale, "
+                f"{missing_draft_count} missing, {forced_rebuild_count} forced"
+            ),
+        )
+
         if force:
             delete_graph_extraction_drafts(
                 conn,
@@ -248,12 +323,23 @@ def preprocess_graph(
                 chapter_numbers=[ref.chapter_number for ref in chapter_refs],
             )
 
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.extract.started",
+            total_count=len(chapter_refs),
+            total_chapters=len(chapter_refs),
+            message=f"Graph extraction started for {len(chapter_refs)} chapters",
+        )
+
         chapter_extractions: list[GraphExtractionResult] = []
-        for ref in chapter_refs:
-            chapter_source_hash = ref.chapter_source_hash
-            if not chapter_source_hash:
-                payload = json.loads(ref.chapter_path.read_text(encoding="utf-8"))
-                chapter_source_hash = str(payload.get("chapter_source_hash") or "")
+        cache_hit_count = 0
+        skipped_count = 0
+        extracted_count = 0
+        relationship_count = 0
+        deferred_count = 0
+        for chapter_index, ref in enumerate(chapter_refs, start=1):
+            chapter_source_hash = chapter_hashes[ref.chapter_number]
             draft = (
                 get_graph_extraction_draft(
                     conn,
@@ -267,13 +353,46 @@ def preprocess_graph(
                 else None
             )
             if draft is not None:
-                chapter_extractions.append(_payload_to_extraction(json.loads(draft.payload_json)))
+                chapter_extraction = _payload_to_extraction(json.loads(draft.payload_json))
+                chapter_extractions.append(chapter_extraction)
+                cache_hit_count += 1
+                chapter_entity_count = len(chapter_extraction.provisional_entities)
+                chapter_relationship_count = len(chapter_extraction.provisional_relationships)
+                chapter_deferred_count = len(chapter_extraction.deferred_entities)
+                extracted_count += chapter_entity_count
+                relationship_count += chapter_relationship_count
+                deferred_count += chapter_deferred_count
                 _emit(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.draft_cache_hit",
                     chapter_number=ref.chapter_number,
                     message=f"Graph extraction draft cache hit for chapter {ref.chapter_number}",
+                )
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.extract.progress",
+                    chapter_number=ref.chapter_number,
+                    chapter_index=chapter_index,
+                    processed_count=chapter_index,
+                    total_count=len(chapter_refs),
+                    cache_hit=True,
+                    cache_hit_count=cache_hit_count,
+                    skipped_count=skipped_count,
+                    chapter_entity_count=chapter_entity_count,
+                    chapter_relationship_count=chapter_relationship_count,
+                    chapter_deferred_count=chapter_deferred_count,
+                    extracted_count=extracted_count,
+                    relationship_count=relationship_count,
+                    deferred_count=deferred_count,
+                    message=(
+                        f"Graph extract chapter {chapter_index}/{len(chapter_refs)} "
+                        f"(chapter {ref.chapter_number}, cache hit): "
+                        f"entities={chapter_entity_count} "
+                        f"relationships={chapter_relationship_count} "
+                        f"deferred={chapter_deferred_count}"
+                    ),
                 )
                 continue
 
@@ -310,11 +429,63 @@ def preprocess_graph(
                 payload=_extraction_to_payload(chapter_extraction),
             )
             chapter_extractions.append(chapter_extraction)
+            chapter_skipped = ref.chapter_number in skip_chapters
+            if chapter_skipped:
+                skipped_count += 1
+            chapter_entity_count = len(chapter_extraction.provisional_entities)
+            chapter_relationship_count = len(chapter_extraction.provisional_relationships)
+            chapter_deferred_count = len(chapter_extraction.deferred_entities)
+            extracted_count += chapter_entity_count
+            relationship_count += chapter_relationship_count
+            deferred_count += chapter_deferred_count
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.extract.progress",
+                chapter_number=ref.chapter_number,
+                chapter_index=chapter_index,
+                processed_count=chapter_index,
+                total_count=len(chapter_refs),
+                cache_hit=False,
+                cache_hit_count=cache_hit_count,
+                skipped_count=skipped_count,
+                chapter_entity_count=chapter_entity_count,
+                chapter_relationship_count=chapter_relationship_count,
+                chapter_deferred_count=chapter_deferred_count,
+                extracted_count=extracted_count,
+                relationship_count=relationship_count,
+                deferred_count=deferred_count,
+                message=(
+                    f"Graph extract chapter {chapter_index}/{len(chapter_refs)} "
+                    f"(chapter {ref.chapter_number}): "
+                    f"entities={chapter_entity_count} "
+                    f"relationships={chapter_relationship_count} "
+                    f"deferred={chapter_deferred_count}"
+                ),
+            )
             raise_if_stop_requested(
                 stop_token,
                 checkpoint={"graph_draft_last_chapter": ref.chapter_number},
                 message=f"Graph preprocess stopped after draft chapter {ref.chapter_number}",
             )
+
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.extract.completed",
+            processed_count=len(chapter_refs),
+            total_count=len(chapter_refs),
+            cache_hit_count=cache_hit_count,
+            skipped_count=skipped_count,
+            extracted_count=extracted_count,
+            relationship_count=relationship_count,
+            deferred_count=deferred_count,
+            message=(
+                "Graph extraction completed: "
+                f"{len(chapter_refs)} chapters, {cache_hit_count} cache hits, "
+                f"{skipped_count} skipped"
+            ),
+        )
 
         extraction = _merge_extractions(chapter_extractions)
         warnings.extend(extraction.warnings)
@@ -455,6 +626,18 @@ def preprocess_graph(
                 "validator_status": validation.status,
             },
         )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.snapshot.artifact_written",
+            artifact_path=str(paths.graph_snapshot_path),
+            artifact_format="json",
+            entity_count=snapshot.entity_count,
+            alias_count=snapshot.alias_count,
+            appearance_count=snapshot.appearance_count,
+            relationship_count=snapshot.relationship_count,
+            message=f"Graph snapshot artifact written: {paths.graph_snapshot_path}",
+        )
         _write_json(
             paths.graph_warnings_path,
             {
@@ -463,6 +646,15 @@ def preprocess_graph(
                 "schema_version": 1,
                 "warnings": warnings,
             },
+        )
+        _emit(
+            run_id,
+            release_id,
+            f"{_STAGE_NAME}.warnings.artifact_written",
+            artifact_path=str(paths.graph_warnings_path),
+            artifact_format="json",
+            warning_count=len(warnings),
+            message=f"Graph warnings artifact written: {paths.graph_warnings_path}",
         )
         raise_if_stop_requested(
             stop_token,
@@ -492,6 +684,13 @@ def preprocess_graph(
         "run_id": run_id,
         "provisional_entities": len(provisional_entities),
         "confirmed_entities": len(confirmed_entities),
+        "draft_cache_hit_count": cache_hit_count,
+        "draft_reusable_count": reusable_draft_count,
+        "draft_stale_count": stale_draft_count,
+        "draft_missing_count": missing_draft_count,
+        "forced_rebuild_count": forced_rebuild_count,
+        "skipped_count": skipped_count,
+        "relationship_count": len(confirmed_relationships),
         "deferred_pending_count": len(pending_after),
         "deferred_graph_created_count": len(graph_created_after),
         "snapshot_hash": snapshot.snapshot_hash,
