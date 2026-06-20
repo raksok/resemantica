@@ -54,7 +54,7 @@ Structured Chinese summary schema:
 6. **Materialize both `chapter_summary_zh_structured` and `chapter_summary_zh_short` as dedicated rows** in `validated_summaries_zh` with distinct `summary_type` values. The `content_zh` column for `zh_short` holds the `narrative_progression` string. This materialization occurs inside `summaries.generator.generate_chapter_summary()` as a single-transaction write — both rows are written atomically. No separate materialization stage or lazy extraction exists. The `summary_repo.save()` method accepts the structured JSON response and writes both rows; it does not store raw JSON for later splitting. This is mandatory so that Phase 1 (translation) and Phase 1.5 (packet assembly) perform zero JSON parsing to obtain continuity text.
 7. Phase 1 runs chapter-local Chinese work with `summaries.chapter_concurrency` workers. Each worker uses its own SQLite connection and writes only `chapter_summary_zh_structured` and `chapter_summary_zh_short`.
 8. Phase 2 runs in chapter order. It derives full `story_so_far_zh`, compacts previous `story_so_far_zh_compact` plus current `chapter_summary_zh_short` into `story_so_far_zh_compact`, writes both continuity rows, and writes `chapter-*-zh.json`.
-9. Phase 3 runs English derivation with `summaries.chapter_concurrency` workers. It derives `chapter_summary_en_short` from `chapter_summary_zh_short` and derives `story_so_far_en` from `story_so_far_zh_compact`.
+9. Phase 3 runs English derivation with `summaries.chapter_concurrency` workers. It derives `chapter_summary_en_short` from `chapter_summary_zh_short` and derives `story_so_far_en` from `story_so_far_zh_compact`. English derivation renders source-local locked glossary context: only locked source terms that literally appear in the Chinese summary text are included in `SUMMARY_EN_DERIVE`.
 
 For large ranges, `[batch_order]` chunking changes the outer loop only. Each chunk completes Phase 1, Phase 2, and Phase 3 before the next chunk begins. Effective summary chunk size is `batch_order.summary_chunk_multiplier * summaries.chapter_concurrency`, and chunking activates only when the selected chapter count is larger than that size.
 
@@ -94,6 +94,8 @@ Summary preprocessing is a primary local-inference bottleneck. The analyst promp
 - runtime consumers read only `validation_status = "approved"` rows unless explicitly using an audit path
 - English summaries must record provenance hashes back to validated Chinese inputs
 - `story_so_far_en` must record provenance back to `story_so_far_zh_compact`
+- English derivation prompt context is source-local, but `glossary_version_hash`
+  remains based on the full locked glossary for conservative provenance.
 - summary validation must fail on future-knowledge leakage
 
 ## Resume And Rerun

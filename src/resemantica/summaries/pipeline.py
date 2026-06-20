@@ -800,6 +800,9 @@ def _run_english_phase(
             prompt_template=prompt_en.template,
             source_text_zh=job.short_record.content_zh,
             locked_glossary=job.locked_glossary,
+            config=config,
+            stage_name=f"{_STAGE_NAME}.chapter-summary-en",
+            chapter_number=job.chapter_number,
         )
         chapter_en_record = save_derived_summary(
             conn,
@@ -827,6 +830,9 @@ def _run_english_phase(
             prompt_template=prompt_en.template,
             source_text_zh=job.compact_story_record.content_zh,
             locked_glossary=job.locked_glossary,
+            config=config,
+            stage_name=f"{_STAGE_NAME}.story-so-far-en",
+            chapter_number=job.chapter_number,
         )
         story_source_summary_hash = hash_validated_summary(job.compact_story_record)
         story_en_record = save_derived_summary(

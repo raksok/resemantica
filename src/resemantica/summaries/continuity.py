@@ -408,6 +408,9 @@ def preprocess_continuity(
                     prompt_template=prompt_en.template,
                     source_text_zh=compact_text,
                     locked_glossary=locked_glossary,
+                    config=config_obj,
+                    stage_name=f"{_STAGE_NAME}.graph-compact-en",
+                    chapter_number=chapter_number,
                 )
                 en_record = save_derived_summary(
                     conn,

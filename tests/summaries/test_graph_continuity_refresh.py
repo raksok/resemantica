@@ -6,9 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from resemantica.db.glossary_repo import ensure_glossary_schema, promote_locked_entries
 from resemantica.db.graph_repo import ensure_graph_schema, save_graph_snapshot
 from resemantica.db.sqlite import open_connection
-from resemantica.db.summary_repo import ensure_summary_schema, get_validated_summary, save_validated_summary
+from resemantica.db.summary_repo import (
+    ensure_summary_schema,
+    get_validated_summary,
+    list_derived_summaries,
+    save_validated_summary,
+)
+from resemantica.glossary.models import LockedGlossaryEntry
+from resemantica.glossary.validators import normalize_term
 from resemantica.graph.client import GraphClient, InMemoryGraphBackend
 from resemantica.graph.models import GraphAlias, GraphEntity, GraphRelationship
 from resemantica.settings import derive_paths, load_config
@@ -17,6 +25,7 @@ from resemantica.summaries.continuity import (
     build_graph_continuity_input,
     preprocess_continuity,
 )
+from resemantica.summaries.derivation import hash_locked_glossary
 from resemantica.tracking.repo import ensure_tracking_db, load_events
 
 
@@ -109,6 +118,41 @@ def _seed_graph_snapshot(*, release_id: str, graph_client: GraphClient) -> None:
         conn.close()
 
 
+def _seed_locked_glossary(
+    *,
+    release_id: str,
+    rows: list[tuple[str, str, str]],
+) -> list[LockedGlossaryEntry]:
+    entries: list[LockedGlossaryEntry] = []
+    for source_term, target_term, category in rows:
+        normalized = normalize_term(source_term)
+        entries.append(
+            LockedGlossaryEntry(
+                glossary_entry_id=f"glex_{category}_{normalized}",
+                release_id=release_id,
+                source_term=source_term,
+                normalized_source_term=normalized,
+                target_term=target_term,
+                normalized_target_term=normalize_term(target_term),
+                category=category,
+                status="approved",
+                approved_at="2026-01-01T00:00:00+00:00",
+                approval_run_id="seed-glossary",
+                source_candidate_id=f"gcan_{category}_{normalized}",
+                schema_version=1,
+            )
+        )
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_glossary_schema(conn)
+    try:
+        with conn:
+            promote_locked_entries(conn, entries=entries)
+    finally:
+        conn.close()
+    return entries
+
+
 def _graph_client(release_id: str) -> GraphClient:
     client = GraphClient(backend=InMemoryGraphBackend())
     client.upsert_entities(
@@ -158,6 +202,13 @@ def test_refreshed_compact_continuity_includes_required_graph_anchors(tmp_path: 
     _seed_short_summary(release_id=release_id, chapter_number=1, content="张三拜入青云门。")
     client = _graph_client(release_id)
     _seed_graph_snapshot(release_id=release_id, graph_client=client)
+    locked_glossary = _seed_locked_glossary(
+        release_id=release_id,
+        rows=[
+            ("张三", "Zhang San", "character"),
+            ("黑风寨", "Black Wind Fort", "faction"),
+        ],
+    )
     llm = ScriptedContinuityLLM()
 
     result = preprocess_continuity(
@@ -172,6 +223,9 @@ def test_refreshed_compact_continuity_includes_required_graph_anchors(tmp_path: 
     prompt = next(prompt for prompt in llm.prompts if "SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt)
     assert "Zhang San" in prompt
     assert "MEMBER_OF" in prompt
+    en_prompt = next(prompt for prompt in llm.prompts if "SUMMARY_EN_DERIVE" in prompt)
+    assert "- 张三 => Zhang San" in en_prompt
+    assert "黑风寨" not in en_prompt
     paths = derive_paths(load_config(), release_id=release_id)
     conn = open_connection(paths.db_path)
     try:
@@ -183,6 +237,9 @@ def test_refreshed_compact_continuity_includes_required_graph_anchors(tmp_path: 
         )
         assert row is not None
         assert row.content_zh == "张三属于青云门。"
+        derived_rows = list_derived_summaries(conn, release_id=release_id, chapter_number=1)
+        graph_en = next(row for row in derived_rows if row.summary_type == "story_so_far_en_graph_compact")
+        assert graph_en.glossary_version_hash == hash_locked_glossary(locked_glossary)
     finally:
         conn.close()
 

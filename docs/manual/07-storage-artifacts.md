@@ -93,6 +93,11 @@ promotion.
 | `derived_summaries_en` | `summary_id`; UNIQUE `(release_id, chapter_number, summary_type)` | `content_en`, `source_summary_hash`, `glossary_version_hash` |
 | `summary_checkpoints` | `(release_id, run_id)` | `zh_last_chapter`, `story_last_chapter`, `en_last_chapter` |
 
+`SUMMARY_EN_DERIVE` prompt context is source-local: only locked glossary source
+terms that appear in the Chinese summary text are rendered. Derived English
+rows still store `glossary_version_hash` from the full locked glossary, so
+freshness and packet invalidation remain conservative.
+
 ### Idiom System
 
 | Table | PK / Unique | Key Columns |

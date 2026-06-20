@@ -34,6 +34,17 @@
 2. Increase `max_context_per_pass` in `[budget]`
 3. Try a different translator model
 
+### `preprocess-continuity` fails with `SUMMARY_EN_DERIVE` context overflow
+
+**Cause:** Older runs may have built English summary derivation prompts with the
+full locked glossary. `summary_en_derive.txt` version `1.1` renders only
+source-local locked glossary entries and checks prompt budget before the
+translator LLM call.
+
+**Fix:** Rerun the same continuity command after updating. If stale English
+derived rows already exist and need regeneration, rerun the affected scope with
+`--force`.
+
 ### Pipeline stuck or very slow
 
 **Cause:** Single-model concurrency (default: 1).

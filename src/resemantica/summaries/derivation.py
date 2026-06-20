@@ -6,11 +6,13 @@ from typing import Callable
 
 from resemantica.db.summary_repo import ValidatedSummaryZhRecord
 from resemantica.glossary.models import LockedGlossaryEntry
+from resemantica.llm.budget import ensure_prompt_within_budget
 from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
 from resemantica.llm.client import LLMClient, record_cache_hit
 from resemantica.llm.prompts import render_named_sections
 from resemantica.llm.tokens import count_tokens
-from resemantica.summaries._context import _format_glossary_context
+from resemantica.settings import AppConfig
+from resemantica.summaries._context import _format_glossary_context, select_source_local_glossary
 from resemantica.utils import _canonical_json
 
 
@@ -199,12 +201,32 @@ def derive_english_summary(
     prompt_template: str,
     source_text_zh: str,
     locked_glossary: list[LockedGlossaryEntry],
+    config: AppConfig | None = None,
+    stage_name: str | None = None,
+    chapter_number: int | None = None,
 ) -> str:
+    source_local_glossary = select_source_local_glossary(
+        source_text_zh=source_text_zh,
+        locked_glossary=locked_glossary,
+    )
     prompt = render_named_sections(
         prompt_template,
         sections={
             "SOURCE_TEXT_ZH": source_text_zh,
-            "LOCKED_GLOSSARY": _format_glossary_context(locked_glossary),
+            "LOCKED_GLOSSARY": _format_glossary_context(source_local_glossary),
         },
     )
+    if config is not None:
+        translator_budget = config.models.effective_max_context_per_pass(
+            "translator",
+            config.budget.max_context_per_pass,
+            config.llm.context_window,
+        )
+        ensure_prompt_within_budget(
+            prompt,
+            config=config,
+            stage_name=stage_name or "summary_en_derive",
+            chapter_number=chapter_number,
+            max_tokens=translator_budget,
+        )
     return llm_client.generate_text(model_name=model_name, prompt=prompt).strip()

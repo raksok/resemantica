@@ -22,6 +22,7 @@ from resemantica.db.summary_repo import (
 )
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
+from resemantica.llm.budget import PromptBudgetError
 from resemantica.llm.cache import LLMCacheIdentity, hash_prompt, load_cached_text, save_cached_text
 from resemantica.llm.prompts import render_named_sections
 from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
@@ -221,6 +222,75 @@ def _insert_locked_glossary_term(
             )
     finally:
         conn.close()
+
+
+def _locked_entry(
+    *,
+    release_id: str,
+    source_term: str,
+    target_term: str,
+    category: str = "faction",
+) -> LockedGlossaryEntry:
+    normalized = normalize_term(source_term)
+    return LockedGlossaryEntry(
+        glossary_entry_id=f"glex_{category}_{normalized}",
+        release_id=release_id,
+        source_term=source_term,
+        normalized_source_term=normalized,
+        target_term=target_term,
+        normalized_target_term=normalize_term(target_term),
+        category=category,
+        status="approved",
+        approved_at=datetime.now(UTC).isoformat(),
+        approval_run_id="promote-001",
+        source_candidate_id=f"gcan_{category}_{normalized}",
+        schema_version=1,
+    )
+
+
+def test_english_summary_derivation_uses_source_local_glossary() -> None:
+    prompts: list[str] = []
+
+    class RecordingLLM:
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            prompts.append(prompt)
+            return "EN::content"
+
+    result = summary_derivation.derive_english_summary(
+        llm_client=RecordingLLM(),
+        model_name="translator",
+        prompt_template="{LOCKED_GLOSSARY}\n\n{SOURCE_TEXT_ZH}",
+        source_text_zh="张三加入青云门。",
+        locked_glossary=[
+            _locked_entry(release_id="m67", source_term="青云门", target_term="Azure Sect"),
+            _locked_entry(release_id="m67", source_term="黑风寨", target_term="Black Wind Fort"),
+        ],
+    )
+
+    assert result == "EN::content"
+    assert "- 青云门 => Azure Sect" in prompts[0]
+    assert "黑风寨" not in prompts[0]
+
+
+def test_english_summary_derivation_checks_prompt_budget_before_llm_call() -> None:
+    class FailingLLM:
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            raise AssertionError("LLM should not be called after prompt budget failure")
+
+    config = load_config()
+    config.budget.max_context_per_pass = 5
+
+    with pytest.raises(PromptBudgetError, match="summary_en_derive"):
+        summary_derivation.derive_english_summary(
+            llm_client=FailingLLM(),
+            model_name="translator",
+            prompt_template="SUMMARY_EN_DERIVE\n{LOCKED_GLOSSARY}\n{SOURCE_TEXT_ZH}",
+            source_text_zh="张三加入青云门。" * 20,
+            locked_glossary=[
+                _locked_entry(release_id="m67-budget", source_term="青云门", target_term="Azure Sect"),
+            ],
+            config=config,
+        )
 
 
 def _seed_summary_backfill_rows(

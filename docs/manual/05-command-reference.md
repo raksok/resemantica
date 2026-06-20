@@ -281,6 +281,12 @@ Refresh graph-grounded compact continuity.
 uv run rsem preprocess continuity -r <release> [options]
 ```
 
+The Chinese graph compact row is derived from previous continuity, recent
+validated summaries, and chapter-safe graph anchors. The English inspection row
+uses source-local locked glossary context, so `SUMMARY_EN_DERIVE` includes only
+locked source terms that literally appear in the compact Chinese continuity.
+Prompt budget is checked before the translator model call.
+
 ---
 
 ## `packets build` (alias: `pac build`)

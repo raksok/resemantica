@@ -44,7 +44,7 @@ graph_continuity_rebase_interval = 50
    - current chapter number
    - graph anchors
 5. Save Chinese output as `story_so_far_zh_graph_compact`.
-6. Derive English inspection text as `story_so_far_en_graph_compact`.
+6. Derive English inspection text as `story_so_far_en_graph_compact` using source-local locked glossary context for the generated Chinese compact text.
 7. Write a per-chapter graph continuity artifact containing the summary row and anchor audit metadata.
 
 ## Rebase Behavior
@@ -69,6 +69,7 @@ The selected summary row participates in `summary_version_hash`, so packet metad
 - Missing chapter short summary skips that chapter.
 - Empty or non-JSON model output fails the chapter.
 - Output exceeding `summaries.story_compact_max_tokens` fails clearly.
+- `SUMMARY_EN_DERIVE` prompt budget overflow fails before the translator LLM call.
 
 ## Tests
 
