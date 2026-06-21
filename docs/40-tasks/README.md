@@ -85,3 +85,4 @@ Always follow the milestone sequence below.
 | M65 | task-65 | M64 | Graph Progress And Resume QoL |
 | M66 | task-66 | M65 | Graph Chapter-Local Glossary Context |
 | M67 | task-67 | M66 | Summary English Source-Local Glossary |
+| M68 | task-68 | M67 | Graph Continuity Invalid Cache Recovery |

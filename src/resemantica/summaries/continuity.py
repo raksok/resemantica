@@ -66,6 +66,8 @@ def _build_graph_client(paths: Any, graph_client: GraphClient | None) -> GraphCl
 
 def _parse_json_object(raw_output: str) -> dict[str, Any]:
     text = raw_output.strip()
+    if not text:
+        raise ValueError("graph_continuity_output_invalid: empty model output")
     if text.startswith("```"):
         first_newline = text.find("\n")
         text = text[first_newline + 1 :] if first_newline != -1 else text[3:]
@@ -73,10 +75,30 @@ def _parse_json_object(raw_output: str) -> dict[str, Any]:
             text = text[:-3].strip()
         if text.startswith("json"):
             text = text[4:].strip()
-    parsed = json.loads(text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("graph_continuity_output_invalid: expected JSON object") from exc
     if not isinstance(parsed, dict):
         raise ValueError("graph_continuity_output_invalid: expected JSON object")
     return parsed
+
+
+def _validate_graph_continuity_output(raw_output: str, *, config: AppConfig) -> tuple[str, dict[str, object]]:
+    parsed = _parse_json_object(raw_output)
+    compact = str(parsed.get("continuity_zh", "")).strip()
+    if not compact:
+        raise ValueError("story_so_far_zh_graph_compact generation returned empty continuity_zh")
+    token_count = count_tokens(compact)
+    if token_count > config.summaries.story_compact_max_tokens:
+        raise ValueError(
+            "story_so_far_zh_graph_compact exceeds configured token budget: "
+            f"{token_count} > {config.summaries.story_compact_max_tokens}"
+        )
+    audit = parsed.get("anchor_audit", {})
+    if not isinstance(audit, dict):
+        raise ValueError("graph_continuity_output_invalid: anchor_audit must be an object")
+    return compact, dict(audit)
 
 
 def _anchor_entity_name(entity_id: str, entity_names: dict[str, str]) -> str:
@@ -282,29 +304,22 @@ def refresh_graph_continuity_text(
     )
     cached = load_cached_text(cache_root, identity) if cache_root is not None else None
     if cached is not None:
-        record_cache_hit(llm_client)
-    raw_output = (
-        cached
-        if cached is not None
-        else llm_client.generate_text(model_name=model_name, prompt=rendered).strip()
-    )
-    if cache_root is not None and cached is None:
-        save_cached_text(cache_root, identity, raw_output)
+        try:
+            compact, audit = _validate_graph_continuity_output(cached, config=config)
+            record_cache_hit(llm_client)
+            return compact, audit
+        except ValueError as exc:
+            logger.info(
+                "Ignoring invalid graph continuity cache for chapter {}: {}",
+                continuity_input.current_chapter_number,
+                exc,
+            )
 
-    parsed = _parse_json_object(raw_output)
-    compact = str(parsed.get("continuity_zh", "")).strip()
-    if not compact:
-        raise ValueError("story_so_far_zh_graph_compact generation returned empty continuity_zh")
-    token_count = count_tokens(compact)
-    if token_count > config.summaries.story_compact_max_tokens:
-        raise ValueError(
-            "story_so_far_zh_graph_compact exceeds configured token budget: "
-            f"{token_count} > {config.summaries.story_compact_max_tokens}"
-        )
-    audit = parsed.get("anchor_audit", {})
-    if not isinstance(audit, dict):
-        raise ValueError("graph_continuity_output_invalid: anchor_audit must be an object")
-    return compact, dict(audit)
+    raw_output = llm_client.generate_text(model_name=model_name, prompt=rendered).strip()
+    compact, audit = _validate_graph_continuity_output(raw_output, config=config)
+    if cache_root is not None:
+        save_cached_text(cache_root, identity, raw_output)
+    return compact, audit
 
 
 def preprocess_continuity(

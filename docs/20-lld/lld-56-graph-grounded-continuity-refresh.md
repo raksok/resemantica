@@ -43,9 +43,12 @@ graph_continuity_rebase_interval = 50
    - recent chapter summaries
    - current chapter number
    - graph anchors
-5. Save Chinese output as `story_so_far_zh_graph_compact`.
-6. Derive English inspection text as `story_so_far_en_graph_compact` using source-local locked glossary context for the generated Chinese compact text.
-7. Write a per-chapter graph continuity artifact containing the summary row and anchor audit metadata.
+5. Accept graph continuity LLM cache output only after parsing and validation.
+   Invalid cached output is treated as stale and regenerated once.
+6. Validate fresh model output before writing it to the LLM cache.
+7. Save Chinese output as `story_so_far_zh_graph_compact`.
+8. Derive English inspection text as `story_so_far_en_graph_compact` using source-local locked glossary context for the generated Chinese compact text.
+9. Write a per-chapter graph continuity artifact containing the summary row and anchor audit metadata.
 
 ## Rebase Behavior
 
@@ -67,7 +70,8 @@ The selected summary row participates in `summary_version_hash`, so packet metad
 
 - Missing graph snapshot fails `preprocess-continuity`.
 - Missing chapter short summary skips that chapter.
-- Empty or non-JSON model output fails the chapter.
+- Empty or non-JSON fresh model output fails the chapter and is not cached.
+- Empty or non-JSON cached graph continuity output is ignored as stale and regenerated once.
 - Output exceeding `summaries.story_compact_max_tokens` fails clearly.
 - `SUMMARY_EN_DERIVE` prompt budget overflow fails before the translator LLM call.
 
@@ -77,6 +81,7 @@ The selected summary row participates in `summary_version_hash`, so packet metad
 - refreshed row persistence and English derivation
 - rebase interval source selection
 - token budget failure
+- invalid graph continuity cache recovery
 - missing snapshot failure
 - packet preference and invalidation
 - prompt JSON-only and anti-restart regression checks

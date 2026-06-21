@@ -54,6 +54,20 @@ class ScriptedContinuityLLM:
         raise RuntimeError("Unexpected prompt")
 
 
+class RawGraphContinuityLLM:
+    def __init__(self, graph_outputs: list[str]) -> None:
+        self.graph_outputs = graph_outputs
+        self.prompts: list[str] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        self.prompts.append(prompt)
+        if "SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt:
+            return self.graph_outputs.pop(0)
+        if "SUMMARY_EN_DERIVE" in prompt:
+            return "EN::continuity"
+        raise RuntimeError("Unexpected prompt")
+
+
 def _write_extracted_chapter(*, release_id: str, chapter_number: int) -> None:
     paths = derive_paths(load_config(), release_id=release_id)
     paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
@@ -180,6 +194,29 @@ def _graph_client(release_id: str) -> GraphClient:
     return client
 
 
+def _graph_continuity_cache_files(release_id: str) -> list[Path]:
+    paths = derive_paths(load_config(), release_id=release_id)
+    cache_dir = paths.release_root / "cache" / "llm" / "preprocess-continuity.graph-compact"
+    return sorted(cache_dir.glob("*.json")) if cache_dir.exists() else []
+
+
+def _replace_graph_continuity_cache_raw_output(*, release_id: str, raw_output: str) -> Path:
+    cache_files = _graph_continuity_cache_files(release_id)
+    assert len(cache_files) == 1
+    cache_path = cache_files[0]
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["raw_output"] = raw_output
+    cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return cache_path
+
+
+def _read_graph_continuity_cache_raw_output(cache_path: Path) -> str:
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    raw_output = payload["raw_output"]
+    assert isinstance(raw_output, str)
+    return raw_output
+
+
 def test_graph_anchors_exclude_future_relationships_and_aliases(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "m56-anchors"
@@ -242,6 +279,82 @@ def test_refreshed_compact_continuity_includes_required_graph_anchors(tmp_path: 
         assert graph_en.glossary_version_hash == hash_locked_glossary(locked_glossary)
     finally:
         conn.close()
+
+
+def test_empty_cached_graph_continuity_output_is_regenerated(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m68-empty-cache"
+    _write_extracted_chapter(release_id=release_id, chapter_number=1)
+    _seed_short_summary(release_id=release_id, chapter_number=1)
+    client = _graph_client(release_id)
+    _seed_graph_snapshot(release_id=release_id, graph_client=client)
+
+    preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-seed",
+        graph_client=client,
+        llm_client=ScriptedContinuityLLM("旧连续性。"),
+    )
+    cache_path = _replace_graph_continuity_cache_raw_output(release_id=release_id, raw_output="")
+    llm = ScriptedContinuityLLM("再生成的连续性。")
+
+    result = preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-retry",
+        graph_client=client,
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    assert sum("SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt for prompt in llm.prompts) == 1
+    assert "再生成的连续性。" in _read_graph_continuity_cache_raw_output(cache_path)
+
+
+def test_fresh_empty_graph_continuity_output_fails_without_cache_write(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m68-fresh-empty"
+    _write_extracted_chapter(release_id=release_id, chapter_number=1)
+    _seed_short_summary(release_id=release_id, chapter_number=1)
+    client = _graph_client(release_id)
+    _seed_graph_snapshot(release_id=release_id, graph_client=client)
+
+    with pytest.raises(ValueError, match="graph_continuity_output_invalid: empty model output"):
+        preprocess_continuity(
+            release_id=release_id,
+            run_id="continuity-001",
+            graph_client=client,
+            llm_client=RawGraphContinuityLLM([""]),
+        )
+
+    assert _graph_continuity_cache_files(release_id) == []
+
+
+def test_malformed_cached_graph_continuity_output_is_regenerated_once(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m68-malformed-cache"
+    _write_extracted_chapter(release_id=release_id, chapter_number=1)
+    _seed_short_summary(release_id=release_id, chapter_number=1)
+    client = _graph_client(release_id)
+    _seed_graph_snapshot(release_id=release_id, graph_client=client)
+
+    preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-seed",
+        graph_client=client,
+        llm_client=ScriptedContinuityLLM("旧连续性。"),
+    )
+    cache_path = _replace_graph_continuity_cache_raw_output(release_id=release_id, raw_output="{")
+    llm = ScriptedContinuityLLM("修复后的连续性。")
+
+    preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-retry",
+        graph_client=client,
+        llm_client=llm,
+    )
+
+    assert sum("SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt for prompt in llm.prompts) == 1
+    assert "修复后的连续性。" in _read_graph_continuity_cache_raw_output(cache_path)
 
 
 def test_rebase_interval_uses_previous_milestone_compact_plus_recent_summaries(tmp_path: Path, monkeypatch) -> None:
