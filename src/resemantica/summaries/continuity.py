@@ -48,6 +48,7 @@ from resemantica.utils import _emit as _emit_shared
 
 _STAGE_NAME = "preprocess-continuity"
 _RECENT_SUMMARY_WINDOW = 3
+_MAX_GRAPH_CONTINUITY_ATTEMPTS = 4
 
 
 @dataclass(slots=True)
@@ -287,6 +288,7 @@ def refresh_graph_continuity_text(
     *,
     llm_client: LLMClient,
     release_id: str,
+    run_id: str,
     model_name: str,
     prompt: PromptTemplate,
     continuity_input: GraphContinuityInput,
@@ -338,8 +340,30 @@ def refresh_graph_continuity_text(
                 exc,
             )
 
-    raw_output = llm_client.generate_text(model_name=model_name, prompt=rendered).strip()
-    compact, audit = _validate_graph_continuity_output(raw_output, config=config)
+    last_error: ValueError | None = None
+    raw_output = ""
+    for attempt_number in range(1, _MAX_GRAPH_CONTINUITY_ATTEMPTS + 1):
+        raw_output = llm_client.generate_text(model_name=model_name, prompt=rendered).strip()
+        try:
+            compact, audit = _validate_graph_continuity_output(raw_output, config=config)
+            break
+        except ValueError as exc:
+            last_error = exc
+            if attempt_number >= _MAX_GRAPH_CONTINUITY_ATTEMPTS:
+                raise
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.graph_compact.retry",
+                chapter_number=continuity_input.current_chapter_number,
+                attempt_number=attempt_number,
+                reason=str(exc),
+            )
+    else:  # pragma: no cover - loop always returns or raises
+        if last_error is not None:
+            raise last_error
+        raise ValueError("graph_continuity_output_invalid: unknown validation failure")
+
     if cache_root is not None:
         save_cached_text(cache_root, identity, raw_output)
     return compact, audit
@@ -703,6 +727,7 @@ def preprocess_continuity(
                         compact_text, model_anchor_audit = refresh_graph_continuity_text(
                             llm_client=client,
                             release_id=release_id,
+                            run_id=run_id,
                             model_name=config_obj.models.analyst_name,
                             prompt=prompt,
                             continuity_input=continuity_input,

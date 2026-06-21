@@ -42,6 +42,12 @@ Incomplete chunks resume from durable rows. Current Chinese rows are reused when
 their source hash matches; missing or stale English rows are translated without
 rerunning the analyst model.
 
+`run retry-failed --stage preprocess-continuity` uses failed continuity chunk
+checkpoints as retry boundaries. If a chunk fails after writing some Chinese
+rows but before English derivation and artifacts, the retry unit starts at the
+failed chunk start so English/artifact backfill for earlier chapters in that
+chunk is not skipped.
+
 ## Events
 
 Chunked continuity emits:
@@ -49,6 +55,7 @@ Chunked continuity emits:
 - `preprocess-continuity.chunk_started`
 - `preprocess-continuity.chunk_completed`
 - `preprocess-continuity.chunk_failed`
+- `preprocess-continuity.graph_compact.retry`
 
 Chunk events include `chunk_index`, `chunk_count`, `chapter_start`,
 `chapter_end`, `chunk_size`, and `last_good_chapter`.

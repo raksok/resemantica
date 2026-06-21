@@ -784,6 +784,60 @@ class TestRetryFailed:
         assert plan.retryable[0].chapters == [1]
         assert plan.retryable[0].reason == "missing_or_stale_graph_draft_or_failed_validation"
 
+    def test_retry_failed_continuity_failed_chunk_uses_chunk_boundary(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-continuity-chunk"
+        run_id = "production"
+        for chapter_number in [1, 2, 3]:
+            self._write_extracted_chapter(release_id, chapter_number)
+
+        from resemantica.db.sqlite import open_connection
+        from resemantica.db.summary_repo import ensure_summary_schema, save_validated_summary
+        from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+        from resemantica.settings import derive_paths, load_config
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        ensure_summary_schema(conn)
+        try:
+            for chapter_number in [1, 2]:
+                save_validated_summary(
+                    conn,
+                    release_id=release_id,
+                    chapter_number=chapter_number,
+                    summary_type="story_so_far_zh_graph_compact",
+                    content_zh=f"第{chapter_number}章图谱连续性。",
+                    derived_from_chapter_hash=f"continuity-source-{chapter_number}",
+                    run_id=run_id,
+                )
+            save_chunk_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                stage_name="preprocess-continuity",
+                chunk_index=0,
+                chapter_start=1,
+                chapter_end=3,
+                status="failed",
+                metadata={"reason": "graph_continuity_output_invalid: empty model output"},
+            )
+        finally:
+            conn.close()
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="preprocess-continuity",
+        )
+
+        assert len(plan.retryable) == 1
+        unit = plan.retryable[0]
+        assert unit.stage == "preprocess-continuity"
+        assert unit.chapter_start == 1
+        assert unit.chapter_end == 3
+        assert unit.chapters == [1, 2, 3]
+        assert unit.reason == "missing_or_stale_graph_continuity_rows_artifacts_or_failed_event"
+
 
 class TestM11CleanupScopes:
     def _create_test_artifacts(self, release_id: str, run_id: str):

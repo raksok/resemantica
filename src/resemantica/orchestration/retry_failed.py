@@ -7,12 +7,20 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal
 
+from resemantica.db.glossary_repo import list_locked_entries
 from resemantica.db.sqlite import ensure_schema, open_connection
-from resemantica.db.summary_repo import get_summary_checkpoint, set_summary_checkpoint
+from resemantica.db.summary_repo import (
+    get_summary_checkpoint,
+    get_validated_summary,
+    list_derived_summaries,
+    set_summary_checkpoint,
+)
 from resemantica.llm.prompts import load_prompt
+from resemantica.orchestration.chunk_checkpoints import list_chunk_checkpoints
 from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.models import StageResult
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.summaries.derivation import hash_locked_glossary, hash_validated_summary
 from resemantica.tracking.repo import ensure_tracking_db, load_events
 
 RetryStage = Literal[
@@ -553,26 +561,54 @@ def _plan_continuity(
         start=start,
         end=end,
     )
+    paths = derive_paths(config, release_id=release_id)
+    locked_glossary = list_locked_entries(conn, release_id=release_id)
+    glossary_hash = hash_locked_glossary(locked_glossary)
     missing = []
     for chapter_number in chapters:
-        try:
-            row = conn.execute(
-                """
-                SELECT 1 FROM validated_summaries_zh
-                WHERE release_id = ?
-                  AND chapter_number = ?
-                  AND summary_type = 'story_so_far_zh_graph_compact'
-                  AND validation_status = 'approved'
-                LIMIT 1
-                """,
-                (release_id, chapter_number),
-            ).fetchone()
-        except sqlite3.OperationalError:
-            row = None
-        if row is None:
+        zh_record = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="story_so_far_zh_graph_compact",
+        )
+        if zh_record is None:
+            missing.append(chapter_number)
+            continue
+
+        expected_source_hash = hash_validated_summary(zh_record)
+        english_current = any(
+            row.summary_type == "story_so_far_en_graph_compact"
+            and row.source_summary_id == zh_record.summary_id
+            and row.source_summary_hash == expected_source_hash
+            and row.glossary_version_hash == glossary_hash
+            for row in list_derived_summaries(conn, release_id=release_id, chapter_number=chapter_number)
+        )
+        artifact_path = paths.summaries_dir / f"chapter-{chapter_number}-graph-continuity.json"
+        if not english_current or not artifact_path.exists():
             missing.append(chapter_number)
     failed = _failed_event_chapters(release_id, run_id, "preprocess-continuity", start, end)
-    affected = _scoped_numbers([*missing, *failed], start, end)
+    failed_chunks: list[int] = []
+    try:
+        checkpoints = list_chunk_checkpoints(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name="preprocess-continuity",
+        )
+    except sqlite3.OperationalError:
+        checkpoints = []
+    chapter_set = set(chapters)
+    for checkpoint in checkpoints:
+        if checkpoint.status != "failed":
+            continue
+        failed_chunks.extend(
+            chapter
+            for chapter in chapters
+            if chapter in chapter_set
+            and checkpoint.chapter_start <= chapter <= checkpoint.chapter_end
+        )
+    affected = _scoped_numbers([*missing, *failed, *failed_chunks], start, end)
     if not affected:
         return [], []
     return [
@@ -581,7 +617,7 @@ def _plan_continuity(
             run_id=run_id,
             stage="preprocess-continuity",
             chapters=affected,
-            reason="missing_graph_continuity_summary_or_failed_event",
+            reason="missing_or_stale_graph_continuity_rows_artifacts_or_failed_event",
         )
     ], []
 
@@ -663,7 +699,7 @@ def plan_retry_failed(
     paths = derive_paths(config_obj, release_id=release_id)
     conn = open_connection(paths.db_path)
     try:
-        for schema in ("summaries", "glossary", "idioms", "graph", "packets", "translation"):
+        for schema in ("summaries", "glossary", "idioms", "graph", "packets", "translation", "chunk_checkpoints"):
             try:
                 ensure_schema(conn, schema)
             except Exception:

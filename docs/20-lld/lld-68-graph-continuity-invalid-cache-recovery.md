@@ -17,20 +17,25 @@ For each graph continuity refresh:
 2. If a cache entry exists, parse and validate its `raw_output`.
 3. Accept the cached output only when it is valid JSON with non-empty
    `continuity_zh`, valid `anchor_audit`, and an in-budget compact text.
-4. If cached output is invalid, ignore it and call the analyst model once.
+4. If cached output is invalid, ignore it and call the analyst model.
 5. Validate the fresh model output before saving it to cache.
-6. Save only validated successful fresh output.
+6. Retry fresh invalid model output within the chapter, without caching invalid
+   attempts.
+7. Save only validated successful fresh output.
 
-Invalid fresh output fails the chapter and does not write a cache entry.
+Invalid fresh output still fails the chapter after retry exhaustion and does not
+write a cache entry.
 
 ## Failure Policy
 
-- Empty model output fails with
+- Empty model output is retryable while attempts remain, then fails with
   `graph_continuity_output_invalid: empty model output`.
-- Malformed JSON or non-object JSON fails with
+- Malformed JSON or non-object JSON is retryable while attempts remain, then
+  fails with
   `graph_continuity_output_invalid: expected JSON object`.
 - Empty `continuity_zh`, over-budget `continuity_zh`, and invalid
-  `anchor_audit` keep their existing validation failures.
+  `anchor_audit` use the same fresh-output retry policy and keep their existing
+  final validation failures.
 
 ## Scope
 
@@ -40,6 +45,9 @@ graph state, packet selection, or chapter-level durable resume behavior.
 ## Tests
 
 - Empty cached graph continuity output is regenerated and overwritten.
-- Malformed cached graph continuity JSON is regenerated once.
-- Fresh empty graph continuity output fails clearly without writing cache.
+- Malformed cached graph continuity JSON is regenerated.
+- Fresh empty graph continuity output retries, succeeds if a later attempt is
+  valid, and writes only valid output to cache.
+- Repeated fresh empty graph continuity output fails clearly without writing
+  cache.
 - Existing graph anchor, persistence, budget, and missing-snapshot checks remain.

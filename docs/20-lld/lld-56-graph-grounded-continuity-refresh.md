@@ -44,8 +44,10 @@ graph_continuity_rebase_interval = 50
    - current chapter number
    - graph anchors
 5. Accept graph continuity LLM cache output only after parsing and validation.
-   Invalid cached output is treated as stale and regenerated once.
-6. Validate fresh model output before writing it to the LLM cache.
+   Invalid cached output is treated as stale and regenerated.
+6. Validate fresh model output before writing it to the LLM cache. Fresh invalid
+   graph compact output receives a small validation retry budget and is never
+   cached unless a retry returns valid output.
 7. Save Chinese output as `story_so_far_zh_graph_compact`.
 8. In chunked batch-order runs, complete all Chinese graph compact rows for the chunk in chapter order before deriving English rows for that chunk.
 9. Derive English inspection text as `story_so_far_en_graph_compact` using source-local locked glossary context for the generated Chinese compact text.
@@ -71,12 +73,16 @@ The selected summary row participates in `summary_version_hash`, so packet metad
 
 - Missing graph snapshot fails `preprocess-continuity`.
 - Missing chapter short summary skips that chapter.
-- Empty or non-JSON fresh model output fails the chapter and is not cached.
-- Empty or non-JSON cached graph continuity output is ignored as stale and regenerated once.
+- Empty or non-JSON fresh model output is retried within the chapter and is not
+  cached unless a retry succeeds.
+- Empty or non-JSON cached graph continuity output is ignored as stale and regenerated.
 - Output exceeding `summaries.story_compact_max_tokens` fails clearly.
 - `SUMMARY_EN_DERIVE` prompt budget overflow fails before the translator LLM call.
 - Chunked resume skips a completed continuity chunk only when the checkpoint range matches, its `last_good_chapter` covers the chunk, expected rows are current, and expected artifacts exist.
 - In incomplete chunked resumes, current approved Chinese graph compact rows may be reused by source hash, and missing or stale English graph compact rows are backfilled without analyst calls.
+- `run retry-failed --stage preprocess-continuity` plans from failed chunk
+  checkpoint boundaries and also treats missing English graph compact rows or
+  missing graph continuity artifacts as retryable continuity work.
 
 ## Tests
 
@@ -85,6 +91,7 @@ The selected summary row participates in `summary_version_hash`, so packet metad
 - rebase interval source selection
 - token budget failure
 - invalid graph continuity cache recovery
+- fresh invalid graph continuity output retry
 - missing snapshot failure
 - packet preference and invalidation
 - prompt JSON-only and anti-restart regression checks

@@ -48,14 +48,17 @@ derived rows already exist and need regeneration, rerun the affected scope with
 ### `preprocess-continuity` fails after empty graph continuity output
 
 **Cause:** A previous analyst model call may have returned empty or malformed
-`SUMMARY_GRAPH_CONTINUITY_UPDATE` output. Older runs could save that invalid
-raw output to the LLM cache, causing repeat failures on rerun.
+`SUMMARY_GRAPH_CONTINUITY_UPDATE` output. Current runs retry fresh invalid
+graph-continuity output before failing. Older runs could save invalid raw output
+to the LLM cache, causing repeat failures on rerun.
 
-**Fix:** Rerun the same continuity command after updating. The stage validates
+**Fix:** Rerun the same continuity command without `--force`. The stage validates
 cached graph continuity output before accepting it; empty, malformed, over-budget,
-or otherwise invalid cached output is treated as stale and regenerated once.
-Fresh invalid output still fails the chapter clearly and is not written back to
-the cache.
+or otherwise invalid cached output is treated as stale and regenerated. Fresh
+invalid attempts are retried, but invalid output is never written back to the
+cache. In batch-order continuity, rerun resumes from the failed chunk boundary
+and backfills missing English rows and artifacts from any current Chinese graph
+compact rows.
 
 ### Pipeline stuck or very slow
 

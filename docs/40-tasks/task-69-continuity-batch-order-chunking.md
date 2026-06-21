@@ -23,6 +23,9 @@ preserving chapter-order Chinese continuity dependencies.
 - Backfill missing or stale English graph compact rows without rerunning the
   analyst model.
 - Keep invalid graph continuity cache recovery behavior unchanged.
+- Retry fresh invalid graph continuity output without caching failed attempts.
+- Plan failed continuity retries from failed chunk boundaries so English rows
+  and artifacts inside a failed chunk are backfilled.
 - Leave last-good-chunk cleanup support for continuity out of scope.
 
 ## Owned Files Or Modules
@@ -50,10 +53,14 @@ CLI behavior is unchanged. `OrchestrationRunner` passes `resume=not force`.
   calls.
 - Stale graph compact rows regenerate when the current source hash differs.
 - Chunk failure records a `chunk_failed` event and failed checkpoint.
+- Fresh invalid graph compact output retries and only valid output is cached.
+- Retry-failed continuity planning includes failed chunk ranges plus missing
+  English graph compact rows or artifacts.
 
 ## Done Criteria
 
 - Chunked `preprocess-continuity` reduces model switching within each chunk.
 - Resume and backfill preserve chapter-order Chinese dependencies.
 - Existing invalid-cache recovery behavior remains covered and passing.
+- Fresh invalid model output is retried, but invalid output remains uncached.
 - Targeted tests and Ruff checks pass.
