@@ -54,12 +54,17 @@ For each active translation chunk:
 
 Existing pass checkpoints and run-state pass lists remain the normal resume authority; chunk checkpoints provide cleanup boundaries.
 
+## Continuity Execution
+
+`preprocess-continuity` also uses `chunk_checkpoints` when batch-order chunking is active. For each active continuity chunk, ordered Chinese graph compact refreshes run first, then English graph compact derivations run for the chunk with `summaries.chapter_concurrency` workers. Continuity chunk checkpoints are resume boundaries only in this milestone; they are not cleanup boundaries for `last-good-chunk`.
+
 ## Cleanup
 
 `last-good-chunk` resolves the stage from tracking run state or `--stage`.
 
 - For `preprocess-summaries`, cleanup removes summary and downstream rows/artifacts after the last completed chunk and rewinds `summary_checkpoints` to `last_good_chapter`.
 - For `translate-range`, cleanup removes translation rows/artifacts after the last completed chunk and trims run-state pass lists to the boundary.
+- `preprocess-continuity` chunk checkpoints are ignored by `last-good-chunk` cleanup in this milestone.
 - Broad cleanup scopes (`run`, `preprocess`, `keep-extracted`, and `all`) delete summary chunk checkpoints outright so summary reruns restart from the remaining extracted chapter input. Only `last-good-chunk` rewinds to a completed chunk boundary.
 
 ## Events

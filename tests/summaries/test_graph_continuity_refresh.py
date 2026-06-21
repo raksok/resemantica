@@ -194,6 +194,23 @@ def _graph_client(release_id: str) -> GraphClient:
     return client
 
 
+def _seed_continuity_prereqs(*, release_id: str, chapters: range | list[int]) -> GraphClient:
+    for chapter_number in chapters:
+        _write_extracted_chapter(release_id=release_id, chapter_number=chapter_number)
+        _seed_short_summary(release_id=release_id, chapter_number=chapter_number)
+    client = _graph_client(release_id)
+    _seed_graph_snapshot(release_id=release_id, graph_client=client)
+    return client
+
+
+def _chunked_config(*, chunk_size: int = 1):
+    config = load_config()
+    config.batch_order.enabled = True
+    config.batch_order.summary_chunk_multiplier = chunk_size
+    config.summaries.chapter_concurrency = 1
+    return config
+
+
 def _graph_continuity_cache_files(release_id: str) -> list[Path]:
     paths = derive_paths(load_config(), release_id=release_id)
     cache_dir = paths.release_root / "cache" / "llm" / "preprocess-continuity.graph-compact"
@@ -279,6 +296,209 @@ def test_refreshed_compact_continuity_includes_required_graph_anchors(tmp_path: 
         assert graph_en.glossary_version_hash == hash_locked_glossary(locked_glossary)
     finally:
         conn.close()
+
+
+def test_chunked_continuity_runs_analyst_then_translator_per_chunk(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m69-model-order"
+    client = _seed_continuity_prereqs(release_id=release_id, chapters=range(1, 6))
+    config = load_config()
+    config.batch_order.enabled = True
+    config.batch_order.summary_chunk_multiplier = 1
+    config.summaries.chapter_concurrency = 2
+    llm = ScriptedContinuityLLM()
+
+    preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-001",
+        config=config,
+        graph_client=client,
+        llm_client=llm,
+    )
+
+    kinds = [
+        "analyst" if "SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt else "translator"
+        for prompt in llm.prompts
+    ]
+    assert kinds == [
+        "analyst",
+        "analyst",
+        "translator",
+        "translator",
+        "analyst",
+        "analyst",
+        "translator",
+        "translator",
+        "analyst",
+        "translator",
+    ]
+
+
+def test_completed_continuity_chunk_resume_skips_when_rows_and_artifacts_complete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m69-completed-skip"
+    client = _seed_continuity_prereqs(release_id=release_id, chapters=[1, 2])
+    config = _chunked_config(chunk_size=1)
+
+    preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-001",
+        config=config,
+        graph_client=client,
+        llm_client=ScriptedContinuityLLM(),
+    )
+    llm = ScriptedContinuityLLM("should-not-run")
+
+    result = preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-001",
+        config=config,
+        graph_client=client,
+        llm_client=llm,
+    )
+
+    assert result["chapters_refreshed"] == 0
+    assert llm.prompts == []
+
+
+def test_chunked_continuity_backfills_english_from_current_graph_rows_without_analyst(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m69-en-backfill"
+    client = _seed_continuity_prereqs(release_id=release_id, chapters=[1, 2])
+    config = _chunked_config(chunk_size=1)
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        for chapter_number in [1, 2]:
+            continuity_input = build_graph_continuity_input(
+                conn=conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                graph_client=client,
+                rebase_interval=config.summaries.graph_continuity_rebase_interval,
+            )
+            save_validated_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                summary_type="story_so_far_zh_graph_compact",
+                content_zh=f"已有第{chapter_number}章图谱连续性。",
+                derived_from_chapter_hash=continuity_input.source_hash,
+                run_id="seed",
+            )
+    finally:
+        conn.close()
+    llm = ScriptedContinuityLLM("should-not-generate-zh")
+
+    preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-001",
+        config=config,
+        graph_client=client,
+        llm_client=llm,
+    )
+
+    assert sum("SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt for prompt in llm.prompts) == 0
+    assert sum("SUMMARY_EN_DERIVE" in prompt for prompt in llm.prompts) == 2
+
+
+def test_chunked_continuity_regenerates_stale_graph_compact_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m69-stale-zh"
+    client = _seed_continuity_prereqs(release_id=release_id, chapters=[1, 2])
+    config = _chunked_config(chunk_size=1)
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        save_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=1,
+            summary_type="story_so_far_zh_graph_compact",
+            content_zh="旧图谱连续性。",
+            derived_from_chapter_hash="stale-source-hash",
+            run_id="seed",
+        )
+    finally:
+        conn.close()
+    llm = ScriptedContinuityLLM("新图谱连续性。")
+
+    preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-001",
+        config=config,
+        graph_client=client,
+        llm_client=llm,
+    )
+
+    assert sum("SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt for prompt in llm.prompts) >= 1
+    conn = open_connection(paths.db_path)
+    try:
+        row = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=1,
+            summary_type="story_so_far_zh_graph_compact",
+        )
+    finally:
+        conn.close()
+    assert row is not None
+    assert row.derived_from_chapter_hash != "stale-source-hash"
+    assert row.content_zh == "新图谱连续性。"
+
+
+def test_chunked_continuity_failure_records_chunk_failed_event_and_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m69-chunk-failed"
+    client = _seed_continuity_prereqs(release_id=release_id, chapters=[1, 2])
+    config = _chunked_config(chunk_size=1)
+
+    with pytest.raises(ValueError, match="graph_continuity_output_invalid: empty model output"):
+        preprocess_continuity(
+            release_id=release_id,
+            run_id="continuity-001",
+            config=config,
+            graph_client=client,
+            llm_client=RawGraphContinuityLLM([""]),
+        )
+
+    tracking = ensure_tracking_db(release_id)
+    try:
+        events = load_events(tracking, run_id="continuity-001", release_id=release_id, limit=100)
+    finally:
+        tracking.close()
+    assert any(event.event_type == "preprocess-continuity.chunk_failed" for event in events)
+
+    from resemantica.orchestration.chunk_checkpoints import load_chunk_checkpoint
+
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    try:
+        checkpoint = load_chunk_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id="continuity-001",
+            stage_name="preprocess-continuity",
+            chunk_index=0,
+        )
+    finally:
+        conn.close()
+    assert checkpoint is not None
+    assert checkpoint.status == "failed"
 
 
 def test_empty_cached_graph_continuity_output_is_regenerated(tmp_path: Path, monkeypatch) -> None:

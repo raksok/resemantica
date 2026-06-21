@@ -624,6 +624,7 @@ class OrchestrationRunner:
                 config=self.config,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
+                resume=not force,
                 force=force,
                 stop_token=stop_token,
             )

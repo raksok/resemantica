@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -15,6 +16,7 @@ from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import (
     ValidatedSummaryZhRecord,
     get_validated_summary,
+    list_derived_summaries,
     list_validated_summaries,
     save_derived_summary,
     save_validated_summary,
@@ -30,6 +32,10 @@ from resemantica.llm.client import (
 )
 from resemantica.llm.prompts import PromptTemplate, load_prompt, render_named_sections
 from resemantica.llm.tokens import count_tokens
+from resemantica.orchestration.chunk_checkpoints import (
+    load_chunk_checkpoint,
+    save_chunk_checkpoint,
+)
 from resemantica.orchestration.stop import StopRequested, StopToken, raise_if_stop_requested
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
@@ -52,6 +58,23 @@ class GraphContinuityInput:
     graph_anchors_zh: str
     graph_anchor_audit: dict[str, object]
     source_hash: str
+
+
+@dataclass(slots=True)
+class _GraphContinuityZhResult:
+    chapter_number: int
+    continuity_input: GraphContinuityInput
+    record: ValidatedSummaryZhRecord
+    model_anchor_audit: dict[str, object]
+    artifact_path: Path
+
+
+@dataclass(slots=True)
+class _GraphContinuityEnResult:
+    chapter_number: int
+    record: ValidatedSummaryZhRecord
+    en_record: Any
+    artifact_path: Path
 
 
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
@@ -322,6 +345,209 @@ def refresh_graph_continuity_text(
     return compact, audit
 
 
+def _chunk_refs(chapter_refs: list[Any], chunk_size: int) -> list[list[Any]]:
+    if chunk_size <= 0:
+        return [chapter_refs]
+    return [chapter_refs[index : index + chunk_size] for index in range(0, len(chapter_refs), chunk_size)]
+
+
+def _chunk_event_payload(
+    *,
+    chunk_index: int,
+    chunk_count: int,
+    refs: list[Any],
+    chunk_size: int,
+    last_good_chapter: int,
+) -> dict[str, object]:
+    return {
+        "chunk_index": chunk_index,
+        "chunk_count": chunk_count,
+        "chapter_start": refs[0].chapter_number,
+        "chapter_end": refs[-1].chapter_number,
+        "chunk_size": chunk_size,
+        "last_good_chapter": last_good_chapter,
+    }
+
+
+def _artifact_path(paths: Any, chapter_number: int) -> Path:
+    return paths.summaries_dir / f"chapter-{chapter_number}-graph-continuity.json"
+
+
+def _current_graph_en_record(
+    conn: Any,
+    *,
+    release_id: str,
+    chapter_number: int,
+    zh_record: ValidatedSummaryZhRecord,
+    glossary_hash: str,
+) -> Any | None:
+    expected_source_hash = hash_validated_summary(zh_record)
+    for row in list_derived_summaries(conn, release_id=release_id, chapter_number=chapter_number):
+        if (
+            row.summary_type == "story_so_far_en_graph_compact"
+            and row.source_summary_id == zh_record.summary_id
+            and row.source_summary_hash == expected_source_hash
+            and row.glossary_version_hash == glossary_hash
+        ):
+            return row
+    return None
+
+
+def _load_existing_model_anchor_audit(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    audit = payload.get("model_anchor_audit", {})
+    return dict(audit) if isinstance(audit, dict) else {}
+
+
+def _write_graph_continuity_artifact(
+    *,
+    path: Path,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    zh_record: ValidatedSummaryZhRecord,
+    en_record: Any,
+    continuity_input: GraphContinuityInput,
+    model_anchor_audit: dict[str, object],
+) -> None:
+    _write_json(
+        path,
+        {
+            "release_id": release_id,
+            "run_id": run_id,
+            "chapter_number": chapter_number,
+            "schema_version": 1,
+            "validated": {
+                "story_so_far_zh_graph_compact": zh_record.to_json_dict(),
+            },
+            "derived": {
+                "story_so_far_en_graph_compact": en_record.to_json_dict(),
+            },
+            "graph_anchor_audit": continuity_input.graph_anchor_audit,
+            "model_anchor_audit": model_anchor_audit,
+            "graph_anchors_zh": continuity_input.graph_anchors_zh,
+        },
+    )
+
+
+def _completed_chunk_is_resume_skippable(
+    conn: Any,
+    *,
+    checkpoint: Any,
+    paths: Any,
+    release_id: str,
+    refs: list[Any],
+    graph_client: GraphClient,
+    config: AppConfig,
+    glossary_hash: str,
+) -> bool:
+    if checkpoint.status != "completed":
+        return False
+    try:
+        last_good_chapter = int(checkpoint.metadata.get("last_good_chapter", 0))
+    except (TypeError, ValueError):
+        return False
+    if int(checkpoint.chapter_start) != refs[0].chapter_number:
+        return False
+    if int(checkpoint.chapter_end) != refs[-1].chapter_number:
+        return False
+    if last_good_chapter < refs[-1].chapter_number:
+        return False
+
+    for ref in refs:
+        chapter_number = ref.chapter_number
+        if get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="chapter_summary_zh_short",
+        ) is None:
+            continue
+        continuity_input = build_graph_continuity_input(
+            conn=conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            graph_client=graph_client,
+            rebase_interval=config.summaries.graph_continuity_rebase_interval,
+        )
+        zh_record = get_validated_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=chapter_number,
+            summary_type="story_so_far_zh_graph_compact",
+        )
+        if zh_record is None or zh_record.derived_from_chapter_hash != continuity_input.source_hash:
+            return False
+        if (
+            _current_graph_en_record(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                zh_record=zh_record,
+                glossary_hash=glossary_hash,
+            )
+            is None
+        ):
+            return False
+        if not _artifact_path(paths, chapter_number).exists():
+            return False
+    return True
+
+
+def _derive_graph_compact_english(
+    *,
+    db_path: Path,
+    release_id: str,
+    run_id: str,
+    llm_client: LLMClient,
+    model_name: str,
+    prompt: PromptTemplate,
+    zh_result: _GraphContinuityZhResult,
+    locked_glossary: list[Any],
+    glossary_hash: str,
+    config: AppConfig,
+) -> _GraphContinuityEnResult:
+    en_text = derive_english_summary(
+        llm_client=llm_client,
+        model_name=model_name,
+        prompt_template=prompt.template,
+        source_text_zh=zh_result.record.content_zh,
+        locked_glossary=locked_glossary,
+        config=config,
+        stage_name=f"{_STAGE_NAME}.graph-compact-en",
+        chapter_number=zh_result.chapter_number,
+    )
+    conn = open_connection(db_path)
+    ensure_schema(conn, "summaries")
+    try:
+        en_record = save_derived_summary(
+            conn,
+            release_id=release_id,
+            chapter_number=zh_result.chapter_number,
+            summary_type="story_so_far_en_graph_compact",
+            content_en=en_text,
+            source_summary_id=zh_result.record.summary_id,
+            source_summary_hash=hash_validated_summary(zh_result.record),
+            glossary_version_hash=glossary_hash,
+            model_name=model_name,
+            prompt_version=prompt.version,
+            run_id=run_id,
+        )
+    finally:
+        conn.close()
+    return _GraphContinuityEnResult(
+        chapter_number=zh_result.chapter_number,
+        record=zh_result.record,
+        en_record=en_record,
+        artifact_path=zh_result.artifact_path,
+    )
+
+
 def preprocess_continuity(
     *,
     release_id: str,
@@ -333,7 +559,8 @@ def preprocess_continuity(
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     stop_token: StopToken | None = None,
-    force: bool = False,  # noqa: ARG001 - kept for stage API parity
+    resume: bool = True,
+    force: bool = False,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -366,130 +593,291 @@ def preprocess_continuity(
         refreshed: list[dict[str, object]] = []
         locked_glossary = list_locked_entries(conn, release_id=release_id)
         glossary_hash = hash_locked_glossary(locked_glossary)
-        for ref in chapter_refs:
-            chapter_number = ref.chapter_number
-            raise_if_stop_requested(
-                stop_token,
-                checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
-                message="Continuity refresh stopped before next chapter",
-            )
-            if get_validated_summary(
-                conn,
-                release_id=release_id,
-                chapter_number=chapter_number,
-                summary_type="chapter_summary_zh_short",
-            ) is None:
-                logger.info("Chapter {} skipped: missing chapter short summary", chapter_number)
-                _emit(
-                    run_id,
-                    release_id,
-                    f"{_STAGE_NAME}.chapter_skipped",
-                    chapter_number=chapter_number,
-                    reason="missing_chapter_summary_short",
-                )
-                continue
+        effective_chunk_size = (
+            config_obj.batch_order.summary_chunk_multiplier
+            * config_obj.summaries.chapter_concurrency
+        )
+        chunked = config_obj.batch_order.enabled and len(chapter_refs) > effective_chunk_size
+        chunks = _chunk_refs(chapter_refs, effective_chunk_size) if chunked else [chapter_refs]
+        completed_chunk_index = -1
+        last_good_chapter = 0
 
-            _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_started", chapter_number=chapter_number)
-            try:
-                continuity_input = build_graph_continuity_input(
-                    conn=conn,
+        for chunk_index, chunk_refs in enumerate(chunks):
+            if chunked and resume and not force:
+                chunk_checkpoint = load_chunk_checkpoint(
+                    conn,
                     release_id=release_id,
-                    chapter_number=chapter_number,
+                    run_id=run_id,
+                    stage_name=_STAGE_NAME,
+                    chunk_index=chunk_index,
+                )
+                if chunk_checkpoint is not None and _completed_chunk_is_resume_skippable(
+                    conn,
+                    checkpoint=chunk_checkpoint,
+                    paths=paths,
+                    release_id=release_id,
+                    refs=chunk_refs,
                     graph_client=graph,
-                    rebase_interval=config_obj.summaries.graph_continuity_rebase_interval,
-                )
-                compact_text, model_anchor_audit = refresh_graph_continuity_text(
-                    llm_client=client,
-                    release_id=release_id,
-                    model_name=config_obj.models.analyst_name,
-                    prompt=prompt,
-                    continuity_input=continuity_input,
                     config=config_obj,
-                    cache_root=paths.release_root / "cache" / "llm",
+                    glossary_hash=glossary_hash,
+                ):
+                    completed_chunk_index = chunk_index
+                    last_good_chapter = chunk_refs[-1].chapter_number
+                    continue
+
+            if chunked:
+                payload = _chunk_event_payload(
+                    chunk_index=chunk_index,
+                    chunk_count=len(chunks),
+                    refs=chunk_refs,
+                    chunk_size=effective_chunk_size,
+                    last_good_chapter=last_good_chapter,
                 )
-                record = save_validated_summary(
+                _emit(run_id, release_id, f"{_STAGE_NAME}.chunk_started", **payload)
+                save_chunk_checkpoint(
                     conn,
                     release_id=release_id,
-                    chapter_number=chapter_number,
-                    summary_type="story_so_far_zh_graph_compact",
-                    content_zh=compact_text,
-                    derived_from_chapter_hash=continuity_input.source_hash,
                     run_id=run_id,
-                    validation_status="approved",
+                    stage_name=_STAGE_NAME,
+                    chunk_index=chunk_index,
+                    chapter_start=chunk_refs[0].chapter_number,
+                    chapter_end=chunk_refs[-1].chapter_number,
+                    status="running",
+                    metadata=payload,
                 )
-                en_text = derive_english_summary(
-                    llm_client=client,
-                    model_name=config_obj.models.translator_name,
-                    prompt_template=prompt_en.template,
-                    source_text_zh=compact_text,
-                    locked_glossary=locked_glossary,
-                    config=config_obj,
-                    stage_name=f"{_STAGE_NAME}.graph-compact-en",
-                    chapter_number=chapter_number,
-                )
-                en_record = save_derived_summary(
-                    conn,
-                    release_id=release_id,
-                    chapter_number=chapter_number,
-                    summary_type="story_so_far_en_graph_compact",
-                    content_en=en_text,
-                    source_summary_id=record.summary_id,
-                    source_summary_hash=hash_validated_summary(record),
-                    glossary_version_hash=glossary_hash,
-                    model_name=config_obj.models.translator_name,
-                    prompt_version=prompt_en.version,
-                    run_id=run_id,
-                )
-                artifact_path = paths.summaries_dir / f"chapter-{chapter_number}-graph-continuity.json"
-                _write_json(
-                    artifact_path,
-                    {
-                        "release_id": release_id,
-                        "run_id": run_id,
-                        "chapter_number": chapter_number,
-                        "schema_version": 1,
-                        "validated": {
-                            "story_so_far_zh_graph_compact": record.to_json_dict(),
-                        },
-                        "derived": {
-                            "story_so_far_en_graph_compact": en_record.to_json_dict(),
-                        },
-                        "graph_anchor_audit": continuity_input.graph_anchor_audit,
-                        "model_anchor_audit": model_anchor_audit,
-                        "graph_anchors_zh": continuity_input.graph_anchors_zh,
-                    },
-                )
-                refreshed.append(
-                    {
-                        "chapter_number": chapter_number,
-                        "summary_id": record.summary_id,
-                        "artifact": str(artifact_path),
-                        "anchor_count": continuity_input.graph_anchor_audit["entity_count"],
-                    }
-                )
-                _emit(
-                    run_id,
-                    release_id,
-                    f"{_STAGE_NAME}.chapter_completed",
-                    chapter_number=chapter_number,
-                    summary_id=record.summary_id,
-                    artifact_path=str(artifact_path),
-                )
-                raise_if_stop_requested(
-                    stop_token,
-                    checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
-                    message=f"Continuity refresh stopped after chapter {chapter_number}",
-                )
+
+            zh_results: list[_GraphContinuityZhResult] = []
+            failed_chapter_number = chunk_refs[0].chapter_number
+            try:
+                for ref in chunk_refs:
+                    chapter_number = ref.chapter_number
+                    failed_chapter_number = chapter_number
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
+                        message="Continuity refresh stopped before next chapter",
+                    )
+                    if get_validated_summary(
+                        conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="chapter_summary_zh_short",
+                    ) is None:
+                        logger.info("Chapter {} skipped: missing chapter short summary", chapter_number)
+                        _emit(
+                            run_id,
+                            release_id,
+                            f"{_STAGE_NAME}.chapter_skipped",
+                            chapter_number=chapter_number,
+                            reason="missing_chapter_summary_short",
+                        )
+                        last_good_chapter = chapter_number
+                        continue
+
+                    _emit(run_id, release_id, f"{_STAGE_NAME}.chapter_started", chapter_number=chapter_number)
+                    continuity_input = build_graph_continuity_input(
+                        conn=conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        graph_client=graph,
+                        rebase_interval=config_obj.summaries.graph_continuity_rebase_interval,
+                    )
+                    artifact_path = _artifact_path(paths, chapter_number)
+                    existing_record = get_validated_summary(
+                        conn,
+                        release_id=release_id,
+                        chapter_number=chapter_number,
+                        summary_type="story_so_far_zh_graph_compact",
+                    )
+                    can_reuse_zh = (
+                        chunked
+                        and resume
+                        and not force
+                        and existing_record is not None
+                        and existing_record.derived_from_chapter_hash == continuity_input.source_hash
+                    )
+                    if can_reuse_zh:
+                        record = existing_record
+                        model_anchor_audit = _load_existing_model_anchor_audit(artifact_path)
+                    else:
+                        compact_text, model_anchor_audit = refresh_graph_continuity_text(
+                            llm_client=client,
+                            release_id=release_id,
+                            model_name=config_obj.models.analyst_name,
+                            prompt=prompt,
+                            continuity_input=continuity_input,
+                            config=config_obj,
+                            cache_root=paths.release_root / "cache" / "llm",
+                        )
+                        record = save_validated_summary(
+                            conn,
+                            release_id=release_id,
+                            chapter_number=chapter_number,
+                            summary_type="story_so_far_zh_graph_compact",
+                            content_zh=compact_text,
+                            derived_from_chapter_hash=continuity_input.source_hash,
+                            run_id=run_id,
+                            validation_status="approved",
+                        )
+                    zh_results.append(
+                        _GraphContinuityZhResult(
+                            chapter_number=chapter_number,
+                            continuity_input=continuity_input,
+                            record=record,
+                            model_anchor_audit=model_anchor_audit,
+                            artifact_path=artifact_path,
+                        )
+                    )
+
+                english_jobs: list[_GraphContinuityZhResult] = []
+                existing_english: list[tuple[_GraphContinuityZhResult, Any]] = []
+                for zh_result in zh_results:
+                    en_record = (
+                        _current_graph_en_record(
+                            conn,
+                            release_id=release_id,
+                            chapter_number=zh_result.chapter_number,
+                            zh_record=zh_result.record,
+                            glossary_hash=glossary_hash,
+                        )
+                        if chunked and resume and not force
+                        else None
+                    )
+                    if en_record is None:
+                        english_jobs.append(zh_result)
+                    else:
+                        existing_english.append((zh_result, en_record))
+
+                completed_english: list[_GraphContinuityEnResult] = []
+                if english_jobs:
+                    with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
+                        futures = {
+                            executor.submit(
+                                _derive_graph_compact_english,
+                                db_path=paths.db_path,
+                                release_id=release_id,
+                                run_id=run_id,
+                                llm_client=client,
+                                model_name=config_obj.models.translator_name,
+                                prompt=prompt_en,
+                                zh_result=zh_result,
+                                locked_glossary=locked_glossary,
+                                glossary_hash=glossary_hash,
+                                config=config_obj,
+                            ): zh_result
+                            for zh_result in english_jobs
+                        }
+                        for future in as_completed(futures):
+                            failed_chapter_number = futures[future].chapter_number
+                            completed_english.append(future.result())
+
+                english_by_chapter: dict[int, tuple[_GraphContinuityZhResult, Any]] = {
+                    zh_result.chapter_number: (zh_result, en_record)
+                    for zh_result, en_record in existing_english
+                }
+                for en_result in completed_english:
+                    source = next(
+                        result
+                        for result in zh_results
+                        if result.chapter_number == en_result.chapter_number
+                    )
+                    english_by_chapter[en_result.chapter_number] = (source, en_result.en_record)
+
+                for zh_result in sorted(zh_results, key=lambda result: result.chapter_number):
+                    en_record = english_by_chapter[zh_result.chapter_number][1]
+                    _write_graph_continuity_artifact(
+                        path=zh_result.artifact_path,
+                        release_id=release_id,
+                        run_id=run_id,
+                        chapter_number=zh_result.chapter_number,
+                        zh_record=zh_result.record,
+                        en_record=en_record,
+                        continuity_input=zh_result.continuity_input,
+                        model_anchor_audit=zh_result.model_anchor_audit,
+                    )
+                    refreshed.append(
+                        {
+                            "chapter_number": zh_result.chapter_number,
+                            "summary_id": zh_result.record.summary_id,
+                            "artifact": str(zh_result.artifact_path),
+                            "anchor_count": zh_result.continuity_input.graph_anchor_audit["entity_count"],
+                        }
+                    )
+                    last_good_chapter = zh_result.chapter_number
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chapter_completed",
+                        chapter_number=zh_result.chapter_number,
+                        summary_id=zh_result.record.summary_id,
+                        artifact_path=str(zh_result.artifact_path),
+                    )
+                    raise_if_stop_requested(
+                        stop_token,
+                        checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
+                        message=f"Continuity refresh stopped after chapter {zh_result.chapter_number}",
+                    )
+
+                if chunked:
+                    last_good_chapter = chunk_refs[-1].chapter_number
+                    completed_chunk_index = chunk_index
+                    payload = _chunk_event_payload(
+                        chunk_index=chunk_index,
+                        chunk_count=len(chunks),
+                        refs=chunk_refs,
+                        chunk_size=effective_chunk_size,
+                        last_good_chapter=last_good_chapter,
+                    )
+                    _emit(run_id, release_id, f"{_STAGE_NAME}.chunk_completed", **payload)
+                    save_chunk_checkpoint(
+                        conn,
+                        release_id=release_id,
+                        run_id=run_id,
+                        stage_name=_STAGE_NAME,
+                        chunk_index=chunk_index,
+                        chapter_start=chunk_refs[0].chapter_number,
+                        chapter_end=chunk_refs[-1].chapter_number,
+                        status="completed",
+                        metadata=payload,
+                    )
             except StopRequested:
                 raise
             except Exception as exc:
+                if chunked:
+                    payload = _chunk_event_payload(
+                        chunk_index=chunk_index,
+                        chunk_count=len(chunks),
+                        refs=chunk_refs,
+                        chunk_size=effective_chunk_size,
+                        last_good_chapter=last_good_chapter,
+                    )
+                    _emit(
+                        run_id,
+                        release_id,
+                        f"{_STAGE_NAME}.chunk_failed",
+                        severity="error",
+                        message=f"Continuity chunk {chunk_index} failed: {exc}",
+                        reason=str(exc),
+                        **payload,
+                    )
+                    save_chunk_checkpoint(
+                        conn,
+                        release_id=release_id,
+                        run_id=run_id,
+                        stage_name=_STAGE_NAME,
+                        chunk_index=chunk_index,
+                        chapter_start=chunk_refs[0].chapter_number,
+                        chapter_end=chunk_refs[-1].chapter_number,
+                        status="failed",
+                        metadata={**payload, "reason": str(exc)},
+                    )
                 _emit(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.chapter_failed",
-                    chapter_number=chapter_number,
+                    chapter_number=failed_chapter_number,
                     severity="error",
-                    message=f"Continuity refresh failed for chapter {chapter_number}: {exc}",
+                    message=f"Continuity refresh failed for chapter {failed_chapter_number}: {exc}",
                     reason=str(exc),
                 )
                 raise
@@ -509,5 +897,10 @@ def preprocess_continuity(
         "run_id": run_id,
         "chapters_refreshed": len(refreshed),
         "chapter_artifacts": refreshed,
+        "checkpoint": {
+            "chunked": chunked,
+            "completed_chunk_index": completed_chunk_index,
+            "last_good_chapter": last_good_chapter,
+        },
         **usage_payload_delta(client, usage_before),
     }

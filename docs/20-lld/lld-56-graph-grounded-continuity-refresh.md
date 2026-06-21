@@ -47,8 +47,9 @@ graph_continuity_rebase_interval = 50
    Invalid cached output is treated as stale and regenerated once.
 6. Validate fresh model output before writing it to the LLM cache.
 7. Save Chinese output as `story_so_far_zh_graph_compact`.
-8. Derive English inspection text as `story_so_far_en_graph_compact` using source-local locked glossary context for the generated Chinese compact text.
-9. Write a per-chapter graph continuity artifact containing the summary row and anchor audit metadata.
+8. In chunked batch-order runs, complete all Chinese graph compact rows for the chunk in chapter order before deriving English rows for that chunk.
+9. Derive English inspection text as `story_so_far_en_graph_compact` using source-local locked glossary context for the generated Chinese compact text.
+10. Write a per-chapter graph continuity artifact containing the summary row and anchor audit metadata.
 
 ## Rebase Behavior
 
@@ -74,6 +75,8 @@ The selected summary row participates in `summary_version_hash`, so packet metad
 - Empty or non-JSON cached graph continuity output is ignored as stale and regenerated once.
 - Output exceeding `summaries.story_compact_max_tokens` fails clearly.
 - `SUMMARY_EN_DERIVE` prompt budget overflow fails before the translator LLM call.
+- Chunked resume skips a completed continuity chunk only when the checkpoint range matches, its `last_good_chapter` covers the chunk, expected rows are current, and expected artifacts exist.
+- In incomplete chunked resumes, current approved Chinese graph compact rows may be reused by source hash, and missing or stale English graph compact rows are backfilled without analyst calls.
 
 ## Tests
 
