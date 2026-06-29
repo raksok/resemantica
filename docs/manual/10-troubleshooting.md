@@ -60,6 +60,19 @@ cache. In batch-order continuity, rerun resumes from the failed chunk boundary
 and backfills missing English rows and artifacts from any current Chinese graph
 compact rows.
 
+### `preprocess-continuity` fails with graph-compact prompt budget exceeded
+
+**Cause:** Older continuity code rendered the full chapter-safe graph into each
+`SUMMARY_GRAPH_CONTINUITY_UPDATE` prompt. Late in a long release, the safe graph
+can grow to thousands of entities and relationships and exceed the analyst
+prompt budget before any model call.
+
+**Fix:** Update to the bounded-anchor continuity code and rerun the same command
+without `--force`. Completed chunks remain resumable from their checkpoints; the
+failed chunk rebuilds with current/recent graph anchors while the full raw graph
+still drives continuity staleness detection. Raising analyst context limits can
+temporarily defer the failure, but it does not solve ongoing graph growth.
+
 ### Pipeline stuck or very slow
 
 **Cause:** Single-model concurrency (default: 1).

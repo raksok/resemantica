@@ -49,6 +49,8 @@ from resemantica.utils import _emit as _emit_shared
 _STAGE_NAME = "preprocess-continuity"
 _RECENT_SUMMARY_WINDOW = 3
 _MAX_GRAPH_CONTINUITY_ATTEMPTS = 4
+_GRAPH_CONTINUITY_ANCHOR_MAX_TOKENS = 12_000
+_MAX_ALIASES_PER_ANCHOR_ENTITY = 6
 
 
 @dataclass(slots=True)
@@ -129,12 +131,9 @@ def _anchor_entity_name(entity_id: str, entity_names: dict[str, str]) -> str:
     return entity_names.get(entity_id, entity_id)
 
 
-def build_graph_continuity_anchors(
-    *,
-    graph_client: GraphClient,
-    chapter_number: int,
-) -> tuple[str, dict[str, object]]:
-    subgraph = graph_client.get_chapter_safe_subgraph(chapter_number=chapter_number)
+def _ordered_graph_anchor_rows(
+    subgraph: dict[str, list[Any]],
+) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
     entities = sorted(subgraph["entities"], key=lambda row: row.entity_id)
     aliases = sorted(subgraph["aliases"], key=lambda row: (row.entity_id, row.alias_text, row.alias_id))
     appearances = sorted(
@@ -142,6 +141,100 @@ def build_graph_continuity_anchors(
         key=lambda row: (row.entity_id, row.chapter_number, row.appearance_id),
     )
     relationships = sorted(subgraph["relationships"], key=lambda row: row.relationship_id)
+    return entities, aliases, appearances, relationships
+
+
+def _append_anchor_line(
+    lines: list[str],
+    line: str,
+    *,
+    max_tokens: int | None,
+) -> bool:
+    if max_tokens is None:
+        lines.append(line)
+        return True
+    candidate = "\n".join([*lines, line])
+    if count_tokens(candidate) > max_tokens:
+        return False
+    lines.append(line)
+    return True
+
+
+def _graph_anchor_audit(
+    *,
+    chapter_number: int,
+    entities: list[Any],
+    aliases: list[Any],
+    appearances: list[Any],
+    relationships: list[Any],
+) -> dict[str, object]:
+    return {
+        "chapter_number": chapter_number,
+        "entity_ids": [row.entity_id for row in entities],
+        "alias_ids": [row.alias_id for row in aliases],
+        "appearance_ids": [row.appearance_id for row in appearances],
+        "relationship_ids": [row.relationship_id for row in relationships],
+        "entity_count": len(entities),
+        "alias_count": len(aliases),
+        "appearance_count": len(appearances),
+        "relationship_count": len(relationships),
+    }
+
+
+def build_graph_continuity_anchors(
+    *,
+    graph_client: GraphClient,
+    chapter_number: int,
+    recent_summary_chapters: list[int] | None = None,
+    max_anchor_tokens: int | None = None,
+    _raw_anchor_text_for_audit: str | None = None,
+) -> tuple[str, dict[str, object]]:
+    subgraph = graph_client.get_chapter_safe_subgraph(chapter_number=chapter_number)
+    entities, aliases, appearances, relationships = _ordered_graph_anchor_rows(subgraph)
+    raw_audit = _graph_anchor_audit(
+        chapter_number=chapter_number,
+        entities=entities,
+        aliases=aliases,
+        appearances=appearances,
+        relationships=relationships,
+    )
+
+    selected_recent_chapters = set(recent_summary_chapters or [])
+    if max_anchor_tokens is not None and selected_recent_chapters:
+        recent_entity_ids = {
+            row.entity_id
+            for row in appearances
+            if row.chapter_number in selected_recent_chapters
+        }
+        if recent_entity_ids:
+            entities = sorted(
+                entities,
+                key=lambda row: (
+                    row.entity_id not in recent_entity_ids,
+                    -row.last_seen_chapter,
+                    row.canonical_name,
+                    row.entity_id,
+                ),
+            )
+            relationships = sorted(
+                relationships,
+                key=lambda row: (
+                    not (
+                        row.source_entity_id in recent_entity_ids
+                        and row.target_entity_id in recent_entity_ids
+                    ),
+                    not (
+                        row.source_entity_id in recent_entity_ids
+                        or row.target_entity_id in recent_entity_ids
+                    ),
+                    -max(row.source_chapter, row.start_chapter, row.revealed_chapter),
+                    -row.confidence,
+                    row.relationship_id,
+                ),
+            )
+    else:
+        recent_entity_ids = set()
+
     entity_names = {row.entity_id: row.canonical_name for row in entities}
 
     aliases_by_entity: dict[str, list[str]] = {}
@@ -153,44 +246,138 @@ def build_graph_continuity_anchors(
         appearances_by_entity.setdefault(appearance.entity_id, []).append(appearance.chapter_number)
 
     lines: list[str] = []
+    selected_entities: list[Any] = []
+    selected_alias_ids: set[str] = set()
+    selected_entity_ids: set[str] = set()
     if entities:
-        lines.append("实体锚点：")
+        entity_lines: list[str] = []
         for entity in entities:
-            alias_text = "、".join(dict.fromkeys(aliases_by_entity.get(entity.entity_id, [])))
+            if max_anchor_tokens is not None and recent_entity_ids and entity.entity_id not in recent_entity_ids:
+                continue
+            alias_values = list(dict.fromkeys(aliases_by_entity.get(entity.entity_id, [])))
+            alias_text = "、".join(alias_values[:_MAX_ALIASES_PER_ANCHOR_ENTITY])
             seen = sorted(set(appearances_by_entity.get(entity.entity_id, [])))
             seen_text = f"出场至第{seen[-1]}章" if seen else f"首次第{entity.first_seen_chapter}章"
             alias_suffix = f"，别名：{alias_text}" if alias_text else ""
-            lines.append(
+            entity_lines.append(
                 f"- {entity.canonical_name}（{entity.entity_type}，{seen_text}，"
                 f"揭示第{entity.revealed_chapter}章{alias_suffix}）"
             )
+            selected_entities.append(entity)
+            selected_entity_ids.add(entity.entity_id)
+            if max_anchor_tokens is not None:
+                selected_alias_ids.update(
+                    alias.alias_id
+                    for alias in aliases
+                    if alias.entity_id == entity.entity_id
+                    and alias.alias_text in alias_values[:_MAX_ALIASES_PER_ANCHOR_ENTITY]
+                )
 
+        if entity_lines:
+            section: list[str] = ["实体锚点："]
+            for line in entity_lines:
+                if not _append_anchor_line(section, line, max_tokens=max_anchor_tokens):
+                    break
+            if len(section) > 1 and _append_anchor_line(lines, "\n".join(section), max_tokens=max_anchor_tokens):
+                selected_count = len(section) - 1
+                selected_entities = selected_entities[:selected_count]
+                selected_entity_ids = {row.entity_id for row in selected_entities}
+                selected_alias_ids = {
+                    alias.alias_id
+                    for alias in aliases
+                    if alias.entity_id in selected_entity_ids
+                    and alias.alias_text in aliases_by_entity.get(alias.entity_id, [])[:_MAX_ALIASES_PER_ANCHOR_ENTITY]
+                }
+            else:
+                selected_entities = []
+                selected_entity_ids = set()
+                selected_alias_ids = set()
+
+    selected_relationships: list[Any] = []
     if relationships:
-        lines.append("关系锚点：")
+        relationship_lines: list[tuple[str, Any]] = []
         for rel in relationships:
+            if max_anchor_tokens is not None and recent_entity_ids and (
+                rel.source_entity_id not in recent_entity_ids
+                and rel.target_entity_id not in recent_entity_ids
+            ):
+                continue
             source_name = _anchor_entity_name(rel.source_entity_id, entity_names)
             target_name = _anchor_entity_name(rel.target_entity_id, entity_names)
             lore_suffix = f"，已揭示：{rel.lore_text.strip()}" if rel.lore_text else ""
-            lines.append(
-                f"- {source_name} {rel.type} {target_name}（第{rel.start_chapter}章起，"
-                f"揭示第{rel.revealed_chapter}章{lore_suffix}）"
+            relationship_lines.append(
+                (
+                    f"- {source_name} {rel.type} {target_name}（第{rel.start_chapter}章起，"
+                    f"揭示第{rel.revealed_chapter}章{lore_suffix}）",
+                    rel,
+                )
             )
+        if relationship_lines:
+            section = ["关系锚点："]
+            for line, rel in relationship_lines:
+                if not _append_anchor_line(section, line, max_tokens=max_anchor_tokens):
+                    break
+                selected_relationships.append(rel)
+            if len(section) > 1 and not _append_anchor_line(lines, "\n".join(section), max_tokens=max_anchor_tokens):
+                selected_relationships = []
 
     if not lines:
         lines.append("无已确认且章节安全的图谱锚点。")
 
-    audit = {
-        "chapter_number": chapter_number,
-        "entity_ids": [row.entity_id for row in entities],
-        "alias_ids": [row.alias_id for row in aliases],
-        "appearance_ids": [row.appearance_id for row in appearances],
-        "relationship_ids": [row.relationship_id for row in relationships],
-        "entity_count": len(entities),
-        "alias_count": len(aliases),
-        "appearance_count": len(appearances),
-        "relationship_count": len(relationships),
-    }
-    return "\n".join(lines), audit
+    if max_anchor_tokens is None:
+        selected_entities = entities
+        selected_alias_ids = {row.alias_id for row in aliases}
+        selected_entity_ids = {row.entity_id for row in entities}
+        selected_relationships = relationships
+
+    selected_aliases = [row for row in aliases if row.alias_id in selected_alias_ids]
+    if max_anchor_tokens is not None and selected_recent_chapters:
+        selected_appearances = [
+            row
+            for row in appearances
+            if row.entity_id in selected_entity_ids and row.chapter_number in selected_recent_chapters
+        ]
+    else:
+        selected_appearances = [row for row in appearances if row.entity_id in selected_entity_ids]
+    anchor_text = "\n".join(lines)
+    audit = _graph_anchor_audit(
+        chapter_number=chapter_number,
+        entities=selected_entities,
+        aliases=selected_aliases,
+        appearances=selected_appearances,
+        relationships=selected_relationships,
+    )
+    if max_anchor_tokens is not None:
+        raw_anchor_text = _raw_anchor_text_for_audit
+        if raw_anchor_text is None:
+            raw_anchor_text, _ = build_graph_continuity_anchors(
+                graph_client=graph_client,
+                chapter_number=chapter_number,
+            )
+        audit.update(
+            {
+                "anchor_pruned": audit != raw_audit,
+                "anchor_token_count": count_tokens(anchor_text),
+                "anchor_token_budget": max_anchor_tokens,
+                "raw_anchor_token_count": count_tokens(raw_anchor_text),
+                "raw_entity_count": raw_audit["entity_count"],
+                "raw_alias_count": raw_audit["alias_count"],
+                "raw_appearance_count": raw_audit["appearance_count"],
+                "raw_relationship_count": raw_audit["relationship_count"],
+            }
+        )
+    return anchor_text, audit
+
+
+def _build_raw_graph_continuity_anchors(
+    *,
+    graph_client: GraphClient,
+    chapter_number: int,
+) -> tuple[str, dict[str, object]]:
+    return build_graph_continuity_anchors(
+        graph_client=graph_client,
+        chapter_number=chapter_number,
+    )
 
 
 def _milestone_base_record(
@@ -248,12 +435,22 @@ def build_graph_continuity_input(
         recent = [row for row in recent if row.chapter_number <= chapter_number]
         recent = recent[-_RECENT_SUMMARY_WINDOW:]
 
-    anchors, audit = build_graph_continuity_anchors(
+    raw_anchors, raw_audit = _build_raw_graph_continuity_anchors(
         graph_client=graph_client,
         chapter_number=chapter_number,
     )
+    anchors, audit = build_graph_continuity_anchors(
+        graph_client=graph_client,
+        chapter_number=chapter_number,
+        recent_summary_chapters=[row.chapter_number for row in recent],
+        max_anchor_tokens=_GRAPH_CONTINUITY_ANCHOR_MAX_TOKENS,
+        _raw_anchor_text_for_audit=raw_anchors,
+    )
     audit["base_chapter_number"] = base_chapter
     audit["recent_summary_chapters"] = [row.chapter_number for row in recent]
+    source_audit = dict(raw_audit)
+    source_audit["base_chapter_number"] = base_chapter
+    source_audit["recent_summary_chapters"] = [row.chapter_number for row in recent]
     source_payload = {
         "previous_graph_compact": previous_text,
         "recent_summaries": [
@@ -265,8 +462,8 @@ def build_graph_continuity_input(
             }
             for row in recent
         ],
-        "graph_anchors_zh": anchors,
-        "graph_anchor_audit": audit,
+        "graph_anchors_zh": raw_anchors,
+        "graph_anchor_audit": source_audit,
     }
     return GraphContinuityInput(
         previous_graph_compact=previous_text,
@@ -706,6 +903,20 @@ def preprocess_continuity(
                         graph_client=graph,
                         rebase_interval=config_obj.summaries.graph_continuity_rebase_interval,
                     )
+                    if continuity_input.graph_anchor_audit.get("anchor_pruned"):
+                        _emit(
+                            run_id,
+                            release_id,
+                            f"{_STAGE_NAME}.graph_anchors_pruned",
+                            chapter_number=chapter_number,
+                            anchor_token_count=continuity_input.graph_anchor_audit.get("anchor_token_count"),
+                            anchor_token_budget=continuity_input.graph_anchor_audit.get("anchor_token_budget"),
+                            raw_anchor_token_count=continuity_input.graph_anchor_audit.get("raw_anchor_token_count"),
+                            entity_count=continuity_input.graph_anchor_audit.get("entity_count"),
+                            raw_entity_count=continuity_input.graph_anchor_audit.get("raw_entity_count"),
+                            relationship_count=continuity_input.graph_anchor_audit.get("relationship_count"),
+                            raw_relationship_count=continuity_input.graph_anchor_audit.get("raw_relationship_count"),
+                        )
                     artifact_path = _artifact_path(paths, chapter_number)
                     existing_record = get_validated_summary(
                         conn,

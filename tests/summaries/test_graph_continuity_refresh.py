@@ -18,7 +18,8 @@ from resemantica.db.summary_repo import (
 from resemantica.glossary.models import LockedGlossaryEntry
 from resemantica.glossary.validators import normalize_term
 from resemantica.graph.client import GraphClient, InMemoryGraphBackend
-from resemantica.graph.models import GraphAlias, GraphEntity, GraphRelationship
+from resemantica.graph.models import GraphAlias, GraphAppearance, GraphEntity, GraphRelationship
+from resemantica.llm.tokens import count_tokens
 from resemantica.settings import derive_paths, load_config
 from resemantica.summaries.continuity import (
     build_graph_continuity_anchors,
@@ -194,6 +195,92 @@ def _graph_client(release_id: str) -> GraphClient:
     return client
 
 
+def _large_graph_client(release_id: str, *, unrelated_count: int = 80) -> GraphClient:
+    client = GraphClient(backend=InMemoryGraphBackend())
+    entities = [
+        GraphEntity("ent_current", release_id, "character", "Current Hero", None, 1, 5, 1, "confirmed"),
+        GraphEntity("ent_partner", release_id, "faction", "Current Sect", None, 1, 5, 1, "confirmed"),
+    ]
+    aliases = [
+        GraphAlias("alias_current", release_id, "ent_current", "当前主角", "zh", 5, 5, 5, 0.9, False, "confirmed"),
+        GraphAlias("alias_partner", release_id, "ent_partner", "当前宗门", "zh", 5, 5, 5, 0.9, False, "confirmed"),
+    ]
+    appearances = [
+        GraphAppearance("app_current", release_id, "ent_current", 5, "当前主角出现。", "confirmed"),
+        GraphAppearance("app_partner", release_id, "ent_partner", 5, "当前宗门出现。", "confirmed"),
+    ]
+    relationships = [
+        GraphRelationship(
+            "rel_current",
+            release_id,
+            "MEMBER_OF",
+            "ent_current",
+            "ent_partner",
+            5,
+            5,
+            None,
+            5,
+            0.95,
+            "confirmed",
+        )
+    ]
+    for index in range(unrelated_count):
+        entity_id = f"ent_old_{index:03d}"
+        target_id = f"ent_old_target_{index:03d}"
+        entities.extend(
+            [
+                GraphEntity(entity_id, release_id, "character", f"Old Character {index}", None, 1, 4, 1, "confirmed"),
+                GraphEntity(target_id, release_id, "location", f"Old Place {index}", None, 1, 4, 1, "confirmed"),
+            ]
+        )
+        aliases.append(
+            GraphAlias(
+                f"alias_old_{index:03d}",
+                release_id,
+                entity_id,
+                f"旧人物{index}",
+                "zh",
+                1,
+                4,
+                1,
+                0.8,
+                False,
+                "confirmed",
+            )
+        )
+        appearances.append(
+            GraphAppearance(
+                f"app_old_{index:03d}",
+                release_id,
+                entity_id,
+                1,
+                f"旧人物{index}出现。",
+                "confirmed",
+            )
+        )
+        relationships.append(
+            GraphRelationship(
+                f"rel_old_{index:03d}",
+                release_id,
+                "LOCATED_IN",
+                entity_id,
+                target_id,
+                1,
+                1,
+                None,
+                1,
+                0.8,
+                "confirmed",
+                lore_text="一段很长的旧关系说明。" * 4,
+            )
+        )
+    client.upsert_entities(entities=entities)
+    client.upsert_aliases(aliases=aliases)
+    client.upsert_appearances(appearances=appearances)
+    client.upsert_relationships(relationships=relationships)
+    return client
+
+
 def _seed_continuity_prereqs(*, release_id: str, chapters: range | list[int]) -> GraphClient:
     for chapter_number in chapters:
         _write_extracted_chapter(release_id=release_id, chapter_number=chapter_number)
@@ -262,6 +349,151 @@ def test_graph_anchors_exclude_future_relationships_and_aliases(tmp_path: Path, 
     assert "rel_future" not in audit["relationship_ids"]
     assert "alias_safe" in audit["alias_ids"]
     assert "alias_future" not in audit["alias_ids"]
+
+
+def test_budgeted_graph_anchors_prioritize_recent_entities_and_prune_global_graph(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m70-anchor-pruning"
+    client = _large_graph_client(release_id, unrelated_count=80)
+
+    anchors, audit = build_graph_continuity_anchors(
+        graph_client=client,
+        chapter_number=5,
+        recent_summary_chapters=[5],
+        max_anchor_tokens=350,
+    )
+
+    assert count_tokens(anchors) <= 350
+    assert "Current Hero" in anchors
+    assert "Current Sect" in anchors
+    assert "MEMBER_OF" in anchors
+    assert "Old Character 0" not in anchors
+    assert audit["anchor_pruned"] is True
+    assert audit["raw_entity_count"] > audit["entity_count"]
+    assert audit["raw_relationship_count"] > audit["relationship_count"]
+
+
+def test_budgeted_graph_anchors_keep_future_state_excluded(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m70-anchor-future-safe"
+    client = _graph_client(release_id)
+
+    anchors, audit = build_graph_continuity_anchors(
+        graph_client=client,
+        chapter_number=2,
+        recent_summary_chapters=[2],
+        max_anchor_tokens=500,
+    )
+
+    assert "张三" in anchors
+    assert "玄天真人" not in anchors
+    assert "rel_member" in audit["relationship_ids"]
+    assert "rel_future" not in audit["relationship_ids"]
+    assert "alias_safe" in audit["alias_ids"]
+    assert "alias_future" not in audit["alias_ids"]
+
+
+def test_graph_continuity_source_hash_uses_full_raw_anchor_set(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m70-source-hash-raw-anchors"
+    client = _large_graph_client(release_id, unrelated_count=0)
+    paths = derive_paths(load_config(), release_id=release_id)
+    conn = open_connection(paths.db_path)
+    ensure_summary_schema(conn)
+    try:
+        for chapter_number in [3, 4, 5]:
+            save_validated_summary(
+                conn,
+                release_id=release_id,
+                chapter_number=chapter_number,
+                summary_type="chapter_summary_zh_short",
+                content_zh=f"第{chapter_number}章短摘要。",
+                derived_from_chapter_hash=f"hash-ch{chapter_number}",
+                run_id="seed",
+            )
+        first = build_graph_continuity_input(
+            conn=conn,
+            release_id=release_id,
+            chapter_number=5,
+            graph_client=client,
+            rebase_interval=50,
+        )
+        client.upsert_entities(
+            entities=[
+                GraphEntity(
+                    "ent_raw_only",
+                    release_id,
+                    "location",
+                    "Raw Only Place",
+                    None,
+                    1,
+                    2,
+                    1,
+                    "confirmed",
+                )
+            ]
+        )
+        second = build_graph_continuity_input(
+            conn=conn,
+            release_id=release_id,
+            chapter_number=5,
+            graph_client=client,
+            rebase_interval=50,
+        )
+    finally:
+        conn.close()
+
+    assert "Raw Only Place" not in first.graph_anchors_zh
+    assert "Raw Only Place" not in second.graph_anchors_zh
+    assert first.graph_anchors_zh == second.graph_anchors_zh
+    assert first.source_hash != second.source_hash
+
+
+def test_preprocess_continuity_prunes_large_anchor_prompt_and_emits_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("resemantica.summaries.continuity._GRAPH_CONTINUITY_ANCHOR_MAX_TOKENS", 350)
+    release_id = "m70-preprocess-anchor-pruning"
+    _write_extracted_chapter(release_id=release_id, chapter_number=5)
+    _seed_short_summary(release_id=release_id, chapter_number=5)
+    client = _large_graph_client(release_id, unrelated_count=80)
+    _seed_graph_snapshot(release_id=release_id, graph_client=client)
+    llm = ScriptedContinuityLLM("当前主角属于当前宗门。")
+    config = load_config()
+    config.models.analyst_context_window = None
+    config.budget.max_context_per_pass = 3000
+
+    result = preprocess_continuity(
+        release_id=release_id,
+        run_id="continuity-001",
+        config=config,
+        graph_client=client,
+        llm_client=llm,
+    )
+
+    assert result["status"] == "success"
+    graph_prompt = next(prompt for prompt in llm.prompts if "SUMMARY_GRAPH_CONTINUITY_UPDATE" in prompt)
+    assert count_tokens(graph_prompt) <= config.budget.max_context_per_pass
+    assert "Current Hero" in graph_prompt
+    assert "Old Character 0" not in graph_prompt
+    tracking = ensure_tracking_db(release_id)
+    try:
+        events = load_events(tracking, run_id="continuity-001", release_id=release_id, limit=100)
+    finally:
+        tracking.close()
+    pruned_events = [
+        event for event in events if event.event_type == "preprocess-continuity.graph_anchors_pruned"
+    ]
+    assert len(pruned_events) == 1
+    assert pruned_events[0].payload["raw_entity_count"] > pruned_events[0].payload["entity_count"]
 
 
 def test_refreshed_compact_continuity_includes_required_graph_anchors(tmp_path: Path, monkeypatch) -> None:

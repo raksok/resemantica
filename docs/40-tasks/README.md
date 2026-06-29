@@ -87,3 +87,4 @@ Always follow the milestone sequence below.
 | M67 | task-67 | M66 | Summary English Source-Local Glossary |
 | M68 | task-68 | M67 | Graph Continuity Invalid Cache Recovery |
 | M69 | task-69 | M68 | Continuity Batch-Order Chunking |
+| M70 | task-70 | M69 | Budgeted Graph Continuity Anchors |
