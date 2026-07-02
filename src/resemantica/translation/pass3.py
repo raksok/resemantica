@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from resemantica.llm.budget import ensure_prompt_within_budget
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
+from resemantica.settings import AppConfig, load_config
 
 
 def translate_pass3(
@@ -15,6 +17,8 @@ def translate_pass3(
     alias_resolutions: str = "",
     matched_idioms: str = "",
     relationship_constraints: str = "",
+    config: AppConfig | None = None,
+    chapter_number: int | None = None,
 ) -> str:
     prompt = render_named_sections(
         prompt_template,
@@ -26,5 +30,11 @@ def translate_pass3(
             "MATCHED_IDIOMS": matched_idioms,
             "RELATIONSHIP_CONSTRAINTS": relationship_constraints,
         },
+    )
+    ensure_prompt_within_budget(
+        prompt,
+        config=config or load_config(),
+        stage_name="translate.pass3",
+        chapter_number=chapter_number,
     )
     return client.generate_text(model_name=model_name, prompt=prompt)

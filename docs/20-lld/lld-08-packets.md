@@ -42,11 +42,11 @@ Minimum packet sections:
 1. Load validated upstream authority datasets.
 2. Load confirmed graph state through chapter-safe filters.
 3. Identify active entities for chapter `N` from chapter source, glossary hits, summaries, and recent context.
-4. Compact eligible graph context into packet sections without dumping unrestricted subgraphs.
-5. Call `llm.tokens.count_tokens()` on each assembled packet section, apply the 5% safety buffer (multiply each raw count by 1.05, per D22). If the buffered total exceeds `max_context_per_pass` (49152), trim sections following the degrade order (`broad_continuity` → `fuzzy_candidates` → `rerank_depth` → `pass3` → `fallback_model`) until under budget.
+4. Compact eligible graph context into packet sections without dumping unrestricted subgraphs. Graph context is bounded before packet artifact write, retaining chapter-local entities, direct source alias hits, glossary-linked entities, current-chapter appearances, and local relationships first.
+5. Call `llm.tokens.count_tokens()` on every prompt-relevant packet section, apply the 5% safety buffer (multiply each raw count by 1.05, per D22). If the buffered total exceeds `packets.budget_tokens` or the fallback `max_context_per_pass` (49152), trim sections following the degrade order (`broad_continuity` → `fuzzy_candidates` → `rerank_depth` → `pass3` → `fallback_model`) until under budget.
 6. Build chapter packet JSON with all required hashes.
 7. Persist packet metadata in SQLite.
-8. Derive paragraph bundles from local packet sections and source block context. Count tokens per bundle; if a bundle exceeds `max_bundle_bytes`, trim lower-priority retrieval evidence.
+8. Derive paragraph bundles from local packet sections and source block context. Count tokens per bundle; if a bundle exceeds `packets.max_bundle_bytes`, trim lower-priority retrieval evidence.
 9. Apply retrieval arbitration so locked glossary and deterministic idioms outrank graph suggestions.
 10. Refuse broad full-chapter dumps in bundle output.
 
@@ -82,12 +82,14 @@ Minimum packet sections:
 - packets are immutable artifacts
 - upstream hash change marks packet stale
 - graph snapshot hash change marks dependent packets stale
+- packet builder version change marks dependent packets stale
 - stale packets must be rebuilt before dependent translation reruns
 - `summary_version_hash` now includes structured summary content (new_terms, etc.)
 - `summary_version_hash` includes `story_so_far_zh_compact` when present; compact continuity changes trigger packet rebuilds
 - no explicit `resume` flag needed — staleness detection provides resume-by-cache-hit
 - `run retry-failed --stage packets-build` retries chapters with missing packet metadata or persisted packet chapter-failure events. Normal packet staleness still decides whether each targeted packet is rebuilt or skipped as up to date.
 - `packets build --force` sets `force_rebuild=True`, ignores an `up_to_date` metadata hit, and rebuilds requested packets with `forced_rebuild` as the stale reason
+- `packet_builder_version` participates in staleness, so packet artifacts rebuild when budget semantics change
 
 ## Post-MVP Improvements
 
@@ -127,6 +129,14 @@ class PacketConfig:
 ```
 
 Parsed from `[packets]` section in `resemantica.toml`. The builder uses `config.packets.*` instead of `config.budget.*` for packet-specific settings. `BudgetConfig` fields retained for backward compatibility.
+
+### P4 — Context Budget Guardrails
+
+Packet graph sections are bounded at source before packet artifacts are written.
+The packet budget accounts for all prompt-relevant sections, including
+structured summary and active arc text. Translation Pass 1, Pass 2, and Pass 3
+also check rendered prompt size before calling the LLM; translation reports a
+clear `prompt_budget_exceeded` error instead of silently dropping context.
 
 ## Out Of Scope
 

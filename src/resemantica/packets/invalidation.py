@@ -11,6 +11,7 @@ def detect_stale_packet(
     summary_version_hash: str,
     graph_snapshot_hash: str,
     idiom_policy_hash: str,
+    packet_builder_version: str | None = None,
 ) -> PacketStaleness:
     if packet_metadata is None:
         return PacketStaleness(
@@ -29,9 +30,10 @@ def detect_stale_packet(
         reasons.append("graph_snapshot_hash_changed")
     if packet_metadata.idiom_policy_hash != idiom_policy_hash:
         reasons.append("idiom_policy_hash_changed")
+    if packet_builder_version is not None and packet_metadata.packet_builder_version != packet_builder_version:
+        reasons.append("packet_builder_version_changed")
 
     return PacketStaleness(
         is_stale=bool(reasons),
         reasons=reasons,
     )
-

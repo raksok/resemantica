@@ -6,8 +6,10 @@ from typing import Any
 
 from loguru import logger
 
+from resemantica.llm.budget import ensure_prompt_within_budget
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
+from resemantica.settings import AppConfig, load_config
 
 
 def translate_pass2(
@@ -29,6 +31,7 @@ def translate_pass2(
     block_id: str | None = None,
     segment_id: str | None = None,
     fallback_callback: Callable[[dict[str, Any]], None] | None = None,
+    config: AppConfig | None = None,
 ) -> str:
     prior_segments = "\n".join(prior_segment_translations or [])
     prompt = render_named_sections(
@@ -45,6 +48,12 @@ def translate_pass2(
             "CONTINUITY_NOTES": continuity_notes,
             "RETRIEVAL_EVIDENCE": retrieval_evidence,
         },
+    )
+    ensure_prompt_within_budget(
+        prompt,
+        config=config or load_config(),
+        stage_name="translate.pass2",
+        chapter_number=chapter_number,
     )
     response = client.generate_text(model_name=model_name, prompt=prompt)
 

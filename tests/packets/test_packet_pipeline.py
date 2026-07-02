@@ -17,9 +17,9 @@ from resemantica.graph.client import GraphClient, InMemoryGraphBackend
 from resemantica.graph.models import GraphAlias, GraphAppearance, GraphEntity, GraphRelationship
 from resemantica.idioms.models import IdiomPolicy
 from resemantica.idioms.validators import normalize_idiom_source
-from resemantica.packets.builder import _apply_packet_budget, build_chapter_packet
+from resemantica.packets.builder import _apply_packet_budget, build_chapter_packet, enrich_with_graph_context
 from resemantica.packets.invalidation import detect_stale_packet
-from resemantica.packets.models import ChapterPacket
+from resemantica.packets.models import PACKET_BUILDER_VERSION, ChapterPacket
 from resemantica.settings import derive_paths, load_config
 
 
@@ -541,6 +541,7 @@ def test_stale_detection_triggers_packet_rebuild(
         summary_version_hash="changed-summary-hash",
         graph_snapshot_hash=metadata.graph_snapshot_hash,
         idiom_policy_hash=metadata.idiom_policy_hash,
+        packet_builder_version=metadata.packet_builder_version,
     )
     assert stale.is_stale
     assert "summary_version_hash_changed" in stale.reasons
@@ -917,7 +918,8 @@ def test_packet_size_budget_trims_lower_priority_sections(
     )
 
     config = load_config()
-    config.budget.max_context_per_pass = 190
+    config.budget.max_context_per_pass = 10_000
+    config.packets.budget_tokens = 260
     result = build_chapter_packet(
         release_id=release_id,
         chapter_number=2,
@@ -928,11 +930,253 @@ def test_packet_size_budget_trims_lower_priority_sections(
     packet_payload = _read_json(Path(result.packet_path))
     trimmed = list(packet_payload["trimmed_sections"])
     assert trimmed
+    assert "chapter_summary_short" in packet_payload["section_token_counts"]
+    assert "chapter_summary_structured" in packet_payload["section_token_counts"]
+    assert "active_arc_summary" in packet_payload["section_token_counts"]
     buffered_total = sum(
         int(row["buffered_tokens"])
         for row in dict(packet_payload["section_token_counts"]).values()
     )
-    assert buffered_total <= config.budget.max_context_per_pass
+    assert buffered_total <= config.packets.budget_tokens
+
+
+def test_packet_uses_packet_specific_bundle_byte_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m71-packet-bundle-budget"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三加入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction"), ("李四", "Li Si", "character")],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。附加信息。" * 8,
+        story_so_far="第1章：张三入门。" * 12,
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    config = load_config()
+    config.budget.max_bundle_bytes = 20_000
+    config.packets.max_bundle_bytes = 1_400
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        config=config,
+        graph_client=graph_client,
+    )
+    bundles_payload = _read_json(Path(result.bundle_path))
+    bundle = dict(list(bundles_payload["bundles"])[0])
+
+    assert int(bundle["size_bytes"]) <= config.packets.max_bundle_bytes
+    assert bundle["trimmed_sections"]
+
+
+def test_packet_graph_context_is_bounded_and_prioritizes_local_rows() -> None:
+    release_id = "m71-graph-bound"
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    glossary_entry = LockedGlossaryEntry(
+        glossary_entry_id="glex_local",
+        release_id=release_id,
+        source_term="本地人",
+        normalized_source_term="本地人",
+        target_term="Local One",
+        normalized_target_term="local one",
+        category="character",
+        status="approved",
+        approved_at=datetime.now(UTC).isoformat(),
+        approval_run_id="seed",
+        source_candidate_id="gcan_local",
+        schema_version=1,
+    )
+    entities = [
+        GraphEntity(
+            entity_id="ent_local",
+            release_id=release_id,
+            entity_type="character",
+            canonical_name="Local One",
+            glossary_entry_id="glex_local",
+            first_seen_chapter=1,
+            last_seen_chapter=10,
+            revealed_chapter=1,
+            status="confirmed",
+        )
+    ]
+    aliases = [
+        GraphAlias(
+            alias_id="alias_local",
+            release_id=release_id,
+            entity_id="ent_local",
+            alias_text="本地人",
+            alias_language="zh",
+            first_seen_chapter=1,
+            last_seen_chapter=10,
+            revealed_chapter=1,
+            confidence=0.9,
+            is_masked_identity=False,
+            status="confirmed",
+        )
+    ]
+    appearances = [
+        GraphAppearance(
+            appearance_id="app_local",
+            release_id=release_id,
+            entity_id="ent_local",
+            chapter_number=5,
+            evidence_snippet="本地人出现",
+            status="confirmed",
+        )
+    ]
+    relationships: list[GraphRelationship] = []
+    for idx in range(40):
+        entity_id = f"ent_noise_{idx:02d}"
+        entities.append(
+            GraphEntity(
+                entity_id=entity_id,
+                release_id=release_id,
+                entity_type="character",
+                canonical_name="Noise Character " + ("x" * 80),
+                glossary_entry_id=None,
+                first_seen_chapter=1,
+                last_seen_chapter=10,
+                revealed_chapter=1,
+                status="confirmed",
+            )
+        )
+        aliases.append(
+            GraphAlias(
+                alias_id=f"alias_noise_{idx:02d}",
+                release_id=release_id,
+                entity_id=entity_id,
+                alias_text=f"噪音{idx:02d}",
+                alias_language="zh",
+                first_seen_chapter=1,
+                last_seen_chapter=10,
+                revealed_chapter=1,
+                confidence=0.6,
+                is_masked_identity=False,
+                status="confirmed",
+            )
+        )
+        appearances.append(
+            GraphAppearance(
+                appearance_id=f"app_noise_{idx:02d}",
+                release_id=release_id,
+                entity_id=entity_id,
+                chapter_number=5,
+                evidence_snippet="噪音角色出现",
+                status="confirmed",
+            )
+        )
+        relationships.append(
+            GraphRelationship(
+                relationship_id=f"rel_noise_{idx:02d}",
+                release_id=release_id,
+                type="ALLY_OF",
+                source_entity_id="ent_local",
+                target_entity_id=entity_id,
+                source_chapter=1,
+                start_chapter=1,
+                end_chapter=None,
+                revealed_chapter=1,
+                confidence=0.5,
+                status="confirmed",
+                lore_text="noise lore " + ("x" * 120),
+            )
+        )
+    graph_client.upsert_entities(entities=entities)
+    graph_client.upsert_aliases(aliases=aliases)
+    graph_client.upsert_appearances(appearances=appearances)
+    graph_client.upsert_relationships(relationships=relationships)
+
+    context = enrich_with_graph_context(
+        chapter_number=5,
+        source_text="本地人出现。",
+        glossary_subset=[glossary_entry],
+        graph_client=graph_client,
+        max_graph_tokens=120,
+    )
+
+    assert [row["entity_id"] for row in context["entity_context"]][0] == "ent_local"
+    assert any(row["alias_id"] == "alias_local" for row in context["alias_resolution_candidates"])
+    assert len(context["relationship_context"]) < len(relationships)
+
+
+def test_packet_staleness_detects_builder_version_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m71-builder-version"
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三进入青云门。",
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction"), ("李四", "Li Si", "character")],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        graph_client=graph_client,
+    )
+
+    config = load_config()
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    from resemantica.db.packet_repo import get_latest_packet_metadata
+
+    metadata = get_latest_packet_metadata(conn, release_id=release_id, chapter_number=1)
+    conn.close()
+    assert metadata is not None
+    assert metadata.packet_builder_version == PACKET_BUILDER_VERSION
+
+    stale = detect_stale_packet(
+        metadata,
+        chapter_source_hash=metadata.chapter_source_hash,
+        glossary_version_hash=metadata.glossary_version_hash,
+        summary_version_hash=metadata.summary_version_hash,
+        graph_snapshot_hash=metadata.graph_snapshot_hash,
+        idiom_policy_hash=metadata.idiom_policy_hash,
+        packet_builder_version="future-version",
+    )
+    assert result.packet_hash
+    assert stale.is_stale
+    assert "packet_builder_version_changed" in stale.reasons
 
 
 def test_retrieval_precedence_glossary_beats_graph_alias(
@@ -1030,7 +1274,7 @@ def test_apply_packet_budget_respects_budget_tokens_override(monkeypatch) -> Non
         packet_builder_version="test",
         built_at="now",
     )
-    degraded, counts = _apply_packet_budget(packet=packet, config=config, budget_tokens=25)
+    degraded, counts = _apply_packet_budget(packet=packet, config=config, budget_tokens=35)
     assert "broad_continuity" in degraded
     assert isinstance(counts, dict)
 

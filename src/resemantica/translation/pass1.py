@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 
+from resemantica.llm.budget import ensure_prompt_within_budget
 from resemantica.llm.client import LLMClient
 from resemantica.llm.prompts import render_named_sections
+from resemantica.settings import AppConfig, load_config
 
 _CHINESE_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
 
@@ -58,6 +60,8 @@ def translate_pass1(
     alias_resolutions: str = "",
     matched_idioms: str = "",
     continuity_notes: str = "",
+    config: AppConfig | None = None,
+    chapter_number: int | None = None,
 ) -> str:
     prompt = render_named_sections(
         prompt_template,
@@ -68,6 +72,12 @@ def translate_pass1(
             "CONTINUITY_NOTES": continuity_notes,
             "SOURCE_TEXT": source_text,
         },
+    )
+    ensure_prompt_within_budget(
+        prompt,
+        config=config or load_config(),
+        stage_name="translate.pass1",
+        chapter_number=chapter_number,
     )
     raw_output = client.generate_text(model_name=model_name, prompt=prompt)
     stripped = _strip_artifacts(raw_output, source_text)

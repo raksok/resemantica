@@ -372,6 +372,8 @@ def translate_chapter_pass1(
                     alias_resolutions=bundle_ctx["alias_resolutions"],
                     matched_idioms=bundle_ctx["matched_idioms"],
                     continuity_notes=bundle_ctx["continuity_notes"],
+                    config=config_obj,
+                    chapter_number=chapter_number,
                 )
                 structure = validate_structure(cleaned_source, draft_text)
                 pass1_structure_checks.append(
@@ -543,6 +545,8 @@ def translate_chapter_pass1(
                         alias_resolutions=bundle_ctx["alias_resolutions"],
                         matched_idioms=bundle_ctx["matched_idioms"],
                         continuity_notes=bundle_ctx["continuity_notes"],
+                        config=config_obj,
+                        chapter_number=chapter_number,
                     )
                     segment_structure = validate_structure(segment_cleaned, segment_draft)
                     pass1_structure_checks.append(
@@ -719,6 +723,7 @@ def _process_pass2_block(
     release_id: str,
     run_id: str,
     chapter_number: int,
+    config: AppConfig,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     source_text = str(block["source_text_zh"])
     parent_block_id = str(block["parent_block_id"])
@@ -762,6 +767,7 @@ def _process_pass2_block(
                 chapter_number=chapter_number,
                 block_id=parent_block_id,
                 segment_id=segment_id,
+                config=config,
                 fallback_callback=lambda payload: _emit_pass2_fallback_event(
                     release_id=release_id,
                     run_id=run_id,
@@ -873,6 +879,7 @@ def _process_pass2_block(
         retrieval_evidence=pass2_context["retrieval_evidence"],
         chapter_number=chapter_number,
         block_id=block_id,
+        config=config,
         fallback_callback=lambda payload: _emit_pass2_fallback_event(
             release_id=release_id,
             run_id=run_id,
@@ -1100,6 +1107,7 @@ def translate_chapter_pass2(
                             release_id=release_id,
                             run_id=run_id,
                             chapter_number=chapter_number,
+                            config=config_obj,
                         )
                         fut_map[fut] = i
 
@@ -1507,6 +1515,8 @@ def translate_chapter_pass3(
                 alias_resolutions=pass3_context["alias_resolutions"],
                 matched_idioms=pass3_context["matched_idioms"],
                 relationship_constraints=pass3_context["relationship_constraints"],
+                config=config_obj,
+                chapter_number=chapter_number,
             )
 
             integrity = validate_pass3_integrity(

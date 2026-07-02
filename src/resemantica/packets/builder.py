@@ -48,6 +48,7 @@ from resemantica.utils import _emit as _emit_shared
 
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _STAGE_NAME = "packets-build"
+_DEFAULT_PACKET_GRAPH_BUDGET_TOKENS = 12_000
 
 
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
@@ -168,12 +169,83 @@ def _relationship_context_row(
     }
 
 
+def _context_token_count(sections: dict[str, object]) -> int:
+    return count_tokens(_canonical_json(sections))
+
+
+def _append_graph_row(
+    sections: dict[str, list[dict[str, object]]],
+    section_name: str,
+    row: dict[str, object],
+    *,
+    max_tokens: int | None,
+) -> bool:
+    if max_tokens is None:
+        sections[section_name].append(row)
+        return True
+
+    candidate = {name: [*rows] for name, rows in sections.items()}
+    candidate[section_name].append(row)
+    if _context_token_count(candidate) > max_tokens:
+        return False
+    sections[section_name].append(row)
+    return True
+
+
+def _bounded_graph_sections(
+    *,
+    entity_context: list[dict[str, object]],
+    relationship_context: list[dict[str, object]],
+    chapter_safe_relationship_snippets: list[dict[str, object]],
+    alias_resolution_candidates: list[dict[str, object]],
+    reveal_safe_identity_notes: list[dict[str, object]],
+    max_tokens: int | None,
+    priority_entity_ids: set[str] | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    sections: dict[str, list[dict[str, object]]] = {
+        "entity_context": [],
+        "relationship_context": [],
+        "chapter_safe_relationship_snippets": [],
+        "alias_resolution_candidates": [],
+        "reveal_safe_identity_notes": [],
+    }
+    if max_tokens is None:
+        return {
+            "entity_context": entity_context,
+            "relationship_context": relationship_context,
+            "chapter_safe_relationship_snippets": chapter_safe_relationship_snippets,
+            "alias_resolution_candidates": alias_resolution_candidates,
+            "reveal_safe_identity_notes": reveal_safe_identity_notes,
+        }
+
+    priority_entity_ids = priority_entity_ids or set()
+    priority_entities = [
+        row for row in entity_context if str(row.get("entity_id", "")) in priority_entity_ids
+    ]
+    secondary_entities = [
+        row for row in entity_context if str(row.get("entity_id", "")) not in priority_entity_ids
+    ]
+
+    for section_name, rows in (
+        ("entity_context", priority_entities),
+        ("alias_resolution_candidates", alias_resolution_candidates),
+        ("entity_context", secondary_entities),
+        ("relationship_context", relationship_context),
+        ("chapter_safe_relationship_snippets", chapter_safe_relationship_snippets),
+        ("reveal_safe_identity_notes", reveal_safe_identity_notes),
+    ):
+        for row in rows:
+            _append_graph_row(sections, section_name, row, max_tokens=max_tokens)
+    return sections
+
+
 def enrich_with_graph_context(
     *,
     chapter_number: int,
     source_text: str,
     glossary_subset: list[LockedGlossaryEntry],
     graph_client: GraphClient,
+    max_graph_tokens: int | None = _DEFAULT_PACKET_GRAPH_BUDGET_TOKENS,
 ) -> dict[str, list[dict[str, object]]]:
     entities = graph_client.list_entities(status="confirmed")
     aliases = graph_client.list_aliases(status="confirmed")
@@ -208,6 +280,17 @@ def enrich_with_graph_context(
         appearance.entity_id
         for appearance in chapter_view.appearances
         if appearance.chapter_number == chapter_number
+    }
+    priority_entity_ids = {
+        entity.entity_id
+        for entity in chapter_view.entities
+        if entity.glossary_entry_id is not None and entity.glossary_entry_id in glossary_entry_ids
+    }
+    priority_entity_ids |= {
+        alias.entity_id
+        for alias in chapter_view.aliases
+        if alias.alias_text in source_text
+        and alias.alias_text not in glossary_terms
     }
 
     local_entities = [
@@ -297,21 +380,28 @@ def enrich_with_graph_context(
         if row.source_entity_id in local_entity_ids or row.target_entity_id in local_entity_ids
     ]
 
-    return {
-        "entity_context": entity_context,
-        "relationship_context": relationship_context,
-        "chapter_safe_relationship_snippets": chapter_safe_relationship_snippets,
-        "alias_resolution_candidates": alias_resolution_candidates,
-        "reveal_safe_identity_notes": reveal_safe_identity_notes,
-    }
+    return _bounded_graph_sections(
+        entity_context=entity_context,
+        relationship_context=relationship_context,
+        chapter_safe_relationship_snippets=chapter_safe_relationship_snippets,
+        alias_resolution_candidates=alias_resolution_candidates,
+        reveal_safe_identity_notes=reveal_safe_identity_notes,
+        max_tokens=max_graph_tokens,
+        priority_entity_ids=priority_entity_ids,
+    )
 
 
 def _token_sections(packet: ChapterPacket) -> dict[str, object]:
     return {
+        "chapter_metadata": packet.chapter_metadata,
         "chapter_glossary_subset": packet.chapter_glossary_subset,
         "previous_3_summaries": packet.previous_3_summaries,
         "story_so_far_summary": packet.story_so_far_summary,
+        "chapter_summary_short": packet.chapter_summary_short,
+        "chapter_summary_structured": packet.chapter_summary_structured,
+        "active_arc_summary": packet.active_arc_summary,
         "chapter_local_idioms": packet.chapter_local_idioms,
+        "graph_snapshot_reference": packet.graph_snapshot_reference,
         "entity_context": packet.entity_context,
         "relationship_context": packet.relationship_context,
         "chapter_safe_relationship_snippets": packet.chapter_safe_relationship_snippets,
@@ -657,6 +747,7 @@ def build_chapter_packet(
             summary_version_hash=summary_version_hash,
             graph_snapshot_hash=latest_snapshot.snapshot_hash,
             idiom_policy_hash=idiom_policy_hash,
+            packet_builder_version=PACKET_BUILDER_VERSION,
         )
 
         if force_rebuild and latest_metadata is not None:
@@ -783,7 +874,7 @@ def build_chapter_packet(
                 bundle = build_paragraph_bundle(
                     packet=packet,
                     block_record=row,
-                    max_bundle_bytes=config_obj.budget.max_bundle_bytes,
+                    max_bundle_bytes=config_obj.packets.max_bundle_bytes,
                 )
                 bundles.append(bundle)
             except RuntimeError as exc:

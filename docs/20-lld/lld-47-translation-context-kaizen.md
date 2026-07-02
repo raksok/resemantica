@@ -15,6 +15,11 @@ Standardize how paragraph bundle context is formatted for translation Pass 1, Pa
 
 Empty or missing bundles return empty strings for every section. Pass prompts may contain placeholders for richer context, but empty context does not invent section labels.
 
+Rendered Pass 1, Pass 2, and Pass 3 prompts are checked against the configured
+prompt budget before each model call. Missing context still degrades to empty
+strings, but oversized context fails clearly with `prompt_budget_exceeded`
+instead of being trimmed at translation time.
+
 ## Pipeline Behavior
 
 Pass 1 translates every extracted record. When a matching paragraph bundle is unavailable, it calls Pass 1 with empty context.

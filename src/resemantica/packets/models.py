@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 
 PACKET_SCHEMA_VERSION = 1
 BUNDLE_SCHEMA_VERSION = 1
-PACKET_BUILDER_VERSION = "m8.packet_builder.v1"
+PACKET_BUILDER_VERSION = "m71.packet_builder.v2"
 
 
 @dataclass(slots=True)
@@ -108,4 +108,3 @@ class PacketBuildOutput:
 
     def to_json_dict(self) -> dict[str, object]:
         return asdict(self)
-
