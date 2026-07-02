@@ -89,3 +89,4 @@ Always follow the milestone sequence below.
 | M69 | task-69 | M68 | Continuity Batch-Order Chunking |
 | M70 | task-70 | M69 | Budgeted Graph Continuity Anchors |
 | M71 | task-71 | M70 | Packet Context Budget Guardrails |
+| M72 | task-72 | M71 | Packet Glossary Budget Guardrails |

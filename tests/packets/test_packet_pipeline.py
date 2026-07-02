@@ -17,7 +17,12 @@ from resemantica.graph.client import GraphClient, InMemoryGraphBackend
 from resemantica.graph.models import GraphAlias, GraphAppearance, GraphEntity, GraphRelationship
 from resemantica.idioms.models import IdiomPolicy
 from resemantica.idioms.validators import normalize_idiom_source
-from resemantica.packets.builder import _apply_packet_budget, build_chapter_packet, enrich_with_graph_context
+from resemantica.packets.builder import (
+    _apply_packet_budget,
+    _select_glossary_subset,
+    build_chapter_packet,
+    enrich_with_graph_context,
+)
 from resemantica.packets.invalidation import detect_stale_packet
 from resemantica.packets.models import PACKET_BUILDER_VERSION, ChapterPacket
 from resemantica.settings import derive_paths, load_config
@@ -110,6 +115,29 @@ def _seed_glossary(
     finally:
         conn.close()
     return mapping
+
+
+def _locked_entry(
+    *,
+    source_term: str,
+    target_term: str,
+    category: str,
+    release_id: str = "test",
+) -> LockedGlossaryEntry:
+    return LockedGlossaryEntry(
+        glossary_entry_id=f"glex_{category}_{normalize_term(source_term)}",
+        release_id=release_id,
+        source_term=source_term,
+        normalized_source_term=normalize_term(source_term),
+        target_term=target_term,
+        normalized_target_term=normalize_term(target_term),
+        category=category,
+        status="approved",
+        approved_at=datetime.now(UTC).isoformat(),
+        approval_run_id="seed-glossary",
+        source_candidate_id=f"gcan_{category}_{normalize_term(source_term)}",
+        schema_version=1,
+    )
 
 
 def _seed_summaries(
@@ -937,6 +965,138 @@ def test_packet_size_budget_trims_lower_priority_sections(
         int(row["buffered_tokens"])
         for row in dict(packet_payload["section_token_counts"]).values()
     )
+    assert buffered_total <= config.packets.budget_tokens
+
+
+def test_glossary_subset_prioritizes_specific_terms_under_budget() -> None:
+    entries = [
+        _locked_entry(source_term="青云", target_term="Azure Cloud", category="generic_role"),
+        _locked_entry(source_term="青云门", target_term="Azure Sect", category="faction"),
+        _locked_entry(source_term="张三", target_term="Zhang San", category="character"),
+        _locked_entry(source_term="张三真人", target_term="Perfected Zhang San", category="character"),
+    ]
+
+    selected = _select_glossary_subset(
+        source_text="张三真人来到青云门，青云之名远扬。",
+        locked_glossary=entries,
+        max_glossary_tokens=160,
+    )
+    selected_terms = [entry.source_term for entry in selected]
+
+    assert "张三真人" in selected_terms
+    assert "青云门" in selected_terms
+    assert "青云" not in selected_terms
+    assert selected_terms.index("张三真人") < selected_terms.index("青云门")
+
+
+def test_apply_packet_budget_trims_oversized_glossary_subset_once(monkeypatch) -> None:
+    def fake_count_tokens(text: str) -> int:
+        return max(1, len(text) // 8)
+
+    monkeypatch.setattr("resemantica.packets.builder.count_tokens", fake_count_tokens)
+    config = load_config()
+    config.budget.degrade_order = []
+    packet = ChapterPacket(
+        packet_id="",
+        release_id="test",
+        run_id="test",
+        chapter_number=1,
+        chapter_metadata={},
+        chapter_glossary_subset=[
+            {
+                "glossary_entry_id": f"glex_{idx}",
+                "source_term": f"词条{idx}",
+                "target_term": "Glossary Entry " + ("x" * 80),
+                "category": "character",
+            }
+            for idx in range(20)
+        ],
+        previous_3_summaries=[],
+        story_so_far_summary="",
+        chapter_summary_short="",
+        chapter_summary_structured=None,
+        active_arc_summary=None,
+        chapter_local_idioms=[],
+        graph_snapshot_reference={},
+        entity_context=[],
+        relationship_context=[],
+        chapter_safe_relationship_snippets=[],
+        alias_resolution_candidates=[],
+        reveal_safe_identity_notes=[],
+        warnings=[],
+        trimmed_sections=[],
+        section_token_counts={},
+        packet_schema_version=1,
+        chapter_source_hash="h",
+        glossary_version_hash="h",
+        summary_version_hash="h",
+        graph_snapshot_hash="h",
+        idiom_policy_hash="h",
+        packet_builder_version="test",
+        built_at="now",
+    )
+
+    degraded, counts = _apply_packet_budget(packet=packet, config=config, budget_tokens=180)
+
+    assert degraded.count("glossary_subset") == 1
+    assert len(packet.chapter_glossary_subset) < 20
+    assert sum(row["buffered_tokens"] for row in counts.values()) <= 180
+
+
+def test_packet_build_bounds_hundreds_of_glossary_matches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m72-glossary-bound"
+    extra_rows = [
+        (f"长特定人物{idx:03d}", f"Specific Person {idx:03d}", "character")
+        for idx in range(180)
+    ]
+    source_terms = ["张三", "青云门", *(source for source, _, _ in extra_rows)]
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="。".join(source_terms),
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction"), *extra_rows],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    config = load_config()
+    config.packets.budget_tokens = 900
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        config=config,
+        graph_client=graph_client,
+    )
+    packet_payload = _read_json(Path(result.packet_path))
+    glossary_subset = list(packet_payload["chapter_glossary_subset"])
+    buffered_total = sum(
+        int(row["buffered_tokens"])
+        for row in dict(packet_payload["section_token_counts"]).values()
+    )
+
+    assert result.status == "rebuilt_stale"
+    assert len(glossary_subset) < len(source_terms)
     assert buffered_total <= config.packets.budget_tokens
 
 

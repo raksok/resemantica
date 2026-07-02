@@ -76,16 +76,17 @@ temporarily defer the failure, but it does not solve ongoing graph growth.
 ### `packets-build` or translation fails with prompt budget exceeded
 
 **Cause:** Packet or bundle context grew beyond the configured prompt budget.
-Current packet builds bound graph context before writing packet artifacts, honor
-`[packets].budget_tokens` and `[packets].max_bundle_bytes`, and translation
-passes check rendered prompts before model calls.
+Current packet builds bound graph and glossary context before writing packet
+artifacts, honor `[packets].budget_tokens` and `[packets].max_bundle_bytes`,
+and translation passes check rendered prompts before model calls.
 
 **Fix:** Rerun `packets build` for the affected release so old packet artifacts
-rebuild with the current packet builder version. Then rerun translation without
-`--force` unless you intentionally want to bypass successful checkpoints. If the
-failure persists, lower packet context pressure with `[packets].budget_tokens`
-or review unusually large glossary, idiom, or continuity rows for the affected
-chapter.
+rebuild with the current packet builder version. Glossary-heavy chapters should
+now bound and trim `chapter_glossary_subset` before failing. Then rerun
+translation without `--force` unless you intentionally want to bypass successful
+checkpoints. If the failure persists, lower packet context pressure with
+`[packets].budget_tokens` or review unusually large glossary, idiom, or
+continuity rows for the affected chapter.
 
 ### Pipeline stuck or very slow
 

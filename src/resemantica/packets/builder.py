@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -49,6 +50,30 @@ from resemantica.utils import _emit as _emit_shared
 _CHAPTER_FILE_RE = re.compile(r"chapter-(\d+)\.json$")
 _STAGE_NAME = "packets-build"
 _DEFAULT_PACKET_GRAPH_BUDGET_TOKENS = 12_000
+_DEFAULT_PACKET_GLOSSARY_BUDGET_TOKENS = 12_000
+_GLOSSARY_BUDGET_RATIO = 0.35
+_GLOSSARY_MIN_BUDGET_TOKENS = 256
+_GLOSSARY_CATEGORY_PRIORITY = {
+    "character": 0,
+    "faction": 1,
+    "location": 2,
+    "item_artifact": 3,
+    "technique": 4,
+    "realm_concept": 5,
+    "creature_race": 6,
+    "title_honorific": 7,
+    "event": 8,
+    "idiom": 9,
+    "alias": 10,
+    "generic_role": 11,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _GlossaryMatch:
+    entry: LockedGlossaryEntry
+    occurrence_count: int
+    first_occurrence: int
 
 
 def _emit(run_id: str, release_id: str, event_type: str, **kwargs: object) -> None:
@@ -124,17 +149,86 @@ def _hash_idiom_policies(policies: list[IdiomPolicy]) -> str:
     return sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def _effective_packet_budget(*, config: AppConfig, budget_tokens: int | None) -> int:
+    return (
+        budget_tokens
+        if budget_tokens is not None
+        else config.packets.budget_tokens or config.budget.max_context_per_pass
+    )
+
+
+def _glossary_budget_tokens(effective_packet_budget: int) -> int:
+    return min(
+        _DEFAULT_PACKET_GLOSSARY_BUDGET_TOKENS,
+        max(_GLOSSARY_MIN_BUDGET_TOKENS, int(effective_packet_budget * _GLOSSARY_BUDGET_RATIO)),
+    )
+
+
+def _glossary_match_sort_key(match: _GlossaryMatch) -> tuple[int, int, int, int, str, str, str]:
+    entry = match.entry
+    return (
+        _GLOSSARY_CATEGORY_PRIORITY.get(entry.category, 50),
+        -len(entry.source_term),
+        -match.occurrence_count,
+        match.first_occurrence,
+        entry.normalized_source_term,
+        entry.category,
+        entry.glossary_entry_id,
+    )
+
+
+def _glossary_entry_token_count(entry: LockedGlossaryEntry) -> int:
+    return int(math.ceil(count_tokens(_canonical_json(entry.to_json_dict())) * 1.05))
+
+
 def _select_glossary_subset(
     *,
     source_text: str,
     locked_glossary: list[LockedGlossaryEntry],
+    max_glossary_tokens: int | None = None,
 ) -> list[LockedGlossaryEntry]:
-    matches = [
-        entry
-        for entry in locked_glossary
-        if entry.source_term.strip() and entry.source_term in source_text
-    ]
-    return sorted(matches, key=lambda row: (row.normalized_source_term, row.category))
+    matches = []
+    for entry in locked_glossary:
+        source_term = entry.source_term.strip()
+        if not source_term:
+            continue
+        first_occurrence = source_text.find(source_term)
+        if first_occurrence < 0:
+            continue
+        matches.append(_GlossaryMatch(
+            entry=entry,
+            occurrence_count=source_text.count(source_term),
+            first_occurrence=first_occurrence,
+        ))
+    ordered = [match.entry for match in sorted(matches, key=_glossary_match_sort_key)]
+    if max_glossary_tokens is None:
+        return ordered
+    if max_glossary_tokens <= 0:
+        return []
+
+    selected: list[LockedGlossaryEntry] = []
+    selected_tokens = 0
+    for entry in ordered:
+        entry_tokens = _glossary_entry_token_count(entry)
+        if selected_tokens + entry_tokens > max_glossary_tokens:
+            continue
+        selected.append(entry)
+        selected_tokens += entry_tokens
+    return selected
+
+
+def _trim_glossary_subset(packet: ChapterPacket, degraded_sections: list[str]) -> bool:
+    if not packet.chapter_glossary_subset:
+        return False
+    packet.chapter_glossary_subset.pop()
+    if "glossary_subset" not in degraded_sections:
+        degraded_sections.append("glossary_subset")
+    return True
+
+
+def _section_token_count(section_payload: object) -> dict[str, int]:
+    raw = count_tokens(_canonical_json(section_payload))
+    return {"raw_tokens": raw, "buffered_tokens": int(math.ceil(raw * 1.05))}
 
 
 def _select_idiom_subset(
@@ -429,11 +523,7 @@ def _apply_packet_budget(
 ) -> tuple[list[str], dict[str, dict[str, int]]]:
     degraded_sections: list[str] = []
     section_counts: dict[str, dict[str, int]] = {}
-    effective_budget = (
-        budget_tokens
-        if budget_tokens is not None
-        else config.packets.budget_tokens or config.budget.max_context_per_pass
-    )
+    effective_budget = _effective_packet_budget(config=config, budget_tokens=budget_tokens)
     section_map = {
         "structured_summary": "chapter_summary_structured",
         "broad_continuity": "previous_3_summaries",
@@ -448,10 +538,9 @@ def _apply_packet_budget(
         current_sections = _token_sections(packet)
         section_counts = {}
         for section_name, section_payload in current_sections.items():
-            raw = count_tokens(_canonical_json(section_payload))
-            buffered = int(math.ceil(raw * 1.05))
-            section_counts[section_name] = {"raw_tokens": raw, "buffered_tokens": buffered}
-            total_buffered += buffered
+            section_count = _section_token_count(section_payload)
+            section_counts[section_name] = section_count
+            total_buffered += section_count["buffered_tokens"]
 
         if total_buffered <= effective_budget:
             break
@@ -472,6 +561,9 @@ def _apply_packet_budget(
             degraded_sections.append(key)
             trimmed = True
             break
+
+        if not trimmed:
+            trimmed = _trim_glossary_subset(packet, degraded_sections)
 
         if not trimmed:
             raise RuntimeError(
@@ -587,9 +679,11 @@ def build_chapter_packet(
 
     try:
         locked_glossary = list_locked_entries(conn, release_id=release_id)
+        effective_budget = _effective_packet_budget(config=config_obj, budget_tokens=budget_tokens)
         glossary_subset = _select_glossary_subset(
             source_text=source_text,
             locked_glossary=locked_glossary,
+            max_glossary_tokens=_glossary_budget_tokens(effective_budget),
         )
         glossary_version_hash = _hash_locked_glossary(locked_glossary)
 

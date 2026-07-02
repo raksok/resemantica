@@ -16,11 +16,15 @@ relationship snippets, and reveal-safe notes in deterministic priority order.
 The selected graph sections stop at an internal token budget before they are
 stored in the packet.
 
+M72 extends the same source-bounded approach to glossary context. The builder
+keeps the full locked glossary hash for staleness but stores a prioritized
+chapter-local glossary slice.
+
 `_apply_packet_budget()` counts every prompt-relevant packet section with the
 existing 5% safety buffer. The effective packet budget is
 `packets.budget_tokens` when configured, otherwise
 `budget.max_context_per_pass`. Lower-priority packet sections still trim by the
-existing degrade order.
+existing degrade order; if needed, low-priority glossary entries trim next.
 
 Paragraph bundles use `packets.max_bundle_bytes`. Bundle trimming remains
 lower-priority first: relationships, aliases, continuity notes, and retrieval
@@ -45,6 +49,8 @@ budget semantics are rebuilt on the next packet stage run.
 - Packet budget accounting includes all prompt-relevant fields.
 - Packet-specific budget and bundle-byte settings are honored.
 - Large graph state is bounded while retaining local rows first.
+- Large glossary state is bounded while retaining specific translation-critical
+  rows first.
 - Builder-version mismatch marks packet metadata stale.
 - Translation Pass 1, Pass 2, and Pass 3 fail before LLM calls when prompts
   exceed budget.
