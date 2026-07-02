@@ -23,6 +23,7 @@ from resemantica.packets.builder import (
     build_chapter_packet,
     enrich_with_graph_context,
 )
+from resemantica.packets.bundler import build_paragraph_bundle
 from resemantica.packets.invalidation import detect_stale_packet
 from resemantica.packets.models import PACKET_BUILDER_VERSION, ChapterPacket
 from resemantica.settings import derive_paths, load_config
@@ -277,6 +278,45 @@ def _seed_idioms(*, release_id: str, rows: list[tuple[str, str, str]]) -> None:
             promote_policies(conn, policies=policies)
     finally:
         conn.close()
+
+
+def _minimal_packet(
+    *,
+    release_id: str = "bundle-test",
+    glossary_subset: list[dict[str, object]] | None = None,
+    idiom_subset: list[dict[str, object]] | None = None,
+) -> ChapterPacket:
+    return ChapterPacket(
+        packet_id="pkt_test",
+        release_id=release_id,
+        run_id="packets-001",
+        chapter_number=1,
+        chapter_metadata={},
+        chapter_glossary_subset=glossary_subset or [],
+        previous_3_summaries=[],
+        story_so_far_summary="",
+        chapter_summary_short="",
+        chapter_summary_structured=None,
+        active_arc_summary=None,
+        chapter_local_idioms=idiom_subset or [],
+        graph_snapshot_reference={},
+        entity_context=[],
+        relationship_context=[],
+        chapter_safe_relationship_snippets=[],
+        alias_resolution_candidates=[],
+        reveal_safe_identity_notes=[],
+        warnings=[],
+        trimmed_sections=[],
+        section_token_counts={},
+        packet_schema_version=1,
+        chapter_source_hash="hash",
+        glossary_version_hash="glossary",
+        summary_version_hash="summary",
+        graph_snapshot_hash="graph",
+        idiom_policy_hash="idiom",
+        packet_builder_version=PACKET_BUILDER_VERSION,
+        built_at=datetime.now(UTC).isoformat(),
+    )
 
 
 def _seed_graph(
@@ -1106,15 +1146,21 @@ def test_packet_uses_packet_specific_bundle_byte_budget(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "m71-packet-bundle-budget"
+    extra_terms = [(f"称号{idx:02d}", f"Title {idx:02d}", "generic_role") for idx in range(24)]
     _write_extracted_chapter(
         release_id=release_id,
         chapter_number=1,
-        source_text="张三加入青云门。",
+        source_text="张三加入青云门。" + " ".join(source for source, _, _ in extra_terms),
         chapter_source_hash="hash-ch1",
     )
     glossary_ids = _seed_glossary(
         release_id=release_id,
-        rows=[("张三", "Zhang San", "character"), ("青云门", "Azure Sect", "faction"), ("李四", "Li Si", "character")],
+        rows=[
+            ("张三", "Zhang San", "character"),
+            ("青云门", "Azure Sect", "faction"),
+            ("李四", "Li Si", "character"),
+            *extra_terms,
+        ],
     )
     _seed_summaries(
         release_id=release_id,
@@ -1146,6 +1192,123 @@ def test_packet_uses_packet_specific_bundle_byte_budget(
 
     assert int(bundle["size_bytes"]) <= config.packets.max_bundle_bytes
     assert bundle["trimmed_sections"]
+    assert "matched_glossary_entries" in bundle["trimmed_sections"]
+
+
+def test_paragraph_bundle_trims_glossary_matches_to_byte_budget() -> None:
+    glossary_subset = [
+        {
+            "glossary_entry_id": f"glex_{idx:03d}",
+            "source_term": f"术语{idx:03d}",
+            "target_term": f"Long Translated Term {idx:03d}",
+            "category": "generic_role" if idx else "character",
+            "review_notes": "x" * 200,
+        }
+        for idx in range(40)
+    ]
+    source_text = " ".join(str(row["source_term"]) for row in glossary_subset)
+    packet = _minimal_packet(glossary_subset=glossary_subset)
+
+    bundle = build_paragraph_bundle(
+        packet=packet,
+        block_record={
+            "block_id": "ch001_blk001",
+            "source_text_zh": source_text,
+        },
+        max_bundle_bytes=1_500,
+    )
+
+    assert bundle.size_bytes <= 1_500
+    assert "matched_glossary_entries" in bundle.trimmed_sections
+    assert len(bundle.matched_glossary_entries) < len(glossary_subset)
+    assert bundle.matched_glossary_entries[0]["source_term"] == "术语000"
+    assert "review_notes" not in bundle.matched_glossary_entries[0]
+
+
+def test_paragraph_bundle_trims_idiom_matches_to_byte_budget() -> None:
+    idiom_subset = [
+        {
+            "idiom_id": f"idi_{idx:03d}",
+            "source_text": f"成语{idx:03d}",
+            "normalized_source_text": f"成语{idx:03d}",
+            "preferred_rendering_en": f"set phrase rendering {idx:03d}",
+            "meaning_zh": "中文释义" + ("很长" * 20),
+            "meaning_en": "English meaning " + ("long " * 20),
+            "usage_notes": "use carefully " * 20,
+        }
+        for idx in range(30)
+    ]
+    source_text = " ".join(str(row["source_text"]) for row in idiom_subset)
+    packet = _minimal_packet(idiom_subset=idiom_subset)
+
+    bundle = build_paragraph_bundle(
+        packet=packet,
+        block_record={
+            "block_id": "ch001_blk001",
+            "source_text_zh": source_text,
+        },
+        max_bundle_bytes=1_500,
+    )
+
+    assert bundle.size_bytes <= 1_500
+    assert "matched_idioms" in bundle.trimmed_sections
+    assert len(bundle.matched_idioms) < len(idiom_subset)
+    assert bundle.matched_idioms[0]["source_text"] == "成语000"
+
+
+def test_packet_build_trims_bundle_context_instead_of_skipping(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m73-bundle-trim-no-skip"
+    extra_terms = [(f"名物{idx:03d}", f"Named Thing {idx:03d}", "generic_role") for idx in range(50)]
+    _write_extracted_chapter(
+        release_id=release_id,
+        chapter_number=1,
+        source_text="张三加入青云门。" + " ".join(source for source, _, _ in extra_terms),
+        chapter_source_hash="hash-ch1",
+    )
+    glossary_ids = _seed_glossary(
+        release_id=release_id,
+        rows=[
+            ("张三", "Zhang San", "character"),
+            ("青云门", "Azure Sect", "faction"),
+            ("李四", "Li Si", "character"),
+            *extra_terms,
+        ],
+    )
+    _seed_summaries(
+        release_id=release_id,
+        chapter_number=1,
+        chapter_hash="hash-ch1",
+        chapter_short="张三入门。",
+        story_so_far="第1章：张三入门。",
+    )
+    _seed_idioms(release_id=release_id, rows=[])
+    graph_client = GraphClient(backend=InMemoryGraphBackend())
+    _seed_graph(
+        release_id=release_id,
+        graph_client=graph_client,
+        glossary_ids=glossary_ids,
+    )
+
+    config = load_config()
+    config.packets.max_bundle_bytes = 1_200
+    result = build_chapter_packet(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="packets-001",
+        config=config,
+        graph_client=graph_client,
+    )
+    packet_payload = _read_json(Path(result.packet_path))
+    bundles_payload = _read_json(Path(result.bundle_path))
+    bundles = list(bundles_payload["bundles"])
+
+    assert bundles
+    assert all(int(bundle["size_bytes"]) <= config.packets.max_bundle_bytes for bundle in bundles)
+    assert not any("bundle_skip" in warning for warning in packet_payload["warnings"])
 
 
 def test_packet_graph_context_is_bounded_and_prioritizes_local_rows() -> None:

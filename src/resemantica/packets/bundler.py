@@ -2,10 +2,26 @@ from __future__ import annotations
 
 import math
 from hashlib import sha256
+from typing import Any
 
 from resemantica.llm.tokens import count_tokens
 from resemantica.packets.models import ChapterPacket, ParagraphBundle
 from resemantica.utils import _canonical_json
+
+_GLOSSARY_CATEGORY_PRIORITY = {
+    "character": 0,
+    "faction": 1,
+    "location": 2,
+    "item_artifact": 3,
+    "technique": 4,
+    "realm_concept": 5,
+    "creature_race": 6,
+    "title_honorific": 7,
+    "event": 8,
+    "idiom": 9,
+    "alias": 10,
+    "generic_role": 11,
+}
 
 
 def _normalized(text: str) -> str:
@@ -23,6 +39,108 @@ def _bundle_reference(record: dict[str, object]) -> str:
     return str(record["block_id"])
 
 
+def _compact_row(row: dict[str, object], fields: tuple[str, ...]) -> dict[str, object]:
+    compact: dict[str, object] = {}
+    for field in fields:
+        value = row.get(field)
+        if value not in (None, "", [], {}):
+            compact[field] = value
+    return compact
+
+
+def _compact_glossary_entry(entry: dict[str, object]) -> dict[str, object]:
+    return _compact_row(
+        entry,
+        (
+            "glossary_entry_id",
+            "source_term",
+            "target_term",
+            "category",
+        ),
+    )
+
+
+def _compact_idiom_entry(entry: dict[str, object]) -> dict[str, object]:
+    return _compact_row(
+        entry,
+        (
+            "idiom_id",
+            "source_text",
+            "preferred_rendering_en",
+            "meaning_en",
+            "meaning_zh",
+            "usage_notes",
+        ),
+    )
+
+
+def _compact_alias_entry(entry: dict[str, object]) -> dict[str, object]:
+    return _compact_row(
+        entry,
+        (
+            "alias_id",
+            "alias_text",
+            "entity_id",
+            "entity_name",
+        ),
+    )
+
+
+def _compact_relationship_entry(entry: dict[str, object]) -> dict[str, object]:
+    return _compact_row(
+        entry,
+        (
+            "relationship_id",
+            "type",
+            "source_entity_id",
+            "target_entity_id",
+            "lore_text",
+            "is_masked_identity",
+        ),
+    )
+
+
+def _source_match_stats(source_text: str, needle: str) -> tuple[int, int]:
+    if not needle:
+        return 0, len(source_text)
+    first = source_text.find(needle)
+    if first < 0:
+        return 0, len(source_text)
+    return source_text.count(needle), first
+
+
+def _glossary_match_sort_key(source_text: str, entry: dict[str, object]) -> tuple[Any, ...]:
+    source_term = str(entry.get("source_term", "")).strip()
+    occurrence_count, first_occurrence = _source_match_stats(source_text, source_term)
+    return (
+        _GLOSSARY_CATEGORY_PRIORITY.get(str(entry.get("category", "")), 99),
+        -len(source_term),
+        -occurrence_count,
+        first_occurrence,
+        str(entry.get("source_term", "")),
+        str(entry.get("target_term", "")),
+        str(entry.get("glossary_entry_id", "")),
+    )
+
+
+def _idiom_match_sort_key(source_text: str, entry: dict[str, object]) -> tuple[Any, ...]:
+    source = str(entry.get("source_text", "")).strip()
+    occurrence_count, first_occurrence = _source_match_stats(source_text, source)
+    return (
+        -len(source),
+        -occurrence_count,
+        first_occurrence,
+        str(entry.get("normalized_source_text", "")),
+        str(entry.get("source_text", "")),
+        str(entry.get("idiom_id", "")),
+    )
+
+
+def _append_trimmed_once(bundle: ParagraphBundle, field_name: str) -> None:
+    if field_name not in bundle.trimmed_sections:
+        bundle.trimmed_sections.append(field_name)
+
+
 def _select_glossary_matches(
     *,
     source_text: str,
@@ -34,7 +152,10 @@ def _select_glossary_matches(
         if str(entry.get("source_term", "")).strip()
         and str(entry["source_term"]) in source_text
     ]
-    return sorted(matches, key=lambda row: str(row.get("source_term", "")))
+    return [
+        _compact_glossary_entry(entry)
+        for entry in sorted(matches, key=lambda row: _glossary_match_sort_key(source_text, row))
+    ]
 
 
 def _select_idiom_matches(
@@ -48,7 +169,10 @@ def _select_idiom_matches(
         if str(policy.get("source_text", "")).strip()
         and str(policy["source_text"]) in source_text
     ]
-    return sorted(matches, key=lambda row: str(row.get("normalized_source_text", "")))
+    return [
+        _compact_idiom_entry(entry)
+        for entry in sorted(matches, key=lambda row: _idiom_match_sort_key(source_text, row))
+    ]
 
 
 def _select_alias_resolutions(
@@ -66,7 +190,7 @@ def _select_alias_resolutions(
         if _normalized(alias_text) in blocked_terms:
             blocked_count += 1
             continue
-        kept.append(candidate)
+        kept.append(_compact_alias_entry(candidate))
     return sorted(kept, key=lambda row: str(row.get("alias_text", ""))), blocked_count
 
 
@@ -76,7 +200,7 @@ def _select_local_relationships(
     entity_ids: set[str],
 ) -> list[dict[str, object]]:
     selected = [
-        row
+        _compact_relationship_entry(row)
         for row in relationships
         if str(row.get("source_entity_id", "")) in entity_ids
         or str(row.get("target_entity_id", "")) in entity_ids
@@ -173,18 +297,28 @@ def build_paragraph_bundle(
             f"graph_alias_blocked_by_authority:{blocked_graph_aliases}"
         )
 
-    trim_order = [
+    clear_order = [
         "local_relationships",
         "alias_resolutions",
         "continuity_notes",
         "retrieval_evidence_summary",
     ]
-    for field_name in trim_order:
+    for field_name in clear_order:
         size_bytes = _bundle_size_bytes(bundle)
         if size_bytes <= max_bundle_bytes:
             break
-        setattr(bundle, field_name, [] if field_name != "continuity_notes" else [])
-        bundle.trimmed_sections.append(field_name)
+        setattr(bundle, field_name, [])
+        _append_trimmed_once(bundle, field_name)
+
+    row_trim_order = [
+        "matched_idioms",
+        "matched_glossary_entries",
+    ]
+    for field_name in row_trim_order:
+        values = getattr(bundle, field_name)
+        while values and _bundle_size_bytes(bundle) > max_bundle_bytes:
+            values.pop()
+            _append_trimmed_once(bundle, field_name)
 
     bundle.size_bytes = _bundle_size_bytes(bundle)
     if bundle.size_bytes > max_bundle_bytes:

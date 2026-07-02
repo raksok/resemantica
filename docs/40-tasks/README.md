@@ -90,3 +90,4 @@ Always follow the milestone sequence below.
 | M70 | task-70 | M69 | Budgeted Graph Continuity Anchors |
 | M71 | task-71 | M70 | Packet Context Budget Guardrails |
 | M72 | task-72 | M71 | Packet Glossary Budget Guardrails |
+| M73 | task-73 | M72 | Paragraph Bundle Budget Guardrails |

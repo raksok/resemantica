@@ -77,16 +77,22 @@ temporarily defer the failure, but it does not solve ongoing graph growth.
 
 **Cause:** Packet or bundle context grew beyond the configured prompt budget.
 Current packet builds bound graph and glossary context before writing packet
+artifacts, compact and trim paragraph bundle rows before writing bundle
 artifacts, honor `[packets].budget_tokens` and `[packets].max_bundle_bytes`,
-and translation passes check rendered prompts before model calls.
+and translation passes check rendered prompts before model calls. The legacy
+`[budget].max_bundle_bytes` value does not control packet bundles after the
+packet-specific config split.
 
 **Fix:** Rerun `packets build` for the affected release so old packet artifacts
 rebuild with the current packet builder version. Glossary-heavy chapters should
-now bound and trim `chapter_glossary_subset` before failing. Then rerun
-translation without `--force` unless you intentionally want to bypass successful
-checkpoints. If the failure persists, lower packet context pressure with
-`[packets].budget_tokens` or review unusually large glossary, idiom, or
-continuity rows for the affected chapter.
+now bound and trim `chapter_glossary_subset`, and bundle-heavy blocks should
+write trimmed bundles instead of `bundle_skip` warnings from
+`bundle_budget_exceeded`. Then rerun translation without `--force` unless you
+intentionally want to bypass successful checkpoints. If the failure persists,
+lower packet context pressure with `[packets].budget_tokens`, raise
+`[packets].max_bundle_bytes` only if larger paragraph context is acceptable, or
+review unusually large glossary, idiom, or continuity rows for the affected
+chapter.
 
 ### Pipeline stuck or very slow
 

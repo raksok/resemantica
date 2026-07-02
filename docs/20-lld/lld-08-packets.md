@@ -47,7 +47,7 @@ Minimum packet sections:
 6. Call `llm.tokens.count_tokens()` on every prompt-relevant packet section, apply the 5% safety buffer (multiply each raw count by 1.05, per D22). If the buffered total exceeds `packets.budget_tokens` or the fallback `max_context_per_pass` (49152), trim sections following the degrade order (`broad_continuity` → `fuzzy_candidates` → `rerank_depth` → `pass3` → `fallback_model`), then trim low-priority glossary entries if needed.
 7. Build chapter packet JSON with all required hashes.
 8. Persist packet metadata in SQLite.
-9. Derive paragraph bundles from local packet sections and source block context. Count tokens per bundle; if a bundle exceeds `packets.max_bundle_bytes`, trim lower-priority retrieval evidence.
+9. Derive paragraph bundles from local packet sections and source block context. Compact matched rows to formatter-needed fields, then enforce `packets.max_bundle_bytes` by trimming relationships, aliases, continuity notes, retrieval evidence, idioms, and low-priority glossary matches.
 10. Apply retrieval arbitration so locked glossary and deterministic idioms outrank graph suggestions.
 11. Refuse broad full-chapter dumps in bundle output.
 
@@ -56,7 +56,7 @@ Minimum packet sections:
 - packet builder validates presence of required upstream hashes
 - graph context must be filtered by chapter before packet storage
 - packet size limits must trim lower-priority graph context before authority context
-- bundle builder enforces narrow context limits
+- bundle builder enforces narrow context limits by compacting rows and trimming all variable bundle sections
 - retrieval arbitration must prefer glossary, explicit aliases, and deterministic idiom matches over graph-derived suggestions
 - packet metadata and artifact hash must match
 - `story_so_far_summary` must prefer `story_so_far_zh_compact`; older releases without compact rows fall back to `story_so_far_zh`
@@ -148,6 +148,14 @@ longer source terms, repeated matches, and earlier occurrences. If the packet
 still exceeds the effective packet budget after configured degradation, the
 builder trims low-priority glossary entries and records `glossary_subset` in
 `trimmed_sections`.
+
+### P6 — Paragraph Bundle Budget Guardrails
+
+Paragraph bundles compact matched glossary, idiom, alias, and relationship rows
+before sizing. If a bundle exceeds `[packets].max_bundle_bytes`, the builder
+clears lower-priority graph and continuity sections first, then trims matched
+idioms and low-priority glossary entries. Normal budget pressure writes a
+trimmed bundle instead of skipping the block bundle.
 
 ## Out Of Scope
 

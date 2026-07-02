@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 
 PACKET_SCHEMA_VERSION = 1
 BUNDLE_SCHEMA_VERSION = 1
-PACKET_BUILDER_VERSION = "m72.packet_builder.v3"
+PACKET_BUILDER_VERSION = "m73.packet_builder.v4"
 
 
 @dataclass(slots=True)
