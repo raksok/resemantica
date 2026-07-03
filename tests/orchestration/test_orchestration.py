@@ -838,6 +838,43 @@ class TestRetryFailed:
         assert unit.chapters == [1, 2, 3]
         assert unit.reason == "missing_or_stale_graph_continuity_rows_artifacts_or_failed_event"
 
+    def test_retry_failed_translation_treats_success_checkpoint_as_complete(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-translation-success"
+        run_id = "production"
+        self._write_extracted_chapter(release_id, 1)
+
+        from resemantica.db.sqlite import open_connection
+        from resemantica.settings import derive_paths, load_config
+        from resemantica.translation.checkpoints import ensure_checkpoint_schema, save_checkpoint
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        conn = open_connection(paths.db_path)
+        try:
+            ensure_checkpoint_schema(conn)
+            save_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=1,
+                pass_name="pass3",
+                source_hash="hash-ch1",
+                prompt_version="prompt",
+                status="success",
+                artifact_path="pass3.json",
+            )
+        finally:
+            conn.close()
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="translate-range",
+        )
+
+        assert plan.retryable == []
+        assert plan.non_retryable == []
+
 
 class TestM11CleanupScopes:
     def _create_test_artifacts(self, release_id: str, run_id: str):

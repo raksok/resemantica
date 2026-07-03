@@ -4,9 +4,11 @@ import json
 import zipfile
 from pathlib import Path
 
+import pytest
 from loguru import logger
 
 from resemantica.epub.extractor import extract_epub
+from resemantica.settings import AppConfig, TranslationConfig, derive_paths
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pipeline import (
     translate_chapter_pass1,
@@ -101,11 +103,79 @@ class ScriptedLLM:
         return "Unexpected."
 
 
+class ScriptedPass2RetryLLM:
+    def __init__(self, *, always_fail: bool = False) -> None:
+        self.pass1_calls = 0
+        self.placeholder_pass2_calls = 0
+        self.plain_pass2_calls = 0
+        self.always_fail = always_fail
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        if "PASS1" in prompt:
+            self.pass1_calls += 1
+            if "⟦B_1⟧" in prompt:
+                return "You ⟦B_1⟧good⟦/B_1⟧?"
+            return "Plain draft."
+
+        if "translation auditor" in prompt:
+            if "⟦B_1⟧" in prompt:
+                self.placeholder_pass2_calls += 1
+                if self.always_fail or self.placeholder_pass2_calls == 1:
+                    corrected = "You really good?"
+                else:
+                    corrected = "You ⟦B_1⟧really good⟦/B_1⟧?"
+            else:
+                self.plain_pass2_calls += 1
+                corrected = "Plain draft."
+            return json.dumps(
+                {
+                    "fidelity_errors_found": True,
+                    "analysis": "scripted pass2 retry",
+                    "corrected_text": corrected,
+                }
+            )
+
+        return "Unexpected."
+
+
+class ScriptedResegmentedPass2LLM:
+    def __init__(self) -> None:
+        self.segment_calls: list[str] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        if "translation auditor" not in prompt:
+            return "Unexpected."
+        if "segment-one-draft" in prompt:
+            self.segment_calls.append("seg1")
+            corrected = "Bad ⟦B_1⟧" if self.segment_calls.count("seg1") == 1 else "Segment one. "
+        elif "segment-two-draft" in prompt:
+            self.segment_calls.append("seg2")
+            corrected = "Segment two."
+        else:
+            corrected = "Unexpected segment."
+        return json.dumps(
+            {
+                "fidelity_errors_found": True,
+                "analysis": "scripted resegmented pass2 retry",
+                "corrected_text": corrected,
+            }
+        )
+
+
 def _extract_one_chapter(tmp_path: Path, chapter_xhtml: str, release_id: str) -> None:
     input_epub = tmp_path / f"{release_id}.epub"
     _write_fixture_epub(input_epub, chapter_xhtml)
     result = extract_epub(input_path=input_epub, release_id=release_id)
     assert result.status == "success"
+
+
+def _retry_test_config(*, retries: int) -> AppConfig:
+    return AppConfig(
+        translation=TranslationConfig(
+            pass2_concurrency=1,
+            pass2_validation_retries=retries,
+        )
+    )
 
 
 def test_placeholder_preservation_and_pass2_correction(tmp_path: Path, monkeypatch) -> None:
@@ -193,6 +263,193 @@ def test_reactive_resegmentation_on_structural_failure(tmp_path: Path, monkeypat
     first_block = pass1_artifact["blocks"][0]
     assert first_block["was_resegmented"] is True
     assert len(first_block["segments"]) >= 2
+
+
+def test_pass2_retries_structural_failure_for_one_block(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m74-pass2-retry"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>你<b>好</b>吗？</p>
+<p>普通文本。</p>
+</body></html>
+""",
+        release_id,
+    )
+
+    client = ScriptedPass2RetryLLM()
+    config = _retry_test_config(retries=2)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+    result = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert result["status"] == "success"
+    assert client.placeholder_pass2_calls == 2
+    assert client.plain_pass2_calls == 1
+
+    from resemantica.tracking.repo import ensure_tracking_db, load_events
+
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id=run_id, release_id=release_id, limit=100)
+    finally:
+        conn.close()
+    retries = [event for event in events if event.event_type == "translate-chapter.pass2.retry"]
+    assert len(retries) == 1
+    assert retries[0].payload["reason"] == "structural_validation_failed"
+
+
+def test_pass2_retry_exhaustion_fails_chapter(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m74-pass2-retry-exhausted"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>你<b>好</b>吗？</p></body></html>
+""",
+        release_id,
+    )
+
+    client = ScriptedPass2RetryLLM(always_fail=True)
+    config = _retry_test_config(retries=1)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+    with pytest.raises(RuntimeError, match="Pass 2 structural validation failed"):
+        translate_chapter_pass2(
+            release_id=release_id,
+            chapter_number=1,
+            run_id=run_id,
+            llm_client=client,
+            config=config,
+        )
+
+    assert client.placeholder_pass2_calls == 2
+
+
+def test_pass2_zero_validation_retries_preserves_immediate_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m74-pass2-no-retry"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>你<b>好</b>吗？</p></body></html>
+""",
+        release_id,
+    )
+
+    client = ScriptedPass2RetryLLM(always_fail=True)
+    config = _retry_test_config(retries=0)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+    with pytest.raises(RuntimeError, match="Pass 2 structural validation failed"):
+        translate_chapter_pass2(
+            release_id=release_id,
+            chapter_number=1,
+            run_id=run_id,
+            llm_client=client,
+            config=config,
+        )
+
+    assert client.placeholder_pass2_calls == 1
+
+
+def test_pass2_resegmented_block_retry_preserves_segment_order(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m74-pass2-resegmented-retry"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>第一段。第二段。</p></body></html>
+""",
+        release_id,
+    )
+    config = _retry_test_config(retries=1)
+    paths = derive_paths(config, release_id=release_id)
+    translation_dir = paths.release_root / "runs" / run_id / "translation" / "chapter-1"
+    translation_dir.mkdir(parents=True, exist_ok=True)
+    (translation_dir / "pass1.json").write_text(
+        json.dumps(
+            {
+                "release_id": release_id,
+                "run_id": run_id,
+                "chapter_number": 1,
+                "pass_name": "pass1",
+                "model_name": "model",
+                "prompt_version": "test",
+                "source_hash": "hash",
+                "status": "success",
+                "blocks": [
+                    {
+                        "block_id": "ch001_blk001",
+                        "parent_block_id": "ch001_blk001",
+                        "source_text_zh": "第一段。第二段。",
+                        "was_resegmented": True,
+                        "segments": [
+                            {
+                                "segment_id": "ch001_blk001_seg01",
+                                "source_text_zh": "第一段。",
+                                "draft_text": "segment-one-draft",
+                            },
+                            {
+                                "segment_id": "ch001_blk001_seg02",
+                                "source_text_zh": "第二段。",
+                                "draft_text": "segment-two-draft",
+                            },
+                        ],
+                    }
+                ],
+                "structure_validation": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client = ScriptedResegmentedPass2LLM()
+    result = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert result["status"] == "success"
+    assert client.segment_calls == ["seg1", "seg1", "seg2"]
+    pass2_artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
+    assert pass2_artifact["blocks"][0]["output_text_en"] == "Segment one. Segment two."
 
 
 def test_resume_from_successful_pass1_skips_pass1(tmp_path: Path, monkeypatch) -> None:

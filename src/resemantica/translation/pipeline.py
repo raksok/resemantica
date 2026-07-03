@@ -712,7 +712,22 @@ def translate_chapter_pass1(
 # ---------------------------------------------------------------------------
 
 
-def _process_pass2_block(
+class Pass2ValidationRetryableError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        block_id: str,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.block_id = block_id
+        self.reason = reason
+        self.payload = payload or {}
+
+
+def _process_pass2_block_once(
     block: dict[str, Any],
     *,
     pass2_prompt_template: str,
@@ -724,6 +739,7 @@ def _process_pass2_block(
     run_id: str,
     chapter_number: int,
     config: AppConfig,
+    emit_failure_events: bool = True,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     source_text = str(block["source_text_zh"])
     parent_block_id = str(block["parent_block_id"])
@@ -786,18 +802,24 @@ def _process_pass2_block(
                 }
             )
             if not structure.is_valid:
-                _emit_translation_event(
-                    release_id=release_id,
-                    run_id=run_id,
-                    event_type="pass2.failed",
-                    chapter_number=chapter_number,
+                payload = {"pass_name": "pass2", "errors": structure.errors}
+                message = f"Pass2 structural validation failed for segment {segment_id}"
+                if emit_failure_events:
+                    _emit_translation_event(
+                        release_id=release_id,
+                        run_id=run_id,
+                        event_type="pass2.failed",
+                        chapter_number=chapter_number,
+                        block_id=segment_id,
+                        severity="error",
+                        message=message,
+                        payload=payload,
+                    )
+                raise Pass2ValidationRetryableError(
+                    f"Pass 2 structural validation failed for segment {segment_id}.",
                     block_id=segment_id,
-                    severity="error",
-                    message=f"Pass2 structural validation failed for segment {segment_id}",
-                    payload={"pass_name": "pass2", "errors": structure.errors},
-                )
-                raise RuntimeError(
-                    f"Pass 2 structural validation failed for segment {segment_id}."
+                    reason="structural_validation_failed",
+                    payload=payload,
                 )
 
             prior_segment_translations.append(segment_corrected)
@@ -817,22 +839,28 @@ def _process_pass2_block(
             warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
         ]
         if blocking_restore_warnings:
-            _emit_translation_event(
-                release_id=release_id,
-                run_id=run_id,
-                event_type="pass2.failed",
-                chapter_number=chapter_number,
-                block_id=parent_block_id,
-                severity="error",
-                message=f"Pass2 restoration failed for block {parent_block_id}",
-                payload={
-                    "pass_name": "pass2",
-                    "errors": blocking_restore_warnings,
-                    "warnings": restore_warnings,
-                },
+            payload = {
+                "pass_name": "pass2",
+                "errors": blocking_restore_warnings,
+                "warnings": restore_warnings,
+            }
+            message = f"Pass2 restoration failed for block {parent_block_id}"
+            if emit_failure_events:
+                _emit_translation_event(
+                    release_id=release_id,
+                    run_id=run_id,
+                    event_type="pass2.failed",
+                    chapter_number=chapter_number,
+                    block_id=parent_block_id,
+                    severity="error",
+                    message=message,
+                    payload=payload,
             )
-            raise RuntimeError(
-                f"Pass 2 restoration failed for block {parent_block_id}."
+            raise Pass2ValidationRetryableError(
+                f"Pass 2 restoration failed for block {parent_block_id}.",
+                block_id=parent_block_id,
+                reason="restoration_failed",
+                payload=payload,
             )
         fidelity = validate_basic_fidelity(source_text, restored_text)
         fidelity_check = {
@@ -841,6 +869,17 @@ def _process_pass2_block(
             "errors": fidelity.errors,
             "warnings": fidelity.warnings,
         }
+        if not fidelity.is_valid and not emit_failure_events:
+            raise Pass2ValidationRetryableError(
+                f"Pass 2 fidelity validation failed for block {parent_block_id}.",
+                block_id=parent_block_id,
+                reason="fidelity_validation_failed",
+                payload={
+                    "pass_name": "pass2",
+                    "errors": fidelity.errors,
+                    "warnings": fidelity.warnings,
+                },
+            )
         block_result = {
             "block_id": parent_block_id,
             "parent_block_id": parent_block_id,
@@ -896,17 +935,25 @@ def _process_pass2_block(
         "warnings": structure.warnings,
     }
     if not structure.is_valid:
-        _emit_translation_event(
-            release_id=release_id,
-            run_id=run_id,
-            event_type="pass2.failed",
-            chapter_number=chapter_number,
+        payload = {"pass_name": "pass2", "errors": structure.errors}
+        message = f"Pass2 structural validation failed for block {block_id}"
+        if emit_failure_events:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.failed",
+                chapter_number=chapter_number,
+                block_id=block_id,
+                severity="error",
+                message=message,
+                payload=payload,
+            )
+        raise Pass2ValidationRetryableError(
+            f"Pass 2 structural validation failed for block {block_id}.",
             block_id=block_id,
-            severity="error",
-            message=f"Pass2 structural validation failed for block {block_id}",
-            payload={"pass_name": "pass2", "errors": structure.errors},
+            reason="structural_validation_failed",
+            payload=payload,
         )
-        raise RuntimeError(f"Pass 2 structural validation failed for block {block_id}.")
 
     restored_text, restore_warnings = restore_from_placeholders(
         corrected_text,
@@ -916,21 +963,29 @@ def _process_pass2_block(
         warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
     ]
     if blocking_restore_warnings:
-        _emit_translation_event(
-            release_id=release_id,
-            run_id=run_id,
-            event_type="pass2.failed",
-            chapter_number=chapter_number,
+        payload = {
+            "pass_name": "pass2",
+            "errors": blocking_restore_warnings,
+            "warnings": restore_warnings,
+        }
+        message = f"Pass2 restoration failed for block {block_id}"
+        if emit_failure_events:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.failed",
+                chapter_number=chapter_number,
+                block_id=block_id,
+                severity="error",
+                message=message,
+                payload=payload,
+            )
+        raise Pass2ValidationRetryableError(
+            f"Pass 2 restoration failed for block {block_id}.",
             block_id=block_id,
-            severity="error",
-            message=f"Pass2 restoration failed for block {block_id}",
-            payload={
-                "pass_name": "pass2",
-                "errors": blocking_restore_warnings,
-                "warnings": restore_warnings,
-            },
+            reason="restoration_failed",
+            payload=payload,
         )
-        raise RuntimeError(f"Pass 2 restoration failed for block {block_id}.")
 
     fidelity = validate_basic_fidelity(source_text, restored_text)
     fidelity_check = {
@@ -939,6 +994,17 @@ def _process_pass2_block(
         "errors": fidelity.errors,
         "warnings": fidelity.warnings,
     }
+    if not fidelity.is_valid and not emit_failure_events:
+        raise Pass2ValidationRetryableError(
+            f"Pass 2 fidelity validation failed for block {block_id}.",
+            block_id=block_id,
+            reason="fidelity_validation_failed",
+            payload={
+                "pass_name": "pass2",
+                "errors": fidelity.errors,
+                "warnings": fidelity.warnings,
+            },
+        )
     block_result = {
         "block_id": block_id,
         "parent_block_id": parent_block_id,
@@ -958,6 +1024,65 @@ def _process_pass2_block(
         payload={"pass_name": "pass2"},
     )
     return block_result, [structure_check], fidelity_check
+
+
+def _process_pass2_block(
+    block: dict[str, Any],
+    *,
+    pass2_prompt_template: str,
+    analyst_model: str,
+    client: LLMClient,
+    placeholders_by_block: dict[str, list[PlaceholderEntry]],
+    bundles_by_block: dict[str, Any] | None,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    config: AppConfig,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    max_attempts = config.translation.pass2_validation_retries + 1
+    last_error: Pass2ValidationRetryableError | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _process_pass2_block_once(
+                block,
+                pass2_prompt_template=pass2_prompt_template,
+                analyst_model=analyst_model,
+                client=client,
+                placeholders_by_block=placeholders_by_block,
+                bundles_by_block=bundles_by_block,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                config=config,
+                emit_failure_events=attempt == max_attempts,
+            )
+        except Pass2ValidationRetryableError as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                raise
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.retry",
+                chapter_number=chapter_number,
+                block_id=exc.block_id,
+                severity="warning",
+                message=(
+                    f"Pass2 validation retry {attempt}/{max_attempts - 1} "
+                    f"for {exc.block_id}: {exc.reason}"
+                ),
+                payload={
+                    "pass_name": "pass2",
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "remaining_retries": max_attempts - attempt,
+                    "reason": exc.reason,
+                    **exc.payload,
+                },
+            )
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Pass 2 block retry failed without an attempt result.")
 
 
 def translate_chapter_pass2(

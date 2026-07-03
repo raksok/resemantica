@@ -355,7 +355,7 @@ Retry failed pipeline units. The system classifies failures as **retryable** (au
 | `preprocess-graph` | Chapter missing fresh `graph_extraction_drafts`, stale graph prompt/source hash, or failed events | — |
 | `preprocess-continuity` | Chapter missing compact continuity summary or has failed events | — |
 | `packets-build` | Chapter missing `packet_metadata` or has failed events | — |
-| `translate-range` | Chapter has `status = 'failed'` in `translation_checkpoints` | — |
+| `translate-range` | Chapter has failed or incomplete translation checkpoints | — |
 
 ```bash
 uv run rsem run retry-failed -r <release> -R <run> [options]

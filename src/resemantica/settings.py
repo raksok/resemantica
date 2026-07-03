@@ -92,6 +92,7 @@ class TranslationConfig:
     risk_threshold_high: float = 0.7
     batched_model_order: bool = True
     pass2_concurrency: int = 2
+    pass2_validation_retries: int = 2
 
 
 @dataclass(slots=True)
@@ -476,6 +477,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 ),
                 "translation.pass2_concurrency",
             ),
+            pass2_validation_retries=_as_int(
+                translation.get(
+                    "pass2_validation_retries",
+                    TranslationConfig().pass2_validation_retries,
+                ),
+                "translation.pass2_validation_retries",
+            ),
         ),
         batch_order=BatchOrderConfig(
             enabled=_as_bool(
@@ -627,6 +635,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
     if config.translation.pass2_concurrency < 1:
         raise ValueError("translation.pass2_concurrency must be >= 1.")
+    if config.translation.pass2_validation_retries < 0:
+        raise ValueError("translation.pass2_validation_retries must be >= 0.")
     if config.batch_order.summary_chunk_multiplier <= 0:
         raise ValueError("batch_order.summary_chunk_multiplier must be > 0.")
     if config.batch_order.translation_chunk_size <= 0:

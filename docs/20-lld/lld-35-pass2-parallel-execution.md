@@ -45,6 +45,7 @@ def _process_pass2_block(
 - For **normal blocks** (single segment): calls `translate_pass2()` once, validates structure, restores placeholders, validates fidelity. Returns one structure check and one fidelity check.
 - For **resegmented blocks** (was_resegmented=true): iterates segments sequentially (they depend on `prior_segment_translations`), validates each segment's structure, joins segments, restores placeholders, validates fidelity. Returns multiple structure checks (one per segment) and one fidelity check.
 - Emits `paragraph_completed` / `paragraph_skipped` events via the existing thread-safe `_emit_translation_event` helper.
+- The block task retries validation failures according to `translation.pass2_validation_retries` before propagating failure to the chapter.
 
 ### 3. Parallel Orchestration
 
@@ -113,7 +114,8 @@ After the parallel section, the code proceeds exactly as before: writes `pass2_a
 |---|---|
 | `pass2_concurrency=1` | Behaves identically to current sequential code |
 | Config omits `pass2_concurrency` | Defaults to 2 in code |
-| Zero or negative value | `validate_config()` raises `ValueError` |
+| Config omits `pass2_validation_retries` | Defaults to 2 additional validation attempts |
+| `pass2_concurrency <= 0` or `pass2_validation_retries < 0` | `validate_config()` raises `ValueError` |
 | Existing checkpoints | Unchanged — checkpoint save/load logic is untouched |
 
 ## Edge Cases

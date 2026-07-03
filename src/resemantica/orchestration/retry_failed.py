@@ -657,7 +657,7 @@ def _plan_translation(
                   AND run_id = ?
                   AND chapter_number = ?
                   AND pass_name = 'pass3'
-                  AND status = 'completed'
+                  AND status = 'success'
                 LIMIT 1
                 """,
                 (release_id, run_id, chapter_number),

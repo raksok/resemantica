@@ -91,3 +91,4 @@ Always follow the milestone sequence below.
 | M71 | task-71 | M70 | Packet Context Budget Guardrails |
 | M72 | task-72 | M71 | Packet Glossary Budget Guardrails |
 | M73 | task-73 | M72 | Paragraph Bundle Budget Guardrails |
+| M74 | task-74 | M73 | Pass2 Block Retry Recovery |

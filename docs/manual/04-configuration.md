@@ -108,6 +108,7 @@ Sub-scores:
 Risk classes: `HIGH` (>= `risk_threshold_high`, default 0.7), `MEDIUM` (>= 0.3), `LOW` (< 0.3). High-risk paragraphs get Pass 3 readability polish when `pass3_default` is enabled.
 | `batched_model_order` | bool | `true` | Run all chapters pass1-first, then pass2 |
 | `pass2_concurrency` | int | `2` | Concurrent Pass 2 jobs (must be >= 1) |
+| `pass2_validation_retries` | int | `2` | Additional Pass 2 block validation retries before chapter failure |
 
 ## `[batch_order]` — Batched Execution
 
@@ -184,6 +185,7 @@ The system validates configuration at startup (`settings.py:475-539`). Key rules
 | `persistence_mode` | Must be `"normal"` or `"reduced"` |
 | `chapter_concurrency` | Must be in [1, 5] |
 | `pass2_concurrency` | Must be >= 1 |
+| `pass2_validation_retries` | Must be >= 0 |
 | `summary_chunk_multiplier`, `translation_chunk_size` | Must be > 0 |
 | `story_compact_max_tokens`, `graph_continuity_rebase_interval` | Must be > 0 |
 | `pruning_threshold` | Must be in [0.0, 1.0] |
@@ -244,6 +246,7 @@ pass3_default = false
 risk_threshold_high = 0.7
 batched_model_order = true
 pass2_concurrency = 3
+pass2_validation_retries = 2
 
 [summaries]
 exclude_chapter_patterns = ["titlepage", "nav", "toc", "cover", "copyright"]
