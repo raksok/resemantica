@@ -2,11 +2,11 @@
 
 ## Summary
 
-Replace the sequential for-loop in `translate_chapter_pass2()` with a `ThreadPoolExecutor` so independent blocks are processed concurrently, reducing wall-clock time proportionally to `pass2_concurrency`.
+Replace the sequential for-loop in `translate_chapter_pass2()` with a `ThreadPoolExecutor` so independent Pass 2 work units are processed concurrently. As of M75, a normal work unit may be a token-bounded batch of blocks; resegmented blocks remain one work unit because their segments are sequential.
 
 ## Problem Statement
 
-`translate_chapter_pass2()` iterates over all pass1 blocks one by one, calling `translate_pass2()` → LLM → parse → validate for each. With 100+ blocks per chapter and 1-3s per LLM call, this adds significant latency. Since each block's pass2 evaluation is completely independent (no cross-block dependencies), the loop is embarrassingly parallel.
+`translate_chapter_pass2()` used to iterate over all pass1 blocks one by one, calling `translate_pass2()` → LLM → parse → validate for each. With 100+ blocks per chapter and 1-3s per LLM call, this adds significant latency. Since normal block audits are independent, the scheduler now groups them into token-bounded batches and runs those work units through the same executor.
 
 The existing `LLMClient` is synchronous (OpenAI-compatible via httpx) — switching to async would be invasive. `ThreadPoolExecutor` provides parallel execution with minimal code change and zero quality impact (same prompt, same model, same per-block logic).
 
@@ -42,7 +42,7 @@ def _process_pass2_block(
     """Process one pass2 block. Returns (block_result, structure_checks, fidelity_check)."""
 ```
 
-- For **normal blocks** (single segment): calls `translate_pass2()` once, validates structure, restores placeholders, validates fidelity. Returns one structure check and one fidelity check.
+- For **normal blocks** (single segment): M75 batches multiple blocks when `pass2_batch_max_blocks > 1`; each result still validates structure, restores placeholders, and validates fidelity independently. If batching is disabled or a block cannot fit the batch prompt, it calls `translate_pass2()` once.
 - For **resegmented blocks** (was_resegmented=true): iterates segments sequentially (they depend on `prior_segment_translations`), validates each segment's structure, joins segments, restores placeholders, validates fidelity. Returns multiple structure checks (one per segment) and one fidelity check.
 - Emits `paragraph_completed` / `paragraph_skipped` events via the existing thread-safe `_emit_translation_event` helper.
 - The block task retries validation failures according to `translation.pass2_validation_retries` before propagating failure to the chapter.
@@ -77,7 +77,7 @@ with ThreadPoolExecutor(max_workers=concurrency) as executor:
         idx = fut_map[future]
         results[idx] = future.result()  # may raise
 
-# Reconstruct in original order:
+# Reconstruct in original work-unit order:
 for idx in sorted(results):
     block_result, struct_checks, fidelity_check = results[idx]
     pass2_blocks.append(block_result)
@@ -113,14 +113,16 @@ After the parallel section, the code proceeds exactly as before: writes `pass2_a
 | Scenario | Behaviour |
 |---|---|
 | `pass2_concurrency=1` | Behaves identically to current sequential code |
+| `pass2_batch_max_blocks=1` | Schedules existing one-block Pass 2 requests |
 | Config omits `pass2_concurrency` | Defaults to 2 in code |
+| Config omits `pass2_batch_max_blocks` | Defaults to 8 in code |
 | Config omits `pass2_validation_retries` | Defaults to 2 additional validation attempts |
-| `pass2_concurrency <= 0` or `pass2_validation_retries < 0` | `validate_config()` raises `ValueError` |
+| `pass2_concurrency <= 0`, `pass2_batch_max_blocks <= 0`, or `pass2_validation_retries < 0` | `validate_config()` raises `ValueError` |
 | Existing checkpoints | Unchanged — checkpoint save/load logic is untouched |
 
 ## Edge Cases
 
-- **Single block chapter:** No parallelism (only 1 task in the pool), works correctly.
+- **Single block chapter:** Uses one batch request when batching is enabled and it fits the budget, otherwise one single-block request.
 - **Resegmented block:** Treated as one atomic task. Internal segments still sequential within that task.
 - **All blocks failed pass1:** Thread pool receives zero tasks, emits no events, returns empty results.
 - **Analyst model OOM under concurrent load:** `pass2_concurrency` tunes this directly — reduce to 1 if needed.

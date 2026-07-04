@@ -17,6 +17,7 @@ No prompt rendering, parser, cache storage, LLM client, or provider API behavior
 | `idiom_meaning.txt` | 2.1 -> 2.2 | `{MEANING_ZH}` |
 | `graph_extract.txt` | 2.2 -> 2.3 | `{CHAPTER_NUMBER}`, `{SOURCE_TEXT_ZH}`, `{GLOSSARY_CONTEXT}` |
 | `translate_pass2.txt` | 2.4 -> 2.5 | `{GLOSSARY}`, `{ALIAS_RESOLUTIONS}`, `{MATCHED_IDIOMS}`, `{LOCAL_RELATIONSHIPS}`, `{CONTINUITY_NOTES}`, `{RETRIEVAL_EVIDENCE}`, `{SOURCE_TEXT}`, `{DRAFT_TEXT}`, `{FULL_SOURCE_BLOCK}`, `{PRIOR_SEGMENTS}` |
+| `translate_pass2_batch.txt` | 1.0 | `{BATCH_JSON}` |
 | `translate_pass3.txt` | 1.2 -> 1.3 | `{SOURCE_TEXT}`, `{PASS2_OUTPUT}`, `{GLOSSARY}`, `{ALIAS_RESOLUTIONS}`, `{MATCHED_IDIOMS}`, `{RELATIONSHIP_CONSTRAINTS}` |
 
 ## Prompt Layout Contract
@@ -28,6 +29,8 @@ The intended layout is:
 3. Dynamic input block containing all per-call values.
 
 Existing section headers and labels are preserved where local tests and mock LLMs inspect rendered prompts, such as `## CHAPTER NUMBER`, `## SOURCE TEXT (ZH)`, `## CANDIDATES`, `## LOCKED GLOSSARY`, `Source:`, `Draft:`, and Pass 3 context section headers.
+
+M75 adds `translate_pass2_batch.txt` with the same stable-prefix layout: auditor behavior and output schema come first, and the dynamic batch JSON is rendered last for KV-cache reuse. The Qwen throttle-group system prompt remains in the LLM client request and is not copied into the user prompt.
 
 ## HY-MT Boundary
 

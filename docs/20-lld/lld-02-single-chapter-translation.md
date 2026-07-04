@@ -46,10 +46,11 @@ Artifacts:
    e. Reconstruction phase concatenates all validated segment outputs in order to produce the final block output for `B`.
    f. If any segment fails after retry, the entire block `B` is marked failed.
 8. Halt if the retry still fails structural validation.
-9. Run Pass 2 through the shared LLM client against source and Pass 1 output. **Pass 2 receives conditional glossary context from paragraph bundles: when `bundle.matched_glossary_entries` is non-empty, a `TERMINOLOGY:` section is prepended to the prompt so the fidelity auditor can check for terminology violations.**
+9. Run Pass 2 through the shared LLM client against source and Pass 1 output. Normal blocks are packed into token-bounded audit batches up to `[translation].pass2_batch_max_blocks`; resegmented blocks stay on the sequential segment path. **Pass 2 receives conditional glossary context from paragraph bundles: when `bundle.matched_glossary_entries` is non-empty, a `TERMINOLOGY:` section is prepended to the prompt so the fidelity auditor can check for terminology violations.**
 10. Retry Pass 2 block validation failures up to `[translation].pass2_validation_retries` additional attempts before failing the chapter. Retries cover structural, restoration, and fidelity validation failures; prompt budget failures are not retried here.
-11. Emit corrected output, prompt metadata, model metadata, and fidelity flags.
-12. Persist chapter-level checkpoint state.
+11. Batch JSON parse failures, missing or duplicate block IDs, invalid result shapes, and per-block validation failures fall back through the existing single-block Pass 2 retry path for only the affected blocks.
+12. Emit corrected output, prompt metadata, model metadata, batching metadata, and fidelity flags.
+13. Persist chapter-level checkpoint state.
 
 ## Command Behavior
 
@@ -57,7 +58,7 @@ Artifacts:
 - If valid pass checkpoints exist, reruns skip completed Pass 1, Pass 2, and Pass 3 work by default.
 - `--force` ignores pass checkpoints for the requested chapter or range; `--force-pass1` remains a backward-compatible alias.
 - If structure validation fails, resegment the failed block at sentence boundaries, retry each segment in Pass 1, then run Pass 2 sequentially with full original block context and prior segment translations against each segment draft before marking the chapter failed.
-- Pass 2 retries validation failures at the block task boundary before marking the chapter failed.
+- Pass 2 batches normal block audits by default, retries validation failures at the block task boundary, and falls back affected batch blocks before marking the chapter failed.
 - Outputs are written under the run-scoped translation artifact tree.
 
 ## Validation Ownership

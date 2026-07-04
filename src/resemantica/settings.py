@@ -92,6 +92,7 @@ class TranslationConfig:
     risk_threshold_high: float = 0.7
     batched_model_order: bool = True
     pass2_concurrency: int = 2
+    pass2_batch_max_blocks: int = 8
     pass2_validation_retries: int = 2
 
 
@@ -477,6 +478,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 ),
                 "translation.pass2_concurrency",
             ),
+            pass2_batch_max_blocks=_as_int(
+                translation.get(
+                    "pass2_batch_max_blocks",
+                    TranslationConfig().pass2_batch_max_blocks,
+                ),
+                "translation.pass2_batch_max_blocks",
+            ),
             pass2_validation_retries=_as_int(
                 translation.get(
                     "pass2_validation_retries",
@@ -635,6 +643,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("events.persistence_mode must be 'normal' or 'reduced'.")
     if config.translation.pass2_concurrency < 1:
         raise ValueError("translation.pass2_concurrency must be >= 1.")
+    if config.translation.pass2_batch_max_blocks < 1:
+        raise ValueError("translation.pass2_batch_max_blocks must be >= 1.")
     if config.translation.pass2_validation_retries < 0:
         raise ValueError("translation.pass2_validation_retries must be >= 0.")
     if config.batch_order.summary_chunk_multiplier <= 0:

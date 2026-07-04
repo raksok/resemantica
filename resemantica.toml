@@ -45,6 +45,7 @@ pass3_default = false
 risk_threshold_high = 0.7
 batched_model_order = true
 pass2_concurrency = 3
+pass2_batch_max_blocks = 8
 
 [batch_order]
 enabled = true

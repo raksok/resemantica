@@ -4,10 +4,11 @@ import json
 
 import pytest
 
+from resemantica.llm import budget as budget_mod
 from resemantica.llm.budget import PromptBudgetError
-from resemantica.settings import AppConfig, BudgetConfig
+from resemantica.settings import AppConfig, BudgetConfig, LLMConfig, LLMThrottleGroupConfig
 from resemantica.translation.pass1 import translate_pass1
-from resemantica.translation.pass2 import translate_pass2
+from resemantica.translation.pass2 import ensure_pass2_batch_prompt_within_budget, translate_pass2
 from resemantica.translation.pass3 import translate_pass3
 
 
@@ -58,6 +59,30 @@ def test_pass2_prompt_budget_failure_before_llm_call() -> None:
         )
 
     assert client.calls == 0
+
+
+def test_pass2_batch_prompt_budget_counts_matching_system_prompt(monkeypatch) -> None:
+    monkeypatch.setattr(budget_mod, "count_tokens", lambda text: len(text))
+    config = AppConfig(
+        budget=BudgetConfig(max_context_per_pass=10),
+        llm=LLMConfig(
+            throttle_groups={
+                "qwen": LLMThrottleGroupConfig(
+                    model_names=["model"],
+                    max_concurrent_requests=1,
+                    system_prompt="12345",
+                )
+            }
+        ),
+    )
+
+    with pytest.raises(PromptBudgetError, match="stage=translate.pass2.batch chapter=8"):
+        ensure_pass2_batch_prompt_within_budget(
+            "12345",
+            model_name="model",
+            config=config,
+            chapter_number=8,
+        )
 
 
 def test_pass3_prompt_budget_failure_before_llm_call() -> None:

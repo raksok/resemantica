@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from resemantica.translation.pass2 import translate_pass2
+from resemantica.translation.pass2 import render_pass2_batch_prompt, translate_pass2
 
 _PASS2_TEMPLATE = (
     "# version: 2.2\n"
@@ -172,3 +172,29 @@ class TestPass2GlossaryContext:
         assert "IDIOMS" not in client.last_prompt
         assert "RELATIONSHIPS" not in client.last_prompt
         assert "RETRIEVAL_EVIDENCE" not in client.last_prompt
+
+    def test_batched_context_is_rendered_in_input_json(self) -> None:
+        prompt = render_pass2_batch_prompt(
+            prompt_template="Audit batch\n{BATCH_JSON}",
+            batch_items=[
+                {
+                    "block_id": "ch001_blk001",
+                    "source_text": "source",
+                    "draft_text": "draft",
+                    "full_source_block": "source",
+                    "prior_segments": [],
+                    "glossary": "TERMINOLOGY:\n战神 -> War God",
+                    "alias_resolutions": "ALIASES:\n老张 -> Zhang San",
+                    "matched_idioms": "IDIOMS:\n胸有成竹 -> have a plan",
+                    "local_relationships": "RELATIONSHIPS:\ne1 ALLY_OF e2",
+                    "continuity_notes": "CONTINUITY:\nkeep tone steady",
+                    "retrieval_evidence": "RETRIEVAL_EVIDENCE:\nidiom:1",
+                }
+            ],
+        )
+
+        assert "War God" in prompt
+        assert "Zhang San" in prompt
+        assert "have a plan" in prompt
+        assert "ALLY_OF" in prompt
+        assert "RETRIEVAL_EVIDENCE" in prompt

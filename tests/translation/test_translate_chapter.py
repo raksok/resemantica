@@ -8,7 +8,15 @@ import pytest
 from loguru import logger
 
 from resemantica.epub.extractor import extract_epub
-from resemantica.settings import AppConfig, TranslationConfig, derive_paths
+from resemantica.llm import budget as budget_mod
+from resemantica.settings import (
+    AppConfig,
+    BudgetConfig,
+    LLMConfig,
+    LLMThrottleGroupConfig,
+    TranslationConfig,
+    derive_paths,
+)
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pipeline import (
     translate_chapter_pass1,
@@ -173,9 +181,117 @@ def _retry_test_config(*, retries: int) -> AppConfig:
     return AppConfig(
         translation=TranslationConfig(
             pass2_concurrency=1,
+            pass2_batch_max_blocks=1,
             pass2_validation_retries=retries,
         )
     )
+
+
+def _manual_pass2_config(
+    *,
+    batch_max_blocks: int = 8,
+    max_context_per_pass: int = 49152,
+) -> AppConfig:
+    return AppConfig(
+        budget=BudgetConfig(max_context_per_pass=max_context_per_pass),
+        translation=TranslationConfig(
+            pass2_concurrency=1,
+            pass2_batch_max_blocks=batch_max_blocks,
+            pass2_validation_retries=1,
+        ),
+    )
+
+
+def _write_pass1_artifact(
+    *,
+    config: AppConfig,
+    release_id: str,
+    run_id: str,
+    blocks: list[dict[str, object]],
+) -> None:
+    paths = derive_paths(config, release_id=release_id)
+    translation_dir = paths.release_root / "runs" / run_id / "translation" / "chapter-1"
+    translation_dir.mkdir(parents=True, exist_ok=True)
+    (translation_dir / "pass1.json").write_text(
+        json.dumps(
+            {
+                "release_id": release_id,
+                "run_id": run_id,
+                "chapter_number": 1,
+                "pass_name": "pass1",
+                "model_name": "model",
+                "prompt_version": "test",
+                "source_hash": "hash",
+                "status": "success",
+                "blocks": blocks,
+                "structure_validation": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _normal_pass1_block(index: int, *, draft_text: str | None = None) -> dict[str, object]:
+    block_id = f"ch001_blk{index:03d}"
+    return {
+        "block_id": block_id,
+        "parent_block_id": block_id,
+        "source_text_zh": f"源文本{index}。",
+        "draft_text": draft_text or f"Draft {index}.",
+        "restored_text": draft_text or f"Draft {index}.",
+        "was_resegmented": False,
+        "segments": [],
+    }
+
+
+class BatchPass2LLM:
+    def __init__(
+        self,
+        *,
+        batch_response: str | None = None,
+        invalid_block_id: str | None = None,
+    ) -> None:
+        self.batch_response = batch_response
+        self.invalid_block_id = invalid_block_id
+        self.batch_calls = 0
+        self.single_calls = 0
+        self.batch_block_counts: list[int] = []
+        self.single_prompts: list[str] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        if "INPUT_BATCH_JSON" in prompt:
+            self.batch_calls += 1
+            if self.batch_response is not None:
+                return self.batch_response
+            payload = json.loads(prompt.rsplit("## INPUT_BATCH_JSON", 1)[1].strip())
+            blocks = payload["blocks"]
+            self.batch_block_counts.append(len(blocks))
+            results = []
+            for block in blocks:
+                block_id = str(block["block_id"])
+                if block_id == self.invalid_block_id:
+                    results.append(
+                        {
+                            "block_id": block_id,
+                            "fidelity_errors_found": True,
+                            "corrected_text": "",
+                        }
+                    )
+                else:
+                    results.append(
+                        {
+                            "block_id": block_id,
+                            "fidelity_errors_found": False,
+                            "corrected_text": "",
+                        }
+                    )
+            return json.dumps({"results": results})
+
+        if "translation auditor" in prompt:
+            self.single_calls += 1
+            self.single_prompts.append(prompt)
+            return json.dumps({"fidelity_errors_found": False, "corrected_text": ""})
+        return "Unexpected."
 
 
 def test_placeholder_preservation_and_pass2_correction(tmp_path: Path, monkeypatch) -> None:
@@ -450,6 +566,263 @@ def test_pass2_resegmented_block_retry_preserves_segment_order(
     assert client.segment_calls == ["seg1", "seg1", "seg2"]
     pass2_artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
     assert pass2_artifact["blocks"][0]["output_text_en"] == "Segment one. Segment two."
+
+
+def test_pass2_batches_multiple_normal_blocks_and_preserves_order(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m75-pass2-batch"
+    run_id = "run-001"
+    config = _manual_pass2_config(batch_max_blocks=8)
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>甲。</p><p>乙。</p><p>丙。</p>
+</body></html>
+""",
+        release_id,
+    )
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[_normal_pass1_block(1), _normal_pass1_block(2), _normal_pass1_block(3)],
+    )
+
+    client = BatchPass2LLM()
+    result = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert client.batch_calls == 1
+    assert client.single_calls == 0
+    assert [block["block_id"] for block in result["blocks"]] == [
+        "ch001_blk001",
+        "ch001_blk002",
+        "ch001_blk003",
+    ]
+    assert [block["output_text_en"] for block in result["blocks"]] == [
+        "Draft 1.",
+        "Draft 2.",
+        "Draft 3.",
+    ]
+    artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
+    assert artifact["batching"]["batches_attempted"] == 1
+    assert artifact["batching"]["batch_fallbacks"] == 0
+
+
+def test_pass2_batch_packing_splits_at_max_blocks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m75-pass2-batch-max"
+    run_id = "run-001"
+    config = _manual_pass2_config(batch_max_blocks=2)
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>甲。</p><p>乙。</p><p>丙。</p>
+</body></html>
+""",
+        release_id,
+    )
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[_normal_pass1_block(1), _normal_pass1_block(2), _normal_pass1_block(3)],
+    )
+
+    client = BatchPass2LLM()
+    translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert client.batch_calls == 2
+    assert client.batch_block_counts == [2, 1]
+
+
+def test_pass2_batch_packing_splits_before_prompt_budget_with_system_prompt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        budget_mod,
+        "count_tokens",
+        lambda text: text.count("ch001_blk") * 100 + (50 if text.startswith("SYS") else 0),
+    )
+    release_id = "m75-pass2-batch-budget"
+    run_id = "run-001"
+    config = AppConfig(
+        budget=BudgetConfig(max_context_per_pass=200),
+        llm=LLMConfig(
+            throttle_groups={
+                "qwen": LLMThrottleGroupConfig(
+                    model_names=["Qwen3.5-9B-GLM5.1"],
+                    max_concurrent_requests=1,
+                    system_prompt="SYS",
+                )
+            }
+        ),
+        translation=TranslationConfig(
+            pass2_concurrency=1,
+            pass2_batch_max_blocks=8,
+            pass2_validation_retries=1,
+        ),
+    )
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>甲。</p><p>乙。</p><p>丙。</p>
+</body></html>
+""",
+        release_id,
+    )
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[_normal_pass1_block(1), _normal_pass1_block(2), _normal_pass1_block(3)],
+    )
+
+    client = BatchPass2LLM()
+    translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert client.batch_block_counts == [1, 1, 1]
+
+
+def test_pass2_invalid_batch_json_falls_back_to_single_blocks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m75-pass2-batch-invalid-json"
+    run_id = "run-001"
+    config = _manual_pass2_config(batch_max_blocks=8)
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>甲。</p><p>乙。</p></body></html>
+""",
+        release_id,
+    )
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[_normal_pass1_block(1), _normal_pass1_block(2)],
+    )
+
+    client = BatchPass2LLM(batch_response="not json")
+    result = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert result["status"] == "success"
+    assert client.batch_calls == 1
+    assert client.single_calls == 2
+    artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
+    assert artifact["batching"]["batch_fallbacks"] == 1
+    assert artifact["batching"]["batch_fallback_blocks"] == 2
+
+
+def test_pass2_invalid_batch_result_falls_back_only_affected_block(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m75-pass2-batch-one-invalid"
+    run_id = "run-001"
+    config = _manual_pass2_config(batch_max_blocks=8)
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>甲。</p><p>乙。</p></body></html>
+""",
+        release_id,
+    )
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[_normal_pass1_block(1), _normal_pass1_block(2)],
+    )
+
+    client = BatchPass2LLM(invalid_block_id="ch001_blk002")
+    result = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert result["status"] == "success"
+    assert client.batch_calls == 1
+    assert client.single_calls == 1
+    assert "源文本2" in client.single_prompts[0]
+    artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
+    assert artifact["batching"]["batch_fallback_blocks"] == 1
+
+
+def test_pass2_batch_max_blocks_one_uses_existing_single_block_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m75-pass2-batch-off"
+    run_id = "run-001"
+    config = _manual_pass2_config(batch_max_blocks=1)
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>甲。</p><p>乙。</p></body></html>
+""",
+        release_id,
+    )
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[_normal_pass1_block(1), _normal_pass1_block(2)],
+    )
+
+    client = BatchPass2LLM()
+    translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert client.batch_calls == 0
+    assert client.single_calls == 2
 
 
 def test_resume_from_successful_pass1_skips_pass1(tmp_path: Path, monkeypatch) -> None:

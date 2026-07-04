@@ -101,7 +101,18 @@ chapter.
 **Try:**
 1. Increase `max_concurrent_requests_per_model` in `[llm]`
 2. Increase `pass2_concurrency` in `[translation]`
-3. Break the chapter range into smaller batches
+3. Increase `pass2_batch_max_blocks` in `[translation]` if Pass 2 is request-bound and batch prompts stay within budget
+4. Break the chapter range into smaller batches
+
+### Pass 2 batching falls back too often
+
+**Cause:** The analyst model returned invalid batch JSON, omitted or duplicated block IDs, produced an invalid per-block correction, or the batch prompt exceeded the budget and split down to single-block calls.
+
+**Try:**
+1. Check `translate-chapter.pass2.batch_fallback` events for `reason` and `affected_block_ids`
+2. Set `pass2_batch_max_blocks = 1` to restore one-block behavior for diagnosis
+3. Lower `pass2_batch_max_blocks` if batch prompts are near the context limit
+4. Keep Qwen throttle-group `system_prompt` in `[llm.throttle_groups.qwen]`; do not copy it into Pass 2 prompts
 
 ### Qwen overloads when multiple Qwen model IDs are configured
 

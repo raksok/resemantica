@@ -322,6 +322,63 @@ db_filename = "test.db"
 
         assert config.translation.batched_model_order is True
 
+    def test_pass2_batch_max_blocks_defaults_to_eight(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.translation.pass2_batch_max_blocks == 8
+
+    def test_accepts_pass2_batch_max_blocks(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[translation]
+pass2_batch_max_blocks = 3
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+        config = load_config(config_path)
+
+        assert config.translation.pass2_batch_max_blocks == 3
+
+    def test_rejects_invalid_pass2_batch_max_blocks(self, tmp_path) -> None:
+        toml_content = """
+[models]
+translator_name = "model-t"
+analyst_name = "model-a"
+embedding_name = "bge"
+
+[translation]
+pass2_batch_max_blocks = 0
+
+[paths]
+artifact_root = "artifacts"
+db_filename = "test.db"
+"""
+        config_path = tmp_path / "resemantica.toml"
+        config_path.write_text(toml_content)
+
+        with pytest.raises(ValueError, match="translation.pass2_batch_max_blocks"):
+            load_config(config_path)
+
     def test_batch_order_defaults(self, tmp_path) -> None:
         toml_content = """
 [models]

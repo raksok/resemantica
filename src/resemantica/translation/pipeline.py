@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from resemantica.db.packet_repo import get_latest_packet_metadata
 from resemantica.db.sqlite import open_connection
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
+from resemantica.llm.budget import PromptBudgetError
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
 from resemantica.settings import AppConfig, derive_paths, load_config
@@ -28,7 +30,13 @@ from resemantica.translation.checkpoints import (
     save_checkpoint,
 )
 from resemantica.translation.pass1 import translate_pass1
-from resemantica.translation.pass2 import translate_pass2
+from resemantica.translation.pass2 import (
+    Pass2BatchResponseError,
+    ensure_pass2_batch_prompt_within_budget,
+    parse_pass2_batch_response,
+    render_pass2_batch_prompt,
+    translate_pass2,
+)
 from resemantica.translation.pass3 import translate_pass3
 from resemantica.translation.risk import classify_paragraph_risk_from_text
 from resemantica.translation.validators import (
@@ -727,6 +735,123 @@ class Pass2ValidationRetryableError(RuntimeError):
         self.payload = payload or {}
 
 
+def _finalize_pass2_normal_block(
+    block: dict[str, Any],
+    *,
+    corrected_text: str,
+    placeholders_by_block: dict[str, list[PlaceholderEntry]],
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    emit_failure_events: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    source_text = str(block["source_text_zh"])
+    parent_block_id = str(block["parent_block_id"])
+    block_id = str(block["block_id"])
+    draft_text = str(block["draft_text"])
+    placeholder_entries = placeholders_by_block.get(parent_block_id, [])
+
+    structure = validate_structure(source_text, corrected_text)
+    structure_check = {
+        "stage": "pass2",
+        "block_id": block_id,
+        "status": structure.status,
+        "errors": structure.errors,
+        "warnings": structure.warnings,
+    }
+    if not structure.is_valid:
+        payload = {"pass_name": "pass2", "errors": structure.errors}
+        message = f"Pass2 structural validation failed for block {block_id}"
+        if emit_failure_events:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.failed",
+                chapter_number=chapter_number,
+                block_id=block_id,
+                severity="error",
+                message=message,
+                payload=payload,
+            )
+        raise Pass2ValidationRetryableError(
+            f"Pass 2 structural validation failed for block {block_id}.",
+            block_id=block_id,
+            reason="structural_validation_failed",
+            payload=payload,
+        )
+
+    restored_text, restore_warnings = restore_from_placeholders(
+        corrected_text,
+        placeholder_entries,
+    )
+    blocking_restore_warnings = [
+        warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
+    ]
+    if blocking_restore_warnings:
+        payload = {
+            "pass_name": "pass2",
+            "errors": blocking_restore_warnings,
+            "warnings": restore_warnings,
+        }
+        message = f"Pass2 restoration failed for block {block_id}"
+        if emit_failure_events:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.failed",
+                chapter_number=chapter_number,
+                block_id=block_id,
+                severity="error",
+                message=message,
+                payload=payload,
+            )
+        raise Pass2ValidationRetryableError(
+            f"Pass 2 restoration failed for block {block_id}.",
+            block_id=block_id,
+            reason="restoration_failed",
+            payload=payload,
+        )
+
+    fidelity = validate_basic_fidelity(source_text, restored_text)
+    fidelity_check = {
+        "block_id": block_id,
+        "status": fidelity.status,
+        "errors": fidelity.errors,
+        "warnings": fidelity.warnings,
+    }
+    if not fidelity.is_valid and not emit_failure_events:
+        raise Pass2ValidationRetryableError(
+            f"Pass 2 fidelity validation failed for block {block_id}.",
+            block_id=block_id,
+            reason="fidelity_validation_failed",
+            payload={
+                "pass_name": "pass2",
+                "errors": fidelity.errors,
+                "warnings": fidelity.warnings,
+            },
+        )
+
+    block_result = {
+        "block_id": block_id,
+        "parent_block_id": parent_block_id,
+        "source_text_zh": source_text,
+        "draft_text": draft_text,
+        "output_text_en": corrected_text,
+        "restored_text_en": restored_text,
+        "restoration_warnings": restore_warnings,
+    }
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="paragraph_completed",
+        chapter_number=chapter_number,
+        block_id=block_id,
+        message=f"Pass2 completed for {block_id}",
+        payload={"pass_name": "pass2"},
+    )
+    return block_result, [structure_check], fidelity_check
+
+
 def _process_pass2_block_once(
     block: dict[str, Any],
     *,
@@ -926,104 +1051,15 @@ def _process_pass2_block_once(
             payload=payload,
         ),
     )
-    structure = validate_structure(source_text, corrected_text)
-    structure_check = {
-        "stage": "pass2",
-        "block_id": block_id,
-        "status": structure.status,
-        "errors": structure.errors,
-        "warnings": structure.warnings,
-    }
-    if not structure.is_valid:
-        payload = {"pass_name": "pass2", "errors": structure.errors}
-        message = f"Pass2 structural validation failed for block {block_id}"
-        if emit_failure_events:
-            _emit_translation_event(
-                release_id=release_id,
-                run_id=run_id,
-                event_type="pass2.failed",
-                chapter_number=chapter_number,
-                block_id=block_id,
-                severity="error",
-                message=message,
-                payload=payload,
-            )
-        raise Pass2ValidationRetryableError(
-            f"Pass 2 structural validation failed for block {block_id}.",
-            block_id=block_id,
-            reason="structural_validation_failed",
-            payload=payload,
-        )
-
-    restored_text, restore_warnings = restore_from_placeholders(
-        corrected_text,
-        placeholder_entries,
-    )
-    blocking_restore_warnings = [
-        warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
-    ]
-    if blocking_restore_warnings:
-        payload = {
-            "pass_name": "pass2",
-            "errors": blocking_restore_warnings,
-            "warnings": restore_warnings,
-        }
-        message = f"Pass2 restoration failed for block {block_id}"
-        if emit_failure_events:
-            _emit_translation_event(
-                release_id=release_id,
-                run_id=run_id,
-                event_type="pass2.failed",
-                chapter_number=chapter_number,
-                block_id=block_id,
-                severity="error",
-                message=message,
-                payload=payload,
-            )
-        raise Pass2ValidationRetryableError(
-            f"Pass 2 restoration failed for block {block_id}.",
-            block_id=block_id,
-            reason="restoration_failed",
-            payload=payload,
-        )
-
-    fidelity = validate_basic_fidelity(source_text, restored_text)
-    fidelity_check = {
-        "block_id": block_id,
-        "status": fidelity.status,
-        "errors": fidelity.errors,
-        "warnings": fidelity.warnings,
-    }
-    if not fidelity.is_valid and not emit_failure_events:
-        raise Pass2ValidationRetryableError(
-            f"Pass 2 fidelity validation failed for block {block_id}.",
-            block_id=block_id,
-            reason="fidelity_validation_failed",
-            payload={
-                "pass_name": "pass2",
-                "errors": fidelity.errors,
-                "warnings": fidelity.warnings,
-            },
-        )
-    block_result = {
-        "block_id": block_id,
-        "parent_block_id": parent_block_id,
-        "source_text_zh": source_text,
-        "draft_text": draft_text,
-        "output_text_en": corrected_text,
-        "restored_text_en": restored_text,
-        "restoration_warnings": restore_warnings,
-    }
-    _emit_translation_event(
+    return _finalize_pass2_normal_block(
+        block,
+        corrected_text=corrected_text,
+        placeholders_by_block=placeholders_by_block,
         release_id=release_id,
         run_id=run_id,
-        event_type="paragraph_completed",
         chapter_number=chapter_number,
-        block_id=block_id,
-        message=f"Pass2 completed for {block_id}",
-        payload={"pass_name": "pass2"},
+        emit_failure_events=emit_failure_events,
     )
-    return block_result, [structure_check], fidelity_check
 
 
 def _process_pass2_block(
@@ -1085,6 +1121,367 @@ def _process_pass2_block(
     raise RuntimeError("Pass 2 block retry failed without an attempt result.")
 
 
+def _pass2_batch_item(
+    block: dict[str, Any],
+    *,
+    bundles_by_block: dict[str, Any] | None,
+) -> dict[str, Any]:
+    parent_block_id = str(block["parent_block_id"])
+    bundle = bundles_by_block.get(parent_block_id) if bundles_by_block else None
+    pass2_context = format_bundle_for_pass2(bundle)
+    source_text = str(block["source_text_zh"])
+    return {
+        "block_id": str(block["block_id"]),
+        "source_text": source_text,
+        "draft_text": str(block["draft_text"]),
+        "full_source_block": source_text,
+        "prior_segments": [],
+        "glossary": pass2_context["glossary"],
+        "alias_resolutions": pass2_context["alias_resolutions"],
+        "matched_idioms": pass2_context["matched_idioms"],
+        "local_relationships": pass2_context["local_relationships"],
+        "continuity_notes": pass2_context["continuity_notes"],
+        "retrieval_evidence": pass2_context["retrieval_evidence"],
+    }
+
+
+def _pass2_batch_prompt_tokens(
+    batch_items: list[dict[str, Any]],
+    *,
+    pass2_batch_prompt_template: str,
+    analyst_model: str,
+    config: AppConfig,
+    chapter_number: int,
+) -> int:
+    prompt = render_pass2_batch_prompt(
+        prompt_template=pass2_batch_prompt_template,
+        batch_items=batch_items,
+    )
+    return ensure_pass2_batch_prompt_within_budget(
+        prompt,
+        model_name=analyst_model,
+        config=config,
+        chapter_number=chapter_number,
+    )
+
+
+def _pack_pass2_work_units(
+    blocks_to_process: list[dict[str, Any]],
+    *,
+    pass2_batch_prompt_template: str,
+    analyst_model: str,
+    bundles_by_block: dict[str, Any] | None,
+    config: AppConfig,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    max_blocks = config.translation.pass2_batch_max_blocks
+    if max_blocks == 1:
+        return [{"kind": "single", "blocks": [block]} for block in blocks_to_process]
+
+    work_units: list[dict[str, Any]] = []
+    current_blocks: list[dict[str, Any]] = []
+    current_items: list[dict[str, Any]] = []
+
+    def flush_current() -> None:
+        nonlocal current_blocks, current_items
+        if not current_blocks:
+            return
+        work_units.append(
+            {
+                "kind": "batch",
+                "blocks": current_blocks,
+                "batch_items": current_items,
+            }
+        )
+        current_blocks = []
+        current_items = []
+
+    for block in blocks_to_process:
+        if bool(block.get("was_resegmented")):
+            flush_current()
+            work_units.append({"kind": "single", "blocks": [block]})
+            continue
+
+        item = _pass2_batch_item(block, bundles_by_block=bundles_by_block)
+        candidate_items = [*current_items, item]
+        should_split = len(candidate_items) > max_blocks
+        if not should_split:
+            try:
+                _pass2_batch_prompt_tokens(
+                    candidate_items,
+                    pass2_batch_prompt_template=pass2_batch_prompt_template,
+                    analyst_model=analyst_model,
+                    config=config,
+                    chapter_number=chapter_number,
+                )
+            except PromptBudgetError:
+                should_split = True
+
+        if should_split:
+            flush_current()
+            try:
+                _pass2_batch_prompt_tokens(
+                    [item],
+                    pass2_batch_prompt_template=pass2_batch_prompt_template,
+                    analyst_model=analyst_model,
+                    config=config,
+                    chapter_number=chapter_number,
+                )
+            except PromptBudgetError:
+                work_units.append({"kind": "single", "blocks": [block]})
+                continue
+
+        current_blocks.append(block)
+        current_items.append(item)
+
+    flush_current()
+    return work_units
+
+
+def _emit_pass2_batch_fallback_event(
+    *,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    batch_index: int,
+    blocks: list[dict[str, Any]],
+    prompt_token_count: int,
+    elapsed_seconds: float,
+    reason: str,
+    affected_block_ids: list[str],
+) -> None:
+    block_ids = [str(block["block_id"]) for block in blocks]
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="pass2.batch_fallback",
+        chapter_number=chapter_number,
+        severity="warning",
+        message=f"Pass2 batch {batch_index} fallback: {reason}",
+        payload={
+            "pass_name": "pass2",
+            "batch_index": batch_index,
+            "block_count": len(blocks),
+            "block_ids": block_ids,
+            "prompt_token_count": prompt_token_count,
+            "elapsed_seconds": elapsed_seconds,
+            "reason": reason,
+            "affected_block_ids": affected_block_ids,
+        },
+    )
+
+
+def _process_pass2_batch_work_unit(
+    blocks: list[dict[str, Any]],
+    *,
+    batch_items: list[dict[str, Any]],
+    batch_index: int,
+    pass2_batch_prompt_template: str,
+    pass2_prompt_template: str,
+    analyst_model: str,
+    client: LLMClient,
+    placeholders_by_block: dict[str, list[PlaceholderEntry]],
+    bundles_by_block: dict[str, Any] | None,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    config: AppConfig,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    block_ids = [str(block["block_id"]) for block in blocks]
+    prompt = render_pass2_batch_prompt(
+        prompt_template=pass2_batch_prompt_template,
+        batch_items=batch_items,
+    )
+    prompt_token_count = ensure_pass2_batch_prompt_within_budget(
+        prompt,
+        model_name=analyst_model,
+        config=config,
+        chapter_number=chapter_number,
+    )
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="pass2.batch_started",
+        chapter_number=chapter_number,
+        message=f"Pass2 batch {batch_index} started",
+        payload={
+            "pass_name": "pass2",
+            "batch_index": batch_index,
+            "block_count": len(blocks),
+            "block_ids": block_ids,
+            "prompt_token_count": prompt_token_count,
+        },
+    )
+    started = time.perf_counter()
+    response = client.generate_text(model_name=analyst_model, prompt=prompt)
+    elapsed = time.perf_counter() - started
+
+    affected_block_ids: list[str] = []
+    fallback_reason = ""
+    try:
+        corrected_by_block = parse_pass2_batch_response(
+            response,
+            expected_block_ids=block_ids,
+            drafts_by_block_id={str(item["block_id"]): str(item["draft_text"]) for item in batch_items},
+            prompt_token_count=prompt_token_count,
+        )
+    except Pass2BatchResponseError as exc:
+        corrected_by_block = exc.partial_outputs or {}
+        affected_block_ids = exc.affected_block_ids
+        fallback_reason = exc.reason
+
+    block_results_by_id: dict[str, dict[str, Any]] = {}
+    structure_checks_by_id: dict[str, list[dict[str, Any]]] = {}
+    fidelity_checks_by_id: dict[str, dict[str, Any]] = {}
+    affected_set = set(affected_block_ids)
+    for block in blocks:
+        block_id = str(block["block_id"])
+        if block_id in affected_set:
+            continue
+        if block_id not in corrected_by_block:
+            affected_block_ids.append(block_id)
+            affected_set.add(block_id)
+            fallback_reason = fallback_reason or "missing_block_output"
+            continue
+        try:
+            block_result, structure_checks, fidelity_check = _finalize_pass2_normal_block(
+                block,
+                corrected_text=corrected_by_block[block_id],
+                placeholders_by_block=placeholders_by_block,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                emit_failure_events=False,
+            )
+        except Pass2ValidationRetryableError as exc:
+            affected_block_ids.append(block_id)
+            affected_set.add(block_id)
+            fallback_reason = fallback_reason or exc.reason
+            continue
+        block_results_by_id[block_id] = block_result
+        structure_checks_by_id[block_id] = structure_checks
+        fidelity_checks_by_id[block_id] = fidelity_check
+
+    if affected_block_ids:
+        _emit_pass2_batch_fallback_event(
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            batch_index=batch_index,
+            blocks=blocks,
+            prompt_token_count=prompt_token_count,
+            elapsed_seconds=elapsed,
+            reason=fallback_reason or "batch_validation_failed",
+            affected_block_ids=affected_block_ids,
+        )
+        for block in blocks:
+            block_id = str(block["block_id"])
+            if block_id not in affected_set:
+                continue
+            block_result, structure_checks, fidelity_check = _process_pass2_block(
+                block,
+                pass2_prompt_template=pass2_prompt_template,
+                analyst_model=analyst_model,
+                client=client,
+                placeholders_by_block=placeholders_by_block,
+                bundles_by_block=bundles_by_block,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=chapter_number,
+                config=config,
+            )
+            block_results_by_id[block_id] = block_result
+            structure_checks_by_id[block_id] = structure_checks
+            fidelity_checks_by_id[block_id] = fidelity_check
+
+    _emit_translation_event(
+        release_id=release_id,
+        run_id=run_id,
+        event_type="pass2.batch_completed",
+        chapter_number=chapter_number,
+        message=f"Pass2 batch {batch_index} completed",
+        payload={
+            "pass_name": "pass2",
+            "batch_index": batch_index,
+            "block_count": len(blocks),
+            "block_ids": block_ids,
+            "prompt_token_count": prompt_token_count,
+            "elapsed_seconds": time.perf_counter() - started,
+        },
+    )
+
+    ordered_blocks = [block_results_by_id[str(block["block_id"])] for block in blocks]
+    ordered_structure_checks: list[dict[str, Any]] = []
+    ordered_fidelity_checks: list[dict[str, Any]] = []
+    for block in blocks:
+        block_id = str(block["block_id"])
+        ordered_structure_checks.extend(structure_checks_by_id[block_id])
+        ordered_fidelity_checks.append(fidelity_checks_by_id[block_id])
+
+    return (
+        ordered_blocks,
+        ordered_structure_checks,
+        ordered_fidelity_checks,
+        {
+            "batches_attempted": 1,
+            "batch_fallbacks": 1 if affected_block_ids else 0,
+            "batch_fallback_blocks": len(set(affected_block_ids)),
+        },
+    )
+
+
+def _process_pass2_work_unit(
+    unit: dict[str, Any],
+    *,
+    batch_index: int,
+    pass2_batch_prompt_template: str,
+    pass2_prompt_template: str,
+    analyst_model: str,
+    client: LLMClient,
+    placeholders_by_block: dict[str, list[PlaceholderEntry]],
+    bundles_by_block: dict[str, Any] | None,
+    release_id: str,
+    run_id: str,
+    chapter_number: int,
+    config: AppConfig,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    blocks = list(unit["blocks"])
+    if unit["kind"] == "batch":
+        return _process_pass2_batch_work_unit(
+            blocks,
+            batch_items=list(unit["batch_items"]),
+            batch_index=batch_index,
+            pass2_batch_prompt_template=pass2_batch_prompt_template,
+            pass2_prompt_template=pass2_prompt_template,
+            analyst_model=analyst_model,
+            client=client,
+            placeholders_by_block=placeholders_by_block,
+            bundles_by_block=bundles_by_block,
+            release_id=release_id,
+            run_id=run_id,
+            chapter_number=chapter_number,
+            config=config,
+        )
+
+    block_result, structure_checks, fidelity_check = _process_pass2_block(
+        blocks[0],
+        pass2_prompt_template=pass2_prompt_template,
+        analyst_model=analyst_model,
+        client=client,
+        placeholders_by_block=placeholders_by_block,
+        bundles_by_block=bundles_by_block,
+        release_id=release_id,
+        run_id=run_id,
+        chapter_number=chapter_number,
+        config=config,
+    )
+    return [block_result], structure_checks, [fidelity_check], {
+        "batches_attempted": 0,
+        "batch_fallbacks": 0,
+        "batch_fallback_blocks": 0,
+    }
+
+
 def translate_chapter_pass2(
     *,
     release_id: str,
@@ -1137,6 +1534,7 @@ def translate_chapter_pass2(
     chapter_report_path = validation_dir / "chapter.json"
 
     pass2_prompt = load_prompt("translate_pass2.txt")
+    pass2_batch_prompt = load_prompt("translate_pass2_batch.txt")
     analyst_model = config_obj.models.analyst_name
     client = _build_llm_client(config_obj, llm_client)
     usage_before = capture_usage_snapshot(client)
@@ -1200,6 +1598,14 @@ def translate_chapter_pass2(
             pass2_blocks = []
             pass2_structure_checks = []
             fidelity_checks = []
+            pass2_batching = {
+                "enabled": config_obj.translation.pass2_batch_max_blocks > 1,
+                "max_blocks": config_obj.translation.pass2_batch_max_blocks,
+                "batches_attempted": 0,
+                "batch_fallbacks": 0,
+                "batch_fallback_blocks": 0,
+                "batch_prompt_version": pass2_batch_prompt.version,
+            }
 
             blocks_to_process: list[dict[str, Any]] = []
             for block in list(pass1_payload.get("blocks", [])):
@@ -1218,12 +1624,29 @@ def translate_chapter_pass2(
 
             if blocks_to_process:
                 concurrency = config_obj.translation.pass2_concurrency
+                work_units = _pack_pass2_work_units(
+                    blocks_to_process,
+                    pass2_batch_prompt_template=pass2_batch_prompt.template,
+                    analyst_model=analyst_model,
+                    bundles_by_block=bundles_by_block,
+                    config=config_obj,
+                    chapter_number=chapter_number,
+                )
                 with ThreadPoolExecutor(max_workers=concurrency) as executor:
                     fut_map: dict[Future, int] = {}
-                    for i, block in enumerate(blocks_to_process):
+                    batch_number = 0
+                    batch_numbers_by_index: dict[int, int] = {}
+                    for i, unit in enumerate(work_units):
+                        if unit["kind"] == "batch":
+                            batch_number += 1
+                            batch_numbers_by_index[i] = batch_number
+                        else:
+                            batch_numbers_by_index[i] = 0
                         fut = executor.submit(
-                            _process_pass2_block,
-                            block,
+                            _process_pass2_work_unit,
+                            unit,
+                            batch_index=batch_numbers_by_index[i],
+                            pass2_batch_prompt_template=pass2_batch_prompt.template,
                             pass2_prompt_template=pass2_prompt.template,
                             analyst_model=analyst_model,
                             client=client,
@@ -1242,7 +1665,7 @@ def translate_chapter_pass2(
                         try:
                             results[idx] = future.result()
                         except Exception as exc:
-                            block_id = str(blocks_to_process[idx].get("block_id", ""))
+                            block_id = str(work_units[idx]["blocks"][0].get("block_id", ""))
                             _emit_translation_event(
                                 release_id=release_id,
                                 run_id=run_id,
@@ -1256,10 +1679,13 @@ def translate_chapter_pass2(
                             raise
 
                 for idx in sorted(results):
-                    block_result, struct_checks, fidelity_check = results[idx]
-                    pass2_blocks.append(block_result)
+                    block_results, struct_checks, unit_fidelity_checks, unit_stats = results[idx]
+                    pass2_blocks.extend(block_results)
                     pass2_structure_checks.extend(struct_checks)
-                    fidelity_checks.append(fidelity_check)
+                    fidelity_checks.extend(unit_fidelity_checks)
+                    pass2_batching["batches_attempted"] += int(unit_stats["batches_attempted"])
+                    pass2_batching["batch_fallbacks"] += int(unit_stats["batch_fallbacks"])
+                    pass2_batching["batch_fallback_blocks"] += int(unit_stats["batch_fallback_blocks"])
 
             pass2_failed = any(check["status"] == "failed" for check in pass2_structure_checks) or any(
                 check["status"] == "failed" for check in fidelity_checks
@@ -1271,10 +1697,12 @@ def translate_chapter_pass2(
                 "pass_name": "pass2",
                 "model_name": analyst_model,
                 "prompt_version": pass2_prompt.version,
+                "batch_prompt_version": pass2_batch_prompt.version,
                 "source_hash": source_hash,
                 "blocks": pass2_blocks,
                 "structure_validation": pass2_structure_checks,
                 "fidelity_validation": fidelity_checks,
+                "batching": pass2_batching,
                 "status": "failed" if pass2_failed else "success",
             }
             _write_json(pass2_artifact_path, pass2_payload)
