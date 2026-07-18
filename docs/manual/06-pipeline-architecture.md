@@ -87,7 +87,7 @@ Before executing, each stage in `STAGE_ORDER` runs validation gates (`orchestrat
 
 **`_check_packet_inputs()`** — For each story chapter, verifies `packet_metadata` exists in SQLite and both packet and bundle artifact files exist on disk. Skips chapters with known skip events (empty records, non-story).
 
-**`_check_rebuild_inputs()`** — For each chapter (including non-story), verifies the placeholder map and translated pass (pass2 or pass3) exist with valid output blocks.
+**`_check_rebuild_inputs()`** — For each selected story chapter, verifies the placeholder map and requires an exact mapping from every extracted parent block to a non-empty final Pass 2/3 output. Non-story chapters without translation artifacts keep their original XHTML; those with artifacts must pass the same completeness audit.
 
 ### Gate Failure Handling
 
@@ -164,6 +164,8 @@ For each chapter, the translation sub-stage runs:
 ```
 
 Pass 3 is only applied to paragraphs flagged as high-risk by the risk classifier (score > `risk_threshold_high`), or when `pass3_default` is enabled.
+
+Pass 1 bypasses the model for punctuation/symbol-only and placeholder-only blocks, preserving their source exactly. Empty or Chinese-bearing model output receives two English-only correction attempts. Pass 2 starts only when all extracted parent blocks have successful Pass 1 output, and cached Pass 1/2 artifacts are repaired at block granularity rather than accepted solely from checkpoint status.
 
 ## Event Bus
 

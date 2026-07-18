@@ -79,18 +79,18 @@ The `summary_generation_completed` payload must include enough identity to audit
 | `preprocess-glossary.translate.model_started/completed` | Per translator model missing-vote batch | `model_name`, `pending_count`, `candidate_count`, `skipped_count` |
 | `preprocess-glossary.translate.resolution.started/completed` | Vote resolution and canonical save phase | `pending_count`, `candidate_count`, translated/unresolved counts on completed |
 | `preprocess-glossary.translate.chapter_started/completed` | Per chapter during vote resolution and canonical save | `chapter_number`, counts on completed |
-| `preprocess-glossary.translate.unresolved` | Candidate vote did not resolve | severity `warning`, `candidate_id`, `source_term`, `unresolved_count` |
+| `preprocess-glossary.translate.unresolved` | Candidate vote did not resolve | severity `debug`, `candidate_id`, `source_term`, `unresolved_count` |
 | `preprocess-glossary.translate.failed` | Model voting or resolution failed | severity `error`, `model_name`, `candidate_id`, `phase`, `error` |
 | `preprocess-glossary.translate.snapshot.artifact_written` | Translation candidate snapshot written | `artifact_path`, `candidate_count` |
 | `preprocess-glossary.resolve.started/completed` | Saved glossary vote replay | `translation_run_id`, candidate and resolved/unresolved counts on completed |
-| `preprocess-glossary.resolve.unresolved` | Saved votes did not resolve | severity `warning`, `candidate_id`, `source_term`, `unresolved_count` |
+| `preprocess-glossary.resolve.unresolved` | Saved votes did not resolve | severity `debug`, `candidate_id`, `source_term`, `unresolved_count` |
 | `preprocess-glossary.resolve.snapshot.artifact_written` | Resolve-only candidate snapshot written | `artifact_path`, `artifact_format`, `candidate_count` |
 | `preprocess-glossary.resolve.failed` | Resolve-only replay failed | severity `error`, `phase`, `error` |
 | `preprocess-glossary.fill.started/completed` | Optional unresolved-vote filler pass | `translation_run_id`, candidate/vote counts, `force` on started |
 | `preprocess-glossary.fill.loading_completed` | Filler candidate selection completed | `candidate_count`, `filler_model_count`, `force` |
 | `preprocess-glossary.fill.model_started/completed` | Per filler model missing-vote batch | `model_name`, `candidate_count`, `skipped_count` |
 | `preprocess-glossary.fill.resolution.started/completed` | Filler-assisted deterministic resolution | candidate, translated, unresolved, skipped-vote counts |
-| `preprocess-glossary.fill.unresolved` | Filler-assisted votes still did not resolve | severity `warning`, `candidate_id`, `source_term`, `unresolved_count` |
+| `preprocess-glossary.fill.unresolved` | Filler-assisted votes still did not resolve | severity `debug`, `candidate_id`, `source_term`, `unresolved_count` |
 | `preprocess-glossary.fill.failed` | Filler vote generation or resolution failed | severity `error`, `phase`, `model_name`, `candidate_id`, `error` |
 | `preprocess-glossary.review.started/completed` | Human-review file generation | `entries_written`, review paths on completed |
 | `preprocess-glossary.review.json/csv.artifact_written` | Review JSON/CSV written | `artifact_path`, `artifact_format`, `entries_written` |
@@ -152,7 +152,8 @@ Emission points in `packets/builder.py`:
 - The existing `EventBus.publish` already catches subscriber exceptions and logs warnings.
 - No new EventBus subscriptions are added in this task — only emissions.
 - Any run-context pipeline warning or error must be paired with `emit_event()`, a local `_emit()` wrapper, or a helper callback that emits in the caller. Loguru-only warning/error diagnostics are allowed only for helpers without run context or explicitly allowlisted low-level diagnostics.
-- Repair/fallback/failure events are first-class operational signals. Current additions are `preprocess-summaries.story_compact_repaired`, `preprocess-summaries.story_compact_repair_failed`, `preprocess-glossary.translate.unresolved`, `preprocess-glossary.translate.failed`, `preprocess-graph.validation_failed`, `preprocess-continuity.chapter_failed`, `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, `translate-chapter.pass3.failed`, and `translate-chapter.bundle_context_missing`.
+- Expected control flow is informational: disabled Pass 3, stale packet rebuilds, non-story packet/EPUB skips, and empty extracted-record/frontmatter skips use `info`. Missing story summaries, exhausted translation retries, incomplete artifacts, and failure-driven skips remain warning or error events.
+- Repair/fallback/failure events are first-class operational signals. Candidate-level unresolved events are debug diagnostics; the corresponding phase completion event is the single warning when its `unresolved_count` is non-zero. Current additions include `preprocess-summaries.story_compact_repaired`, `preprocess-summaries.story_compact_repair_failed`, `preprocess-glossary.translate.unresolved`, `preprocess-glossary.translate.failed`, `preprocess-graph.validation_failed`, `preprocess-continuity.chapter_failed`, `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, `translate-chapter.pass3.failed`, and `translate-chapter.bundle_context_missing`.
 
 ## Data Flow
 1. Pipeline function receives `run_id`, `release_id` from caller.

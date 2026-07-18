@@ -21,6 +21,13 @@ _LABEL_PREFIX_RE = re.compile(
 
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC_RE = re.compile(r"\*(.+?)\*")
+_CONTENT_RETRY_COUNT = 2
+_ENGLISH_ONLY_CORRECTION = """
+
+## CORRECTION
+The previous response was empty or contained Chinese text. Translate the SOURCE_TEXT completely into
+English only. Preserve every placeholder exactly and return only the non-empty English translation.
+""".strip()
 
 
 def _clean_pass1_response(text: str) -> str:
@@ -79,6 +86,18 @@ def translate_pass1(
         stage_name="translate.pass1",
         chapter_number=chapter_number,
     )
-    raw_output = client.generate_text(model_name=model_name, prompt=prompt)
-    stripped = _strip_artifacts(raw_output, source_text)
-    return _clean_pass1_response(stripped)
+    active_prompt = prompt
+    for attempt in range(_CONTENT_RETRY_COUNT + 1):
+        raw_output = client.generate_text(model_name=model_name, prompt=active_prompt)
+        stripped = _strip_artifacts(raw_output, source_text)
+        cleaned = _clean_pass1_response(stripped)
+        if cleaned or attempt == _CONTENT_RETRY_COUNT:
+            return cleaned
+        active_prompt = f"{prompt}\n\n{_ENGLISH_ONLY_CORRECTION}"
+        ensure_prompt_within_budget(
+            active_prompt,
+            config=config or load_config(),
+            stage_name="translate.pass1",
+            chapter_number=chapter_number,
+        )
+    return ""

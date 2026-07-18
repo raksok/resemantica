@@ -79,14 +79,12 @@ class ScriptedLLM:
         self.pass1_calls = 0
         self.pass2_calls = 0
         self.fail_first_pass1 = False
-        self._first_pass1_done = False
         self.drop_placeholders = False
 
     def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
         if "PASS1" in prompt:
             self.pass1_calls += 1
-            if self.fail_first_pass1 and not self._first_pass1_done:
-                self._first_pass1_done = True
+            if self.fail_first_pass1 and self.pass1_calls <= 3:
                 return ""
             if self.drop_placeholders and "⟦B_1⟧" in prompt:
                 return "You good?"
@@ -109,6 +107,19 @@ class ScriptedLLM:
             })
 
         return "Unexpected."
+
+
+class CountingPass1LLM:
+    def __init__(self, responses_by_source: dict[str, list[str]]) -> None:
+        self.responses_by_source = {key: iter(value) for key, value in responses_by_source.items()}
+        self.pass1_prompts: list[str] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        self.pass1_prompts.append(prompt)
+        for source, responses in self.responses_by_source.items():
+            if source in prompt:
+                return next(responses)
+        raise AssertionError(f"Unexpected prompt: {prompt}")
 
 
 class ScriptedPass2RetryLLM:
@@ -325,6 +336,82 @@ def test_placeholder_preservation_and_pass2_correction(tmp_path: Path, monkeypat
     assert "<b>really good</b>" in block["restored_text_en"]
 
 
+@pytest.mark.parametrize("source", ["……", "⟦B_1⟧⟦/B_1⟧"])
+def test_pass1_symbol_or_placeholder_only_block_is_exact_passthrough(
+    tmp_path: Path,
+    monkeypatch,
+    source: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m76-pass1-passthrough"
+    _extract_one_chapter(
+        tmp_path,
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{source}</p></body></html>
+''',
+        release_id,
+    )
+    client = CountingPass1LLM({})
+
+    result = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert client.pass1_prompts == []
+    assert result["blocks"][0]["draft_text"] == source
+    assert result["blocks"][0]["status"] == "success"
+    pass2 = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,  # type: ignore[arg-type]
+    )
+    assert client.pass1_prompts == []
+    assert pass2["blocks"][0]["output_text_en"] == source
+
+
+def test_failed_pass1_artifact_resumes_only_failed_blocks(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m76-pass1-resume"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>第一段。</p><p>第二段。</p></body></html>
+''',
+        release_id,
+    )
+    first_client = CountingPass1LLM(
+        {"第一段。": ["First paragraph."], "第二段。": ["", "中文", "仍是中文"]}
+    )
+    first = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=first_client,  # type: ignore[arg-type]
+    )
+    assert first["status"] == "failed"
+
+    repair_client = CountingPass1LLM({"第二段。": ["Second paragraph."]})
+    repaired = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=repair_client,  # type: ignore[arg-type]
+    )
+
+    assert repaired["status"] == "success"
+    assert len(repair_client.pass1_prompts) == 1
+    assert [block["draft_text"] for block in repaired["blocks"]] == [
+        "First paragraph.",
+        "Second paragraph.",
+    ]
+
+
 def test_hard_stop_on_placeholder_structural_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _extract_one_chapter(
@@ -346,14 +433,13 @@ def test_hard_stop_on_placeholder_structural_failure(tmp_path: Path, monkeypatch
     )
     assert r1["status"] == "failed"
 
-    r2 = translate_chapter_pass2(
-        release_id="m2-failure",
-        chapter_number=1,
-        run_id="run-001",
-        llm_client=client,
-    )
-    assert r2["status"] == "success"
-    assert len(r2["blocks"]) == 0
+    with pytest.raises(RuntimeError, match="Pass 1 is incomplete"):
+        translate_chapter_pass2(
+            release_id="m2-failure",
+            chapter_number=1,
+            run_id="run-001",
+            llm_client=client,
+        )
 
 
 def test_reactive_resegmentation_on_structural_failure(tmp_path: Path, monkeypatch) -> None:
@@ -496,6 +582,95 @@ def test_pass2_zero_validation_retries_preserves_immediate_failure(
         )
 
     assert client.placeholder_pass2_calls == 1
+
+
+def test_pass2_repairs_only_missing_cached_blocks(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m76-pass2-repair"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>第一段。</p><p>第二段。</p></body></html>
+''',
+        release_id,
+    )
+    config = _manual_pass2_config(batch_max_blocks=1)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=ScriptedLLM(),
+    )
+    first_client = BatchPass2LLM()
+    first = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=first_client,  # type: ignore[arg-type]
+    )
+    artifact_path = Path(first["pass2_artifact"])
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    preserved = payload["blocks"][0]
+    payload["blocks"] = [preserved]
+    artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    repair_client = BatchPass2LLM()
+    repaired = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=repair_client,  # type: ignore[arg-type]
+    )
+
+    assert repaired["status"] == "success"
+    assert repair_client.single_calls == 1
+    assert len(repaired["blocks"]) == 2
+    assert repaired["blocks"][0] == preserved
+
+
+def test_pass2_rejects_extra_cached_block_mapping(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m76-pass2-extra"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文。</p></body></html>
+''',
+        release_id,
+    )
+    config = _manual_pass2_config(batch_max_blocks=1)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=ScriptedLLM(),
+    )
+    first = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=BatchPass2LLM(),  # type: ignore[arg-type]
+    )
+    artifact_path = Path(first["pass2_artifact"])
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload["blocks"].append({**payload["blocks"][0], "block_id": "unexpected"})
+    artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="extra block mappings"):
+        translate_chapter_pass2(
+            release_id=release_id,
+            chapter_number=1,
+            run_id=run_id,
+            config=config,
+            llm_client=BatchPass2LLM(),  # type: ignore[arg-type]
+        )
 
 
 def test_pass2_resegmented_block_retry_preserves_segment_order(

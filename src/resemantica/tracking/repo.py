@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
+from threading import RLock
 from typing import Any, Optional
 
 from loguru import logger
@@ -12,6 +13,7 @@ from .models import Event, RunState
 _SQLITE_TIMEOUT_SECONDS = 0.1
 _SQLITE_BUSY_TIMEOUT_MS = 100
 _EVENT_LOCK_RETRY_DELAYS = (0.05, 0.1, 0.2)
+_TRACKING_WRITE_LOCK = RLock()
 
 
 def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
@@ -65,36 +67,38 @@ def ensure_tracking_db(release_id: str) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=_SQLITE_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
-    _init_tracking_schema(conn)
+    with _TRACKING_WRITE_LOCK:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+        _init_tracking_schema(conn)
     return conn
 
 
 def save_run_state(conn: sqlite3.Connection, state: RunState) -> None:
     import json
-    with conn:
-        conn.execute("""
-            INSERT INTO run_state(
-                run_id, release_id, stage_name, status,
-                started_at, finished_at, checkpoint_json, metadata_json
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                stage_name = excluded.stage_name,
-                status = excluded.status,
-                finished_at = excluded.finished_at,
-                checkpoint_json = excluded.checkpoint_json,
-                metadata_json = excluded.metadata_json
-        """, (
-            state.run_id,
-            state.release_id,
-            state.stage_name,
-            state.status,
-            state.started_at,
-            state.finished_at,
-            json.dumps(state.checkpoint),
-            json.dumps(state.metadata),
-        ))
+    with _TRACKING_WRITE_LOCK:
+        with conn:
+            conn.execute("""
+                INSERT INTO run_state(
+                    run_id, release_id, stage_name, status,
+                    started_at, finished_at, checkpoint_json, metadata_json
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    stage_name = excluded.stage_name,
+                    status = excluded.status,
+                    finished_at = excluded.finished_at,
+                    checkpoint_json = excluded.checkpoint_json,
+                    metadata_json = excluded.metadata_json
+            """, (
+                state.run_id,
+                state.release_id,
+                state.stage_name,
+                state.status,
+                state.started_at,
+                state.finished_at,
+                json.dumps(state.checkpoint),
+                json.dumps(state.metadata),
+            ))
 
 
 def load_run_state(conn: sqlite3.Connection, run_id: str) -> Optional[RunState]:
@@ -132,30 +136,31 @@ def save_event(conn: sqlite3.Connection, event: Event) -> None:
         json.dumps(event.payload),
         event.schema_version,
     )
-    for attempt, delay in enumerate((*_EVENT_LOCK_RETRY_DELAYS, None), start=1):
-        try:
-            with conn:
-                conn.execute("""
-                    INSERT INTO events(
-                        event_id, event_type, event_time, run_id, release_id,
-                        stage_name, chapter_number, block_id, severity, message,
-                        payload_json, schema_version
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, params)
-            return
-        except sqlite3.OperationalError as exc:
-            if not _is_sqlite_lock_error(exc):
-                raise
-            if delay is None:
-                logger.warning(
-                    "Skipping event persistence after SQLite lock retries "
-                    "(event_type={}, release_id={}, attempts={})",
-                    event.event_type,
-                    event.release_id,
-                    attempt,
-                )
+    with _TRACKING_WRITE_LOCK:
+        for attempt, delay in enumerate((*_EVENT_LOCK_RETRY_DELAYS, None), start=1):
+            try:
+                with conn:
+                    conn.execute("""
+                        INSERT INTO events(
+                            event_id, event_type, event_time, run_id, release_id,
+                            stage_name, chapter_number, block_id, severity, message,
+                            payload_json, schema_version
+                        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, params)
                 return
-            time.sleep(delay)
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_lock_error(exc):
+                    raise
+                if delay is None:
+                    logger.warning(
+                        "Skipping event persistence after SQLite lock retries "
+                        "(event_type={}, release_id={}, attempts={})",
+                        event.event_type,
+                        event.release_id,
+                        attempt,
+                    )
+                    return
+                time.sleep(delay)
 
 
 def load_events(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from resemantica.packets.builder import build_packets
+from resemantica.packets.builder import build_chapter_packet, build_packets
 from resemantica.packets.models import PacketBuildOutput
 from resemantica.settings import derive_paths, load_config
 
@@ -95,3 +95,32 @@ def test_build_packets_emits_failure_reason(tmp_path: Path, monkeypatch) -> None
     assert len(failed_events) == 1
     assert failed_events[0].severity == "error"
     assert failed_events[0].payload.get("reason") == "simulated_failure"
+
+
+def test_empty_frontmatter_packet_skip_is_info(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "packet-empty-frontmatter"
+    paths = derive_paths(load_config(), release_id=release_id)
+    paths.extracted_chapters_dir.mkdir(parents=True, exist_ok=True)
+    (paths.extracted_chapters_dir / "chapter-1.json").write_text(
+        json.dumps({"chapter_number": 1, "records": []}),
+        encoding="utf-8",
+    )
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+    callback = received.append
+    subscribe("*", callback)
+    try:
+        result = build_chapter_packet(
+            release_id=release_id,
+            chapter_number=1,
+            run_id="packets-001",
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result.status == "skipped"
+    event = next(event for event in received if event.event_type == "packets-build.prerequisite_skipped")
+    assert event.severity == "info"
+    assert event.payload["reason"] == "empty_records"

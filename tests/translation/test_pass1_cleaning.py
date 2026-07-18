@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from resemantica.translation.pass1 import _clean_pass1_response
+from resemantica.translation.pass1 import _clean_pass1_response, translate_pass1
 
 
 class TestPass1Cleaning:
@@ -39,3 +39,42 @@ class TestPass1Cleaning:
     def test_empty_input_returns_empty(self) -> None:
         result = _clean_pass1_response("")
         assert result == ""
+
+
+class _RetryClient:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = iter(responses)
+        self.prompts: list[str] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        self.prompts.append(prompt)
+        return next(self.responses)
+
+
+def test_pass1_retries_empty_or_chinese_output_with_english_only_instruction() -> None:
+    client = _RetryClient(["", "仍然是中文", "Complete English translation."])
+
+    result = translate_pass1(
+        client=client,  # type: ignore[arg-type]
+        model_name="translator",
+        prompt_template="SOURCE_TEXT: {SOURCE_TEXT}",
+        source_text="中文原文",
+    )
+
+    assert result == "Complete English translation."
+    assert len(client.prompts) == 3
+    assert all("English only" in prompt for prompt in client.prompts[1:])
+
+
+def test_pass1_retry_exhaustion_returns_empty() -> None:
+    client = _RetryClient(["", "中文", "仍是中文"])
+
+    result = translate_pass1(
+        client=client,  # type: ignore[arg-type]
+        model_name="translator",
+        prompt_template="SOURCE_TEXT: {SOURCE_TEXT}",
+        source_text="中文原文",
+    )
+
+    assert result == ""
+    assert len(client.prompts) == 3

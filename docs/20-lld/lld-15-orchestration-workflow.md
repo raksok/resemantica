@@ -63,7 +63,7 @@ If the saved checkpoint contains `chapter_start` or `chapter_end`, those bounds 
 
 Internal stage resume is enabled by default. When production reaches summaries, glossary, idioms, graph, packets, or translation, the stage also skips its own completed durable units. Operators use `--force` on production or an individual command to rebuild the requested scope.
 
-For chunked batch-order stages, `chunk_checkpoints` add a cleanup boundary without replacing normal stage checkpoints. `preprocess-summaries` still resumes from `summary_checkpoints` inside an incomplete chunk. Batched `translate-range` still resumes from `pass1_completed`, `pass2_completed`, and `pass3_completed` inside an incomplete chunk.
+For chunked batch-order stages, `chunk_checkpoints` add a cleanup boundary without replacing normal stage checkpoints. `preprocess-summaries` still resumes from `summary_checkpoints` inside an incomplete chunk. Batched `translate-range` audits the artifact block mappings behind `pass1_completed`, `pass2_completed`, and `pass3_completed`; a nominally completed checkpoint never makes an incomplete artifact reusable.
 
 ## Failed Unit Retry
 
@@ -80,7 +80,7 @@ Supported retry stages are:
 - `translate-range`
 - `all`
 
-`--dry-run` performs read-only discovery and prints the retry plan. `--chapter`, `--start`, and `--end` constrain discovery and execution. Summaries rewind `summary_checkpoints` to before the earliest affected chapter before execution; `llm_content_validation_failed` summary drafts are retryable and rerun summary generation with fresh correction feedback. Glossary and idiom conflicts are reported as review-required and are not retried automatically. EPUB rebuild/extract are intentionally excluded because they do not expose finer durable failed units.
+`--dry-run` performs read-only discovery and prints the retry plan. `--chapter`, `--start`, and `--end` constrain discovery and execution. Summaries rewind `summary_checkpoints` to before the earliest affected chapter before execution; `llm_content_validation_failed` summary drafts are retryable and rerun summary generation with fresh correction feedback. Translation repair temporarily uses an explicit empty execution checkpoint, delegates block reuse to the translation artifacts, and restores the original production `RunState` afterward. Glossary and idiom conflicts are reported as review-required and are not retried automatically. EPUB rebuild/extract are intentionally excluded because they do not expose finer durable failed units.
 
 Summary rows with `validation_status = "failed"` are audit evidence only. Production gates for packets and translation require approved summary rows, so flagged summaries fail and retry before packet assembly or translation pass 1 can consume them.
 
@@ -101,8 +101,10 @@ Summary rows with `validation_status = "failed"` are audit evidence only. Produc
 - iterate inclusively in numeric order
 - continue or stop according to an explicit policy; the default should stop on hard structural failures
 - return aggregate success/failure metadata
+- fail the chapter and translation chunk when any extracted parent block lacks a successful Pass 1 result
+- audit complete, non-empty final block coverage before reporting range success
 
-When batched model order and chunking are active, `translate-range` runs pass1, pass2, and pass3 for one chunk before advancing to the next chunk. The stage checkpoint metadata includes chunk progress so production resume and cleanup can identify the last completed chunk.
+When batched model order and chunking are active, `translate-range` runs pass1, pass2, and pass3 for one chunk before advancing to the next chunk. The stage checkpoint metadata includes chunk progress so production resume and cleanup can identify the last completed chunk. Pass 2 cannot run for a chapter with failed or missing Pass 1 blocks.
 
 ## Event Contract
 

@@ -7,6 +7,7 @@ from resemantica.orchestration import (
     OrchestrationRunner,
     apply_cleanup,
     emit_event,
+    execute_retry_failed,
     plan_cleanup,
     plan_retry_failed,
     resume_run,
@@ -570,6 +571,61 @@ class TestRetryFailed:
         assert unit.reason == "failed_or_missing_summary_rows"
         assert not manifest_path.exists()
 
+    def test_retry_failed_uses_empty_checkpoint_and_restores_production_state(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-checkpoint-preservation"
+        run_id = "001"
+        original = RunState(
+            run_id=run_id,
+            release_id=release_id,
+            stage_name="translate-range",
+            status="stopped",
+            checkpoint={"pass1_completed": [1, 2], "chapter_end": 1248},
+            metadata={"production": True},
+        )
+        conn = ensure_tracking_db(release_id)
+        try:
+            save_run_state(conn, original)
+        finally:
+            conn.close()
+
+        from resemantica.orchestration.models import StageResult
+        from resemantica.orchestration.retry_failed import RetryFailedPlan, RetryUnit
+
+        plan = RetryFailedPlan(
+            release_id=release_id,
+            run_id=run_id,
+            stage="translate-range",
+            retryable=[RetryUnit("translate-range", 3, 3, "failed", [3])],
+        )
+        monkeypatch.setattr("resemantica.orchestration.retry_failed.plan_retry_failed", lambda **kwargs: plan)
+        seen_checkpoints: list[dict[str, object]] = []
+
+        def fake_execute(self, stage_name, **kwargs):
+            seen_checkpoints.append(dict(kwargs["checkpoint"]))
+            return StageResult(True, stage_name, "repaired", checkpoint={"completed_chapters": [3]})
+
+        monkeypatch.setattr(OrchestrationRunner, "_execute_stage", fake_execute)
+
+        result = execute_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="translate-range",
+        )
+
+        assert result.success is True
+        assert seen_checkpoints == [{}]
+        conn = ensure_tracking_db(release_id)
+        try:
+            restored = load_run_state(conn, run_id)
+        finally:
+            conn.close()
+        assert restored == original
+
     def test_retry_failed_reports_llm_content_validation_summary_failure(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         release_id = "retry-summary-llm-validation"
@@ -857,11 +913,11 @@ class TestRetryFailed:
                 release_id=release_id,
                 run_id=run_id,
                 chapter_number=1,
-                pass_name="pass3",
+                pass_name="pass2",
                 source_hash="hash-ch1",
                 prompt_version="prompt",
                 status="success",
-                artifact_path="pass3.json",
+                artifact_path="pass2.json",
             )
         finally:
             conn.close()

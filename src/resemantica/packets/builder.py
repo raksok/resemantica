@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -278,8 +278,9 @@ def _append_graph_row(
         sections[section_name].append(row)
         return True
 
-    candidate = {name: [*rows] for name, rows in sections.items()}
-    candidate[section_name].append(row)
+    candidate: dict[str, object] = {name: [*rows] for name, rows in sections.items()}
+    candidate_rows = cast(list[dict[str, object]], candidate[section_name])
+    candidate_rows.append(row)
     if _context_token_count(candidate) > max_tokens:
         return False
     sections[section_name].append(row)
@@ -624,7 +625,6 @@ def build_chapter_packet(
             release_id,
             f"{_STAGE_NAME}.prerequisite_skipped",
             chapter_number=chapter_number,
-            severity="warning",
             message=f"Packet build skipped chapter {chapter_number}: extracted records are empty",
             reason="empty_records",
         )
@@ -660,7 +660,6 @@ def build_chapter_packet(
             release_id,
             f"{_STAGE_NAME}.prerequisite_skipped",
             chapter_number=chapter_number,
-            severity="warning",
             message=f"Packet build skipped chapter {chapter_number}: non-story chapter",
             reason="non_story_chapter",
         )
@@ -884,7 +883,6 @@ def build_chapter_packet(
                 release_id,
                 f"{_STAGE_NAME}.stale_rebuild",
                 chapter_number=chapter_number,
-                severity="warning",
                 message=f"Packet build rebuilding stale chapter {chapter_number}: {', '.join(staleness.reasons)}",
                 reasons=staleness.reasons,
                 reason=staleness.reasons[0] if staleness.reasons else "stale",

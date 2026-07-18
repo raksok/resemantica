@@ -9,7 +9,7 @@ Production orchestration now performs deterministic preflight checks before ever
 - `preprocess-idioms` and `preprocess-graph`: extraction, summary story metadata, required story summaries, and unresolved vote checks.
 - `packets-build`: summary inputs, graph snapshot inputs, and unresolved vote checks.
 - `translate-range`: packet metadata and packet/bundle artifacts for selected story chapters.
-- `epub-rebuild`: translated pass artifacts and placeholder maps for selected story chapters, plus selected non-story chapters that already have pass artifacts.
+- `epub-rebuild`: placeholder maps plus exact, non-empty final Pass 2/3 output coverage for every extracted parent block in selected story chapters, and the same validation for selected non-story chapters that already have pass artifacts.
 
 ## Non-Story Chapters
 Downstream gates use `summary_drafts.is_story_chapter = 0` as the authoritative non-story marker. Non-story chapters may omit packets and translation pass artifacts. Rebuild leaves their original XHTML untouched only when no translated blocks exist; if a selected non-story chapter has pass2/pass3 artifacts, the gate validates those artifacts and rebuild consumes them.

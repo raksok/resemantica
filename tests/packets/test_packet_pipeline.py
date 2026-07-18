@@ -675,18 +675,28 @@ def test_packet_force_rebuild_bypasses_up_to_date_metadata(
         run_id="packets-002",
         graph_client=graph_client,
     )
-    forced = build_chapter_packet(
-        release_id=release_id,
-        chapter_number=1,
-        run_id="packets-003",
-        graph_client=graph_client,
-        force_rebuild=True,
-    )
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+    callback = received.append
+    subscribe("*", callback)
+    try:
+        forced = build_chapter_packet(
+            release_id=release_id,
+            chapter_number=1,
+            run_id="packets-003",
+            graph_client=graph_client,
+            force_rebuild=True,
+        )
+    finally:
+        unsubscribe("*", callback)
 
     assert first.status in {"built", "rebuilt_stale"}
     assert cache_hit.status == "up_to_date"
     assert forced.status == "rebuilt_stale"
     assert forced.stale_reasons == ["forced_rebuild"]
+    stale_event = next(event for event in received if event.event_type == "packets-build.stale_rebuild")
+    assert stale_event.severity == "info"
 
 
 def test_packet_prefers_compact_story_summary(

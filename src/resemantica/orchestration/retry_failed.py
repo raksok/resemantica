@@ -21,7 +21,13 @@ from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.models import StageResult
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import hash_locked_glossary, hash_validated_summary
-from resemantica.tracking.repo import ensure_tracking_db, load_events
+from resemantica.tracking.repo import (
+    ensure_tracking_db,
+    load_events,
+    load_run_state,
+    save_run_state,
+)
+from resemantica.translation.completeness import audit_chapter_translation
 
 RetryStage = Literal[
     "preprocess-summaries",
@@ -631,6 +637,7 @@ def _plan_translation(
     start: int | None,
     end: int | None,
 ) -> tuple[list[RetryUnit], list[RetryUnit]]:
+    final_pass_name = "pass3" if config.translation.pass3_default else "pass2"
     failed = _query_ints(
         conn,
         """
@@ -638,9 +645,10 @@ def _plan_translation(
         FROM translation_checkpoints
         WHERE release_id = ?
           AND run_id = ?
+          AND pass_name IN ('pass1', ?)
           AND status = 'failed'
         """,
-        (release_id, run_id),
+        (release_id, run_id, final_pass_name),
     )
     chapters = _list_extracted_chapter_numbers(
         config=config,
@@ -656,16 +664,34 @@ def _plan_translation(
                 WHERE release_id = ?
                   AND run_id = ?
                   AND chapter_number = ?
-                  AND pass_name = 'pass3'
+                  AND pass_name = ?
                   AND status = 'success'
                 LIMIT 1
                 """,
-                (release_id, run_id, chapter_number),
+                (release_id, run_id, chapter_number, final_pass_name),
             ).fetchone()
         except sqlite3.OperationalError:
             row = None
         if row is None:
             failed.append(chapter_number)
+            continue
+        paths = derive_paths(config, release_id=release_id)
+        chapter_path = paths.extracted_chapters_dir / f"chapter-{chapter_number}.json"
+        try:
+            chapter_payload = json.loads(chapter_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            failed.append(chapter_number)
+            continue
+        if chapter_payload.get("records"):
+            translation_dir = (
+                paths.release_root
+                / "runs"
+                / run_id
+                / "translation"
+                / f"chapter-{chapter_number}"
+            )
+            if not audit_chapter_translation(chapter_path, translation_dir).success:
+                failed.append(chapter_number)
     affected = _scoped_numbers(failed, start, end)
     if not affected:
         return [], []
@@ -852,43 +878,58 @@ def execute_retry_failed(
     success = True
     from resemantica.orchestration.runner import OrchestrationRunner
 
+    tracking_conn = ensure_tracking_db(release_id)
+    try:
+        original_run_state = load_run_state(tracking_conn, run_id)
+    finally:
+        tracking_conn.close()
+
     runner = OrchestrationRunner(release_id, run_id, config=config_obj)
-    for item in plan.retryable:
-        if item.stage == "preprocess-summaries" and item.chapter_start is not None:
-            rewind = _rewind_summary_checkpoints(
-                release_id=release_id,
-                run_id=run_id,
-                config=config_obj,
-                before_chapter=item.chapter_start,
+    try:
+        for item in plan.retryable:
+            if item.stage == "preprocess-summaries" and item.chapter_start is not None:
+                rewind = _rewind_summary_checkpoints(
+                    release_id=release_id,
+                    run_id=run_id,
+                    config=config_obj,
+                    before_chapter=item.chapter_start,
+                )
+            else:
+                rewind = {}
+            emit_event(
+                run_id,
+                release_id,
+                "retry-failed.stage_started",
+                "retry-failed",
+                message=f"Retrying {item.stage}",
+                payload={**item.to_dict(), "summary_checkpoint_rewind": rewind},
             )
-        else:
-            rewind = {}
-        emit_event(
-            run_id,
-            release_id,
-            "retry-failed.stage_started",
-            "retry-failed",
-            message=f"Retrying {item.stage}",
-            payload={**item.to_dict(), "summary_checkpoint_rewind": rewind},
-        )
-        result = runner.run_stage(
-            item.stage,
-            chapter_start=item.chapter_start,
-            chapter_end=item.chapter_end,
-            allow_rewind=True,
-            force=False,
-        )
-        results.append(
-            {
-                "stage": item.stage,
-                "success": result.success,
-                "message": result.message,
-                "metadata": result.metadata,
-            }
-        )
-        if not result.success:
-            success = False
-            break
+            result = runner.run_stage(
+                item.stage,
+                checkpoint={},
+                chapter_start=item.chapter_start,
+                chapter_end=item.chapter_end,
+                allow_rewind=True,
+                force=False,
+            )
+            results.append(
+                {
+                    "stage": item.stage,
+                    "success": result.success,
+                    "message": result.message,
+                    "metadata": result.metadata,
+                }
+            )
+            if not result.success:
+                success = False
+                break
+    finally:
+        if original_run_state is not None:
+            tracking_conn = ensure_tracking_db(release_id)
+            try:
+                save_run_state(tracking_conn, original_run_state)
+            finally:
+                tracking_conn.close()
 
     message = "Retry-failed completed" if success else "Retry-failed stopped after failed retry"
     emit_event(

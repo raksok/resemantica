@@ -54,7 +54,7 @@ This preserves CLI/TUI live progress even when not every progress event is writt
 
 `tracking.db` connections are opened with WAL journal mode plus a short SQLite timeout and `PRAGMA busy_timeout` (100ms). WAL allows readers and writers to overlap more safely during concurrent pipeline workers and TUI polling. The short built-in wait prevents event persistence from spending tens of seconds inside SQLite before the application's best-effort retry policy can run.
 
-Event persistence retries transient `database is locked` and `database table is locked` failures with bounded backoff before skipping the row. Skipping an event row after exhausted retries is non-fatal: the event is still delivered to live subscribers, and `EventBus.publish()` continues without raising a tracking traceback. Non-lock SQLite errors still surface from the repository layer, but the bus treats persistence as best-effort so live delivery is not blocked by tracking storage failures.
+Event persistence serializes writes within the process before opening the tracking connection. This prevents worker threads from contending with each other while retaining bounded backoff for transient `database is locked` and `database table is locked` failures caused by other processes. Skipping an event row after exhausted cross-process retries is non-fatal: the event is still delivered to live subscribers, and `EventBus.publish()` continues without raising a tracking traceback. Non-lock SQLite errors still surface from the repository layer, but the bus treats persistence as best-effort so live delivery is not blocked by tracking storage failures.
 
 ## Tests
 
@@ -62,7 +62,7 @@ Event persistence retries transient `database is locked` and `database table is 
 - In reduced mode, subscribers receive every event.
 - In reduced mode, warning/error/failure events are persisted.
 - In reduced mode, sampled progress events write fewer rows for a simulated large run.
-- Concurrent event emission does not raise SQLite lock tracebacks.
+- Concurrent in-process event emission persists every event without SQLite lock tracebacks.
 - Persistent event-store lock failures are swallowed after bounded retries and live subscribers still receive the event.
 - CLI progress tests still pass.
 

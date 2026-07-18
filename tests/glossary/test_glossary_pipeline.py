@@ -548,9 +548,16 @@ def test_multi_model_glossary_translation_majority_and_review_alternatives(
         event for event in received if event.event_type == "preprocess-glossary.translate.unresolved"
     ]
     assert len(unresolved_events) == 1
-    assert unresolved_events[0].severity == "warning"
+    assert unresolved_events[0].severity == "debug"
     assert unresolved_events[0].payload["candidate_id"] == ids_by_source["苍云门"]
     assert unresolved_events[0].payload["source_term"] == "苍云门"
+    summaries = [
+        event
+        for event in received
+        if event.event_type == "preprocess-glossary.translate.resolution.completed"
+    ]
+    assert len(summaries) == 1
+    assert summaries[0].severity == "warning"
 
 
 def test_glossary_vote_resolution_collapses_case_and_article_variants() -> None:
@@ -2979,10 +2986,10 @@ def test_promotion_insert_is_transactional(tmp_path: Path, monkeypatch) -> None:
         schema_version=1,
     )
     entry_b = LockedGlossaryEntry(
-        glossary_entry_id="glex_txn_b",
+        glossary_entry_id="glex_txn_a",
         release_id="m3-transaction",
-        source_term="青云门",
-        normalized_source_term=normalize_term("青云门"),
+        source_term="苍云门",
+        normalized_source_term=normalize_term("苍云门"),
         target_term="Blue Cloud Gate",
         normalized_target_term=normalize_term("Blue Cloud Gate"),
         category="faction",

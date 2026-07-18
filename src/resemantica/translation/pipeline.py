@@ -53,6 +53,67 @@ def _placeholder_tokens(text: str) -> list[str]:
     return _PLACEHOLDER_RE.findall(text)
 
 
+def _is_symbol_only_source(text: str) -> bool:
+    without_placeholders = _PLACEHOLDER_RE.sub("", text).strip()
+    return not without_placeholders or not any(char.isalnum() for char in without_placeholders)
+
+
+def _is_reusable_pass1_block(block: dict[str, Any], *, source_text: str) -> bool:
+    if block.get("status") == "failed" or str(block.get("source_text_zh", "")) != source_text:
+        return False
+    if block.get("was_resegmented"):
+        segments = block.get("segments")
+        return isinstance(segments, list) and bool(segments) and all(
+            isinstance(segment, dict) and bool(str(segment.get("draft_text", "")).strip())
+            for segment in segments
+        )
+    return bool(str(block.get("draft_text", "")).strip())
+
+
+def _reusable_pass2_blocks(
+    expected_blocks: list[dict[str, Any]],
+    cached_blocks: object,
+) -> dict[str, dict[str, Any]]:
+    expected_by_id = {str(block["block_id"]): block for block in expected_blocks}
+    if len(expected_by_id) != len(expected_blocks):
+        raise RuntimeError("Pass 1 contains duplicate block mappings.")
+    if not isinstance(cached_blocks, list):
+        raise RuntimeError("Pass 2 cache contains malformed block mappings.")
+
+    reusable: dict[str, dict[str, Any]] = {}
+    extra: list[str] = []
+    malformed: list[str] = []
+    seen: set[str] = set()
+    for index, block in enumerate(cached_blocks):
+        if not isinstance(block, dict):
+            malformed.append(f"index {index}")
+            continue
+        block_id = str(block.get("block_id", ""))
+        if not block_id or block_id in seen:
+            malformed.append(block_id or f"index {index}")
+            continue
+        seen.add(block_id)
+        expected = expected_by_id.get(block_id)
+        if expected is None:
+            extra.append(block_id)
+            continue
+        if (
+            str(block.get("parent_block_id", "")) != str(expected.get("parent_block_id", ""))
+            or str(block.get("source_text_zh", "")) != str(expected.get("source_text_zh", ""))
+        ):
+            malformed.append(block_id)
+            continue
+        output = block.get("restored_text_en") or block.get("output_text_en")
+        if isinstance(output, str) and output.strip():
+            reusable[block_id] = block
+
+    if extra:
+        raise RuntimeError(f"Pass 2 cache contains extra block mappings: {sorted(extra)}")
+    if malformed:
+        raise RuntimeError(f"Pass 2 cache contains malformed block mappings: {sorted(malformed)}")
+    return reusable
+
+
 def _split_for_retry(text: str, max_chars: int = 1500) -> list[str]:
     if len(text) <= max_chars:
         return [text]
@@ -328,14 +389,41 @@ def translate_chapter_pass1(
             packet_version_hash=packet_version_hash,
         )
 
+        existing_pass1_payload: dict[str, Any] | None = None
+        reusable_blocks: dict[str, dict[str, Any]] = {}
+        expected_sources = {
+            str(record["block_id"]): _prevalidate_source(str(record["source_text_zh"]))
+            for record in records
+        }
+        if (
+            not force
+            and pass1_checkpoint is not None
+            and Path(pass1_checkpoint.artifact_path).exists()
+        ):
+            existing_pass1_payload = _read_json(Path(pass1_checkpoint.artifact_path))
+            existing_blocks = existing_pass1_payload.get("blocks", [])
+            if isinstance(existing_blocks, list):
+                for block in existing_blocks:
+                    if not isinstance(block, dict):
+                        continue
+                    block_id = str(block.get("block_id", ""))
+                    source_text = expected_sources.get(block_id)
+                    if source_text is not None and _is_reusable_pass1_block(
+                        block,
+                        source_text=source_text,
+                    ):
+                        reusable_blocks[block_id] = block
+
         if (
             not force
             and pass1_checkpoint is not None
             and pass1_checkpoint.status == "success"
-            and Path(pass1_checkpoint.artifact_path).exists()
+            and existing_pass1_payload is not None
+            and len(reusable_blocks) == len(records)
+            and set(reusable_blocks) == set(expected_sources)
         ):
             used_pass1_cache = True
-            pass1_payload = _read_json(Path(pass1_checkpoint.artifact_path))
+            pass1_payload = existing_pass1_payload
             pass1_structure_checks = list(pass1_payload.get("structure_validation", []))
             logger.info("Chapter {} pass1: using cached artifact", chapter_number)
             _emit_translation_event(
@@ -352,6 +440,7 @@ def translate_chapter_pass1(
             )
         else:
             pass1_blocks: list[dict[str, Any]] = []
+            pass1_structure_checks = []
 
             for record in records:
                 source_text = str(record["source_text_zh"])
@@ -370,6 +459,54 @@ def translate_chapter_pass1(
                     message=f"Pass1 started for {block_id}",
                     payload={"pass_name": "pass1"},
                 )
+
+                reusable_block = reusable_blocks.get(block_id)
+                if reusable_block is not None:
+                    pass1_blocks.append(reusable_block)
+                    _emit_translation_event(
+                        release_id=release_id,
+                        run_id=run_id,
+                        event_type="paragraph_completed",
+                        chapter_number=chapter_number,
+                        block_id=block_id,
+                        message=f"Pass1 reused successful block {block_id}",
+                        payload={"pass_name": "pass1", "status": "cached"},
+                    )
+                    continue
+
+                if _is_symbol_only_source(cleaned_source):
+                    pass1_blocks.append(
+                        {
+                            "block_id": block_id,
+                            "parent_block_id": parent_block_id,
+                            "source_text_zh": cleaned_source,
+                            "draft_text": cleaned_source,
+                            "restored_text": cleaned_source,
+                            "was_resegmented": False,
+                            "segments": [],
+                            "status": "success",
+                            "passthrough": True,
+                        }
+                    )
+                    pass1_structure_checks.append(
+                        {
+                            "stage": "pass1",
+                            "block_id": block_id,
+                            "status": "passed",
+                            "errors": [],
+                            "warnings": [],
+                        }
+                    )
+                    _emit_translation_event(
+                        release_id=release_id,
+                        run_id=run_id,
+                        event_type="paragraph_completed",
+                        chapter_number=chapter_number,
+                        block_id=block_id,
+                        message=f"Pass1 preserved non-translatable block {block_id}",
+                        payload={"pass_name": "pass1", "status": "passthrough"},
+                    )
+                    continue
 
                 draft_text = translate_pass1(
                     client=client,
@@ -437,6 +574,7 @@ def translate_chapter_pass1(
                                 "restored_text": restored_text,
                                 "was_resegmented": False,
                                 "segments": [],
+                                "status": "success",
                             }
                         )
                         _emit_translation_event(
@@ -479,7 +617,6 @@ def translate_chapter_pass1(
                             "errors": structure.errors,
                         }
                     )
-                    logger.warning("Chapter {} block {}: pass1 failed", chapter_number, block_id)
                     _emit_translation_event(
                         release_id=release_id,
                         run_id=run_id,
@@ -507,7 +644,6 @@ def translate_chapter_pass1(
                             "errors": structure.errors,
                         }
                     )
-                    logger.warning("Chapter {} block {}: pass1 failed", chapter_number, block_id)
                     _emit_translation_event(
                         release_id=release_id,
                         run_id=run_id,
@@ -590,11 +726,6 @@ def translate_chapter_pass1(
                     }
                 )
                 if segment_failed:
-                    logger.warning(
-                        "Chapter {} block {}: resegmentation failed",
-                        chapter_number,
-                        parent_block_id,
-                    )
                     _emit_translation_event(
                         release_id=release_id,
                         run_id=run_id,
@@ -643,12 +774,6 @@ def translate_chapter_pass1(
             )
             if pass1_failed:
                 failed_count = sum(1 for b in pass1_blocks if b.get("status") == "failed")
-                logger.warning(
-                    "Chapter {} pass1: {}/{} blocks failed, proceeding to pass2",
-                    chapter_number,
-                    failed_count,
-                    len(pass1_blocks),
-                )
                 _emit_translation_event(
                     release_id=release_id,
                     run_id=run_id,
@@ -882,6 +1007,42 @@ def _process_pass2_block_once(
         message=f"Pass2 started for {parent_block_id}",
         payload={"pass_name": "pass2"},
     )
+
+    if bool(block.get("passthrough")):
+        passthrough_text = str(block["source_text_zh"])
+        result = {
+            "block_id": str(block["block_id"]),
+            "parent_block_id": parent_block_id,
+            "source_text_zh": passthrough_text,
+            "draft_text": passthrough_text,
+            "output_text_en": passthrough_text,
+            "restored_text_en": passthrough_text,
+            "restoration_warnings": [],
+            "passthrough": True,
+        }
+        structure_check = {
+            "stage": "pass2",
+            "block_id": str(block["block_id"]),
+            "status": "passed",
+            "errors": [],
+            "warnings": [],
+        }
+        fidelity_check = {
+            "block_id": str(block["block_id"]),
+            "status": "passed",
+            "errors": [],
+            "warnings": [],
+        }
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="paragraph_completed",
+            chapter_number=chapter_number,
+            block_id=str(block["block_id"]),
+            message=f"Pass2 preserved non-translatable block {block['block_id']}",
+            payload={"pass_name": "pass2", "status": "passthrough"},
+        )
+        return result, [structure_check], fidelity_check
 
     if bool(block.get("was_resegmented")):
         prior_segment_translations: list[str] = []
@@ -1197,7 +1358,7 @@ def _pack_pass2_work_units(
         current_items = []
 
     for block in blocks_to_process:
-        if bool(block.get("was_resegmented")):
+        if bool(block.get("was_resegmented")) or bool(block.get("passthrough")):
             flush_current()
             work_units.append({"kind": "single", "blocks": [block]})
             continue
@@ -1558,6 +1719,12 @@ def translate_chapter_pass2(
             payload={"pass_name": "pass2", "model_name": analyst_model},
         )
         pass1_payload = _read_json(pass1_artifact_path)
+        pass1_blocks = list(pass1_payload.get("blocks", []))
+        if pass1_payload.get("status") != "success" or any(
+            not isinstance(block, dict) or block.get("status") == "failed"
+            for block in pass1_blocks
+        ):
+            raise RuntimeError("Pass 1 is incomplete; Pass 2 will not run.")
 
         pass2_checkpoint = load_checkpoint(
             conn,
@@ -1570,13 +1737,26 @@ def translate_chapter_pass2(
             packet_version_hash=packet_version_hash,
         )
 
+        cached_payload: dict[str, Any] | None = None
+        reusable_cached_blocks: dict[str, dict[str, Any]] = {}
+        if (
+            not force
+            and pass2_checkpoint is not None
+            and Path(pass2_checkpoint.artifact_path).exists()
+        ):
+            cached_payload = _read_json(Path(pass2_checkpoint.artifact_path))
+            reusable_cached_blocks = _reusable_pass2_blocks(
+                pass1_blocks,
+                cached_payload.get("blocks"),
+            )
+
         if (
             not force
             and pass2_checkpoint is not None
             and pass2_checkpoint.status == "success"
-            and Path(pass2_checkpoint.artifact_path).exists()
+            and cached_payload is not None
+            and len(reusable_cached_blocks) == len(pass1_blocks)
         ):
-            cached_payload = _read_json(Path(pass2_checkpoint.artifact_path))
             pass2_blocks = list(cached_payload.get("blocks", []))
             pass2_structure_checks = list(cached_payload.get("structure_validation", []))
             fidelity_checks = list(cached_payload.get("fidelity_validation", []))
@@ -1595,10 +1775,14 @@ def translate_chapter_pass2(
                 },
             )
         else:
-            pass2_blocks = []
+            pass2_blocks = [
+                reusable_cached_blocks[str(block["block_id"])]
+                for block in pass1_blocks
+                if str(block["block_id"]) in reusable_cached_blocks
+            ]
             pass2_structure_checks = []
             fidelity_checks = []
-            pass2_batching = {
+            pass2_batching: dict[str, Any] = {
                 "enabled": config_obj.translation.pass2_batch_max_blocks > 1,
                 "max_blocks": config_obj.translation.pass2_batch_max_blocks,
                 "batches_attempted": 0,
@@ -1608,17 +1792,8 @@ def translate_chapter_pass2(
             }
 
             blocks_to_process: list[dict[str, Any]] = []
-            for block in list(pass1_payload.get("blocks", [])):
-                if block.get("status") == "failed":
-                    _emit_translation_event(
-                        release_id=release_id,
-                        run_id=run_id,
-                        event_type="paragraph_skipped",
-                        chapter_number=chapter_number,
-                        block_id=str(block.get("block_id", "")),
-                        message="Pass2 skipped failed pass1 block",
-                        payload={"pass_name": "pass2"},
-                    )
+            for block in pass1_blocks:
+                if str(block["block_id"]) in reusable_cached_blocks:
                     continue
                 blocks_to_process.append(block)
 
@@ -1686,6 +1861,9 @@ def translate_chapter_pass2(
                     pass2_batching["batches_attempted"] += int(unit_stats["batches_attempted"])
                     pass2_batching["batch_fallbacks"] += int(unit_stats["batch_fallbacks"])
                     pass2_batching["batch_fallback_blocks"] += int(unit_stats["batch_fallback_blocks"])
+
+            pass2_by_id = {str(block["block_id"]): block for block in pass2_blocks}
+            pass2_blocks = [pass2_by_id[str(block["block_id"])] for block in pass1_blocks]
 
             pass2_failed = any(check["status"] == "failed" for check in pass2_structure_checks) or any(
                 check["status"] == "failed" for check in fidelity_checks
@@ -1838,7 +2016,6 @@ def translate_chapter_pass3(
             run_id=run_id,
             event_type="pass3.skipped",
             chapter_number=chapter_number,
-            severity="warning",
             message=f"Pass3 skipped for chapter {chapter_number}: disabled",
             payload={"pass_name": "pass3", "reason": "disabled"},
         )
@@ -1852,7 +2029,6 @@ def translate_chapter_pass3(
     pass3_artifact_path = translation_dir / "pass3.json"
 
     if not pass2_artifact_path.exists():
-        logger.warning("Chapter {} pass3: pass2 artifact not found, skipping", chapter_number)
         _emit_translation_event(
             release_id=release_id,
             run_id=run_id,

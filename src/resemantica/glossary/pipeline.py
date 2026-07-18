@@ -1446,7 +1446,7 @@ def translate_glossary_candidates(
                         run_id,
                         release_id,
                         f"{_STAGE_NAME}.translate.unresolved",
-                        severity="warning",
+                        severity="debug",
                         candidate_id=candidate.candidate_id,
                         source_term=candidate.source_term,
                         chapter_number=candidate.first_seen_chapter,
@@ -1455,10 +1455,6 @@ def translate_glossary_candidates(
                             "Glossary translation unresolved for candidate "
                             f"{candidate.candidate_id}: no majority vote"
                         ),
-                    )
-                    logger.warning(
-                        "Translation unresolved for candidate {} (no majority vote)",
-                        candidate.candidate_id,
                     )
         except Exception as exc:
             _emit(
@@ -1502,6 +1498,7 @@ def translate_glossary_candidates(
             run_id,
             release_id,
             f"{_STAGE_NAME}.translate.resolution.completed",
+            severity="warning" if unresolved_count else "info",
             pending_count=pending_count,
             candidate_count=pending_count,
             translated_count=translated_count,
@@ -2311,7 +2308,7 @@ def fill_glossary_translation_votes(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.fill.unresolved",
-                    severity="warning",
+                    severity="debug",
                     candidate_id=candidate.candidate_id,
                     source_term=candidate.source_term,
                     chapter_number=candidate.first_seen_chapter,
@@ -2342,6 +2339,7 @@ def fill_glossary_translation_votes(
             run_id,
             release_id,
             f"{_STAGE_NAME}.fill.completed",
+            severity="warning" if unresolved_count else "info",
             translation_run_id=run_id,
             candidate_count=len(candidates),
             filler_vote_count=filler_vote_count,
@@ -2464,7 +2462,7 @@ def resolve_glossary_translation_votes(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.resolve.unresolved",
-                    severity="warning",
+                    severity="debug",
                     candidate_id=candidate.candidate_id,
                     source_term=candidate.source_term,
                     chapter_number=candidate.first_seen_chapter,
@@ -2473,11 +2471,6 @@ def resolve_glossary_translation_votes(
                         "Glossary saved-vote resolution unresolved for candidate "
                         f"{candidate.candidate_id}: no majority vote"
                     ),
-                )
-                logger.warning(
-                    "Saved-vote resolution unresolved for candidate {} ({})",
-                    candidate.candidate_id,
-                    candidate.source_term,
                 )
             raise_if_stop_requested(
                 stop_token,
@@ -2512,6 +2505,7 @@ def resolve_glossary_translation_votes(
             run_id,
             release_id,
             f"{_STAGE_NAME}.resolve.completed",
+            severity="warning" if unresolved_count else "info",
             translation_run_id=run_id,
             candidate_count=len(candidates),
             translated_count=translated_count,

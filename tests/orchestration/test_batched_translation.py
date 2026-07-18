@@ -382,6 +382,40 @@ def test_config_default_batched_translate_range_runs_model_order(
     ]
 
 
+def test_batched_translate_range_propagates_failed_pass1_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "batched-pass1-failed"
+    _write_chapter(release_id, 1)
+    pass2_called = False
+
+    monkeypatch.setattr(
+        "resemantica.translation.pipeline.translate_chapter_pass1",
+        lambda **kwargs: {"status": "failed", "pass1_artifact": "pass1.json"},
+    )
+
+    def pass2(**kwargs):
+        nonlocal pass2_called
+        pass2_called = True
+        return {"status": "success"}
+
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+
+    result = OrchestrationRunner(release_id, "run").run_stage(
+        "translate-range",
+        chapter_start=1,
+        chapter_end=1,
+        batched_model_order=True,
+    )
+
+    assert result.success is False
+    assert result.checkpoint["pass1_completed"] == []
+    assert result.checkpoint["failures"] == {1: "Pass 1 is incomplete."}
+    assert pass2_called is False
+
+
 def test_chunked_batched_translate_range_runs_model_order_per_chunk(
     tmp_path: Path,
     monkeypatch,

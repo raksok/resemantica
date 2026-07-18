@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from resemantica.settings import AppConfig, derive_paths
+from resemantica.translation.completeness import audit_chapter_translation
 from resemantica.utils import _read_json
 
 _SUMMARY_TYPES = ("chapter_summary_zh_short", "story_so_far_zh")
@@ -533,30 +534,9 @@ def _check_rebuild_inputs(
         if not placeholder_path.exists():
             missing.append(f"chapter {number}: placeholder map {placeholder_path}")
         translation_dir = translation_root / f"chapter-{number}"
-        pass3_path = translation_dir / "pass3.json"
-        pass2_path = translation_dir / "pass2.json"
-        if pass3_path.exists():
-            try:
-                blocks = _read_json(pass3_path).get("blocks", [])
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                missing.append(f"chapter {number}: invalid pass3 artifact {pass3_path}: {exc}")
-                continue
-            if isinstance(blocks, list) and any(
-                isinstance(block, dict) and block.get("final_output")
-                for block in blocks
-            ):
-                continue
-        if pass2_path.exists():
-            try:
-                blocks = _read_json(pass2_path).get("blocks", [])
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                missing.append(f"chapter {number}: invalid pass2 artifact {pass2_path}: {exc}")
-                continue
-            if isinstance(blocks, list) and any(
-                isinstance(block, dict) and (block.get("output_text_en") or block.get("restored_text_en"))
-                for block in blocks
-            ):
-                continue
-        missing.append(f"chapter {number}: pass2/pass3 translated artifact in {translation_dir}")
+        chapter_path = release_root / "extracted" / "chapters" / f"chapter-{number}.json"
+        audit = audit_chapter_translation(chapter_path, translation_dir)
+        if not audit.success:
+            missing.append(f"chapter {number}: incomplete translation artifact: {list(audit.errors)}")
     if missing:
         report.fail(f"Missing rebuild inputs: {missing}")

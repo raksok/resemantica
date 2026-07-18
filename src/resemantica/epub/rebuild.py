@@ -636,7 +636,6 @@ def rebuild_translated_epub(
                         release_id,
                         f"{_STAGE_NAME}.chapter_skipped",
                         chapter_number=chapter_ref.chapter_number,
-                        severity="warning",
                         message=f"EPUB rebuild skipped chapter {chapter_ref.chapter_number}: non-story chapter",
                         reason="non_story_chapter",
                     )

@@ -31,24 +31,27 @@ def load_bundles_for_chapter(
             chapter_number=chapter_number,
         )
     except sqlite3.OperationalError:
-        logger.warning("packet_metadata table not found, continuing without bundle context")
         if warning_callback is not None:
             warning_callback({"reason": "missing_packet_metadata_table"})
+        else:
+            logger.warning("packet_metadata table not found, continuing without bundle context")
         return None
     finally:
         conn.close()
 
     if metadata is None:
-        logger.warning("No packet metadata found for chapter {}", chapter_number)
         if warning_callback is not None:
             warning_callback({"reason": "missing_packet_metadata"})
+        else:
+            logger.warning("No packet metadata found for chapter {}", chapter_number)
         return None
 
     bundle_path = Path(metadata.bundle_path)
     if not bundle_path.exists():
-        logger.warning("Bundle file not found: {}", bundle_path)
         if warning_callback is not None:
             warning_callback({"reason": "missing_bundle_file", "bundle_path": str(bundle_path)})
+        else:
+            logger.warning("Bundle file not found: {}", bundle_path)
         return None
 
     payload = _read_json(bundle_path)

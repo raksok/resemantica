@@ -591,7 +591,7 @@ def _chunk_event_payload(
 
 
 def _artifact_path(paths: Any, chapter_number: int) -> Path:
-    return paths.summaries_dir / f"chapter-{chapter_number}-graph-continuity.json"
+    return Path(paths.summaries_dir) / f"chapter-{chapter_number}-graph-continuity.json"
 
 
 def _current_graph_en_record(
@@ -932,6 +932,7 @@ def preprocess_continuity(
                         and existing_record.derived_from_chapter_hash == continuity_input.source_hash
                     )
                     if can_reuse_zh:
+                        assert existing_record is not None
                         record = existing_record
                         model_anchor_audit = _load_existing_model_anchor_audit(artifact_path)
                     else:

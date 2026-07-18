@@ -380,7 +380,7 @@ def test_multi_model_idiom_translation_resolves_rendering_and_stores_votes(
         conn.close()
 
 
-def test_unresolved_idiom_translation_warns_and_preserves_unresolved_behavior(
+def test_unresolved_idiom_translation_debugs_candidate_and_warns_once(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -427,14 +427,15 @@ def test_unresolved_idiom_translation_warns_and_preserves_unresolved_behavior(
         meaning_votes = [vote for vote in votes if vote.vote_kind == "meaning"]
         assert {vote.resolution_status for vote in rendering_votes} == {"unresolved"}
         assert {vote.resolution_status for vote in meaning_votes} == {"consensus"}
-        warning_events = [payload for event_name, payload in events if event_name == "translate.unresolved"]
-        assert warning_events
-        assert warning_events[0]["severity"] == "warning"
-        assert warning_events[0]["candidate_id"] == candidate_id
+        unresolved_events = [payload for event_name, payload in events if event_name == "translate.unresolved"]
+        assert unresolved_events
+        assert unresolved_events[0]["severity"] == "debug"
+        assert unresolved_events[0]["candidate_id"] == candidate_id
         assert events[-1][0] == "translate.completed"
         assert events[-1][1]["translated_count"] == 0
         assert events[-1][1]["unresolved_count"] == 1
-        assert any("rendering vote prevented saving" in message for message in messages)
+        assert events[-1][1]["severity"] == "warning"
+        assert not any("rendering vote prevented saving" in message for message in messages)
     finally:
         logger.remove(sink_id)
         conn.close()

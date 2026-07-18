@@ -35,8 +35,8 @@ Artifacts:
 1. Load extracted chapter blocks for chapter `N`.
 2. Resolve locked glossary lookups if available, without requiring glossary authority to exist yet.
 3. Load pass prompts and record prompt versions.
-4. Run Pass 1 through the shared LLM client on each block with placeholder-safe source text.
-5. **Clean Pass 1 output:** strip `<think>`/`<thought>` chain-of-thought artifacts, markdown bold/italic, smart quotes, and label prefixes. If Chinese characters remain in the cleaned output, the block is treated as failed and triggers resegmentation.
+4. Remove structure placeholders when classifying each Pass 1 source block. If the remainder contains only punctuation, symbols, or whitespace, preserve the source exactly and record a successful block without an LLM call.
+5. Run Pass 1 through the shared LLM client for every translatable block. Clean `<think>`/`<thought>` artifacts, markdown bold/italic, smart quotes, and label prefixes. Empty or Chinese-bearing cleaned output is retried twice with an explicit English-only correction instruction before the block fails.
 6. Restore placeholders using the restoration algorithm defined in `lld-01`: map each opening placeholder `⟦TYPE_N⟧` to its `original_xhtml`, each closing placeholder `⟦/TYPE_N⟧` to `</element>`, and validate closing order against `closing_order`.
 7. On structural failure of block `B`:
    a. Split the **original source block** `B` into segments `S1, S2, ...` at sentence boundaries. Assign segment IDs (`ch{NNN}_blk{NNN}_seg{NN}`).
@@ -55,10 +55,10 @@ Artifacts:
 ## Command Behavior
 
 - `translate-chapter` targets exactly one chapter.
-- If valid pass checkpoints exist, reruns skip completed Pass 1, Pass 2, and Pass 3 work by default.
+- If valid pass checkpoints exist, reruns reuse their complete successful block mappings. Incomplete Pass 1 artifacts retain successful blocks and regenerate only failed or missing blocks; Pass 2 similarly repairs only mappings missing from an otherwise compatible cache.
 - `--force` ignores pass checkpoints for the requested chapter or range; `--force-pass1` remains a backward-compatible alias.
 - If structure validation fails, resegment the failed block at sentence boundaries, retry each segment in Pass 1, then run Pass 2 sequentially with full original block context and prior segment translations against each segment draft before marking the chapter failed.
-- Pass 2 batches normal block audits by default, retries validation failures at the block task boundary, and falls back affected batch blocks before marking the chapter failed.
+- Pass 2 starts only after every extracted parent block has a successful Pass 1 result. It batches normal block audits by default, retries validation failures at the block task boundary, and falls back affected batch blocks before marking the chapter failed.
 - Outputs are written under the run-scoped translation artifact tree.
 
 ## Validation Ownership
@@ -84,7 +84,7 @@ Rerun rule:
 - if source hash or prompt version changes, prior pass artifacts are stale for that pass and below
 - if resegmentation changes block segment identity, dependent segment artifacts are stale and must be regenerated
 - range and batched translation both forward `force` consistently into Pass 1, Pass 2, and Pass 3
-- `run retry-failed --stage translate-range` retries chapters with failed or incomplete translation checkpoints. It delegates to `translate-range` with the inferred chapter scope and does not force completed pass checkpoints by default.
+- `run retry-failed --stage translate-range` retries chapters with failed or incomplete translation checkpoints. Repair execution starts with an empty execution checkpoint so block-level resume owns the repair, then restores the original production run checkpoint even when repair fails.
 
 ## Tests
 
@@ -93,6 +93,9 @@ Rerun rule:
 - hard stop on restoration failure
 - reactive resegmentation on structural failure
 - resume from successful Pass 1 without rerunning it
+- punctuation and placeholder-only passthrough without model calls
+- content retry success and exhaustion
+- partial Pass 1 resume and incremental Pass 2 repair
 
 ## Out Of Scope
 

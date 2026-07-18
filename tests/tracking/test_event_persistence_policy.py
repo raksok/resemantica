@@ -119,7 +119,7 @@ def test_reduced_policy_always_persists_warning_and_failure(tmp_path: Path, monk
     assert event_types == {"validation_failed", "preprocess-summaries.chapter_skipped"}
 
 
-def test_concurrent_event_emission_persists_without_lock_tracebacks(
+def test_concurrent_event_emission_persists_every_event_without_lock_tracebacks(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -148,7 +148,7 @@ def test_concurrent_event_emission_persists_without_lock_tracebacks(
         persisted = load_events(conn, run_id="run", limit=100)
     finally:
         conn.close()
-    assert len(persisted) > 0
+    assert len(persisted) == 30
 
 
 def test_tracking_connection_uses_short_busy_timeout(tmp_path: Path, monkeypatch) -> None:

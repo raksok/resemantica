@@ -671,7 +671,7 @@ def test_rebuild_gate_validates_non_story_chapter_with_empty_translation_artifac
     assert report.metadata["story_chapter_numbers"] == []
     assert report.metadata["rebuild_chapter_numbers"] == [1]
     assert report.metadata["rebuild_non_story_chapter_numbers"] == [1]
-    assert "pass2/pass3 translated artifact" in report.message()
+    assert "missing block mappings" in report.message()
 
 
 def test_rebuild_gate_allows_non_story_chapter_with_valid_translation_artifact(
@@ -720,6 +720,39 @@ def test_rebuild_gate_requires_translation_and_placeholders(tmp_path: Path, monk
 
     assert report.success is False
     assert "placeholder map" in report.message()
+
+
+def test_rebuild_gate_rejects_one_missing_translated_block(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "rebuild-incomplete"
+    run_id = "production"
+    _seed_story_inputs(release_id, run_id)
+    paths = derive_paths(load_config(), release_id=release_id)
+    chapter_path = paths.extracted_chapters_dir / "chapter-1.json"
+    chapter = json.loads(chapter_path.read_text(encoding="utf-8"))
+    chapter["records"].append(
+        {
+            **chapter["records"][0],
+            "block_id": "ch001_blk002",
+            "parent_block_id": "ch001_blk002",
+            "block_order": 2,
+            "source_text_zh": "第二段。",
+        }
+    )
+    chapter_path.write_text(json.dumps(chapter), encoding="utf-8")
+    write_chapter_manifest(paths)
+
+    report = check_stage_gate(
+        stage_name="epub-rebuild",
+        release_id=release_id,
+        run_id=run_id,
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    assert report.success is False
+    assert "missing block mappings" in report.message()
 
 
 def test_unresolved_votes_ignored_for_rejected_candidates(tmp_path: Path, monkeypatch) -> None:

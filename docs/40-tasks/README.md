@@ -93,3 +93,5 @@ Always follow the milestone sequence below.
 | M73 | task-73 | M72 | Paragraph Bundle Budget Guardrails |
 | M74 | task-74 | M73 | Pass2 Block Retry Recovery |
 | M75 | task-75 | M74 | Pass2 Request Batching And Context Guardrails |
+| M76 | task-76 | M75 | Translation Completeness Remediation |
+| M77 | task-77 | M76 | Warning Quality And Tracking Write Serialization |

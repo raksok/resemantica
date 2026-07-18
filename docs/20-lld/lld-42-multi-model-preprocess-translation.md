@@ -124,7 +124,7 @@ Glossary translation events are scoped to the real work boundaries:
 - `preprocess-glossary.translate.model_started` and `.model_completed` around each model's missing-vote batch, with `model_name`, `pending_count`, `candidate_count`, and `skipped_count`.
 - `preprocess-glossary.translate.resolution.started` before vote resolution begins.
 - `preprocess-glossary.translate.chapter_started` and `.chapter_completed` during resolution/save, not during vote generation.
-- `preprocess-glossary.translate.unresolved` with severity `warning` for each candidate without a resolvable vote.
+- `preprocess-glossary.translate.unresolved` with severity `debug` for each candidate without a resolvable vote. `preprocess-glossary.translate.resolution.completed` is the single warning when unresolved candidates remain.
 - `preprocess-glossary.translate.failed` with severity `error`, `model_name`, `candidate_id`, `phase`, and `error` for model voting or resolution failures.
 - `preprocess-glossary.translate.resolution.completed`, `.snapshot.artifact_written`, and `.completed` after resolution, `candidates.json` write, and phase completion respectively.
 
@@ -144,7 +144,7 @@ Idiom translation events mirror glossary where applicable:
 - `preprocess-idioms.translate.loading_completed` with `load_strategy`, `previous_pending_count`, `resume_vote_model`, complete-pair counts by model, and load timings.
 - `preprocess-idioms.translate.started` after pending candidates or resume candidate IDs are loaded.
 - `preprocess-idioms.translate.model_started` and `.model_completed` around each model's missing-vote work, with `model_name`, `pending_count`, `candidate_count`, `skipped_count`, and `vote_lookup_seconds` on start.
-- `preprocess-idioms.translate.resolution.started`, `.chapter_started`, `.chapter_completed`, `.unresolved`, `.resolution.completed`, and `.completed` during saved-vote resolution and phase completion.
+- `preprocess-idioms.translate.resolution.started`, `.chapter_started`, `.chapter_completed`, `.unresolved`, `.resolution.completed`, and `.completed` during saved-vote resolution and phase completion. Per-candidate `.unresolved` events are debug diagnostics; `.completed` carries the summary warning when its unresolved count is non-zero.
 
 If idiom translation crashes during a model batch, votes saved before the crash remain the resume authority as long as the translate phase checkpoint has not advanced to `translated`. `preprocess_idioms(..., resume=True)` still skips the whole translate phase once the checkpoint is `translated` or `promoted`.
 

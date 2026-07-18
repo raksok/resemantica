@@ -44,4 +44,4 @@ Prompt version bumps invalidate old Pass 1, Pass 2, and Pass 3 checkpoints. Exis
 
 ## Non-Skip Invariant
 
-Translation context is advisory. Missing packet metadata, missing bundle files, missing bundle entries, and empty bundle sections must not skip a chapter or a successful block. Existing intentional skips remain unchanged: failed Pass 1 blocks are not processed by Pass 2, and high-risk Pass 3 blocks keep validated Pass 2 output.
+Translation context is advisory. Missing packet metadata, missing bundle files, missing bundle entries, and empty bundle sections must not skip a chapter or a successful block. Failed or missing Pass 1 blocks make the chapter incomplete and prevent Pass 2 from starting; high-risk Pass 3 blocks keep validated Pass 2 output when polishing fails.

@@ -536,7 +536,7 @@ def translate_idiom_candidates(
                 chapter_unresolved_count += 1
                 _notify(
                     "translate.unresolved",
-                    severity="warning",
+                    severity="debug",
                     candidate_id=candidate.candidate_id,
                     vote_kind="rendering",
                     unresolved_count=unresolved_count,
@@ -544,10 +544,6 @@ def translate_idiom_candidates(
                         "Idiom translation unresolved for candidate "
                         f"{candidate.candidate_id}: rendering vote prevented saving"
                     ),
-                )
-                logger.warning(
-                    "Idiom translation unresolved for candidate {}: rendering vote prevented saving",
-                    candidate.candidate_id,
                 )
     except Exception as exc:
         _notify(
@@ -594,6 +590,7 @@ def translate_idiom_candidates(
     )
     _notify(
         "translate.completed",
+        severity="warning" if unresolved_count else "info",
         pending_count=pending_count,
         candidate_count=pending_count,
         translated_count=translated_count,
@@ -850,7 +847,7 @@ def resolve_idiom_translation_votes(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.resolve.unresolved",
-                    severity="warning",
+                    severity="debug",
                     candidate_id=candidate.candidate_id,
                     source_text=candidate.source_text,
                     chapter_number=candidate.first_seen_chapter,
@@ -860,11 +857,6 @@ def resolve_idiom_translation_votes(
                         "Idiom saved-vote resolution unresolved for candidate "
                         f"{candidate.candidate_id}: no rendering majority vote"
                     ),
-                )
-                logger.warning(
-                    "Idiom saved-vote resolution unresolved for candidate {} ({})",
-                    candidate.candidate_id,
-                    candidate.source_text,
                 )
             raise_if_stop_requested(
                 stop_token,
@@ -894,6 +886,7 @@ def resolve_idiom_translation_votes(
             run_id,
             release_id,
             f"{_STAGE_NAME}.resolve.completed",
+            severity="warning" if unresolved_count else "info",
             translation_run_id=run_id,
             candidate_count=len(candidates),
             translated_count=translated_count,
@@ -1130,7 +1123,7 @@ def fill_idiom_translation_votes(
                     run_id,
                     release_id,
                     f"{_STAGE_NAME}.fill.unresolved",
-                    severity="warning",
+                    severity="debug",
                     candidate_id=candidate.candidate_id,
                     source_text=candidate.source_text,
                     chapter_number=candidate.first_seen_chapter,
@@ -1164,6 +1157,7 @@ def fill_idiom_translation_votes(
             run_id,
             release_id,
             f"{_STAGE_NAME}.fill.completed",
+            severity="warning" if unresolved_count else "info",
             translation_run_id=run_id,
             candidate_count=len(candidates),
             filler_vote_count=filler_vote_count,

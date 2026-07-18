@@ -12,6 +12,8 @@ from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payl
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.tracking.models import RunState
 from resemantica.tracking.repo import ensure_tracking_db, load_run_state, save_run_state
+from resemantica.translation.completeness import audit_chapter_translation
+from resemantica.utils import _read_json
 
 from .events import emit_event
 from .gates import GateReport, check_stage_gate
@@ -238,7 +240,7 @@ class OrchestrationRunner:
                 )
                 return StageResult(success=False, stage_name=stage_name, message=msg)
 
-        active_checkpoint = checkpoint or (state.checkpoint if state else {})
+        active_checkpoint = checkpoint if checkpoint is not None else (state.checkpoint if state else {})
         if enforce_gates and stage_name in STAGE_ORDER:
             gate = self._check_stage_gate(
                 stage_name,
@@ -381,6 +383,32 @@ class OrchestrationRunner:
         if resolved_end < resolved_start:
             raise ValueError("chapter_end must be greater than or equal to chapter_start")
         return resolved_start, resolved_end
+
+    def _translation_completeness_errors(self, chapter_numbers: list[int]) -> dict[int, str]:
+        paths = derive_paths(self.config, release_id=self.release_id)
+        errors: dict[int, str] = {}
+        for chapter_number in chapter_numbers:
+            chapter_path = paths.extracted_chapters_dir / f"chapter-{chapter_number}.json"
+            if not chapter_path.exists():
+                continue
+            try:
+                chapter_payload = _read_json(chapter_path)
+            except (OSError, ValueError) as exc:
+                errors[chapter_number] = f"Invalid extracted chapter artifact: {exc}"
+                continue
+            if not chapter_payload.get("records"):
+                continue
+            translation_dir = (
+                paths.release_root
+                / "runs"
+                / self.run_id
+                / "translation"
+                / f"chapter-{chapter_number}"
+            )
+            audit = audit_chapter_translation(chapter_path, translation_dir)
+            if not audit.success:
+                errors[chapter_number] = f"Incomplete translation artifact: {'; '.join(audit.errors)}"
+        return errors
 
     def _get_run_state(self) -> Optional[RunState]:
         conn = ensure_tracking_db(self.release_id)
@@ -777,6 +805,18 @@ class OrchestrationRunner:
             message="Pass1 artifact written",
             payload={"artifact_path": pass1_result.get("pass1_artifact")},
         )
+        if pass1_result.get("status") != "success":
+            checkpoint = {
+                "chapter_number": chapter_number,
+                "pass1_status": pass1_result.get("status"),
+            }
+            return StageResult(
+                False,
+                "translate-chapter",
+                "Pass 1 is incomplete.",
+                checkpoint=checkpoint,
+                metadata=checkpoint,
+            )
         raise_if_stop_requested(
             stop_token,
             checkpoint={"chapter_number": chapter_number, "pass": "pass1", "status": pass1_result.get("status")},
@@ -892,6 +932,10 @@ class OrchestrationRunner:
                 llm_client=client,
             )
             if result.success:
+                completeness_errors = self._translation_completeness_errors([chapter_number])
+                if completeness_errors:
+                    failures.update(completeness_errors)
+                    break
                 completed.append(chapter_number)
                 self._update_run_state(
                     "translate-range",
@@ -1071,6 +1115,8 @@ class OrchestrationRunner:
                             llm_client=client,
                             force=force,
                         )
+                        if result.get("status") != "success":
+                            raise RuntimeError("Pass 1 is incomplete.")
                         pass1_completed.append(chapter_number)
                         if chapter_number in failures:
                             del failures[chapter_number]
@@ -1228,6 +1274,9 @@ class OrchestrationRunner:
                         checkpoint=checkpoint_payload(),
                         message=f"Batched translation stopped after pass3 chapter {chapter_number}",
                     )
+
+                if not failures:
+                    failures.update(self._translation_completeness_errors(chunk))
 
                 if failures:
                     if chunked:

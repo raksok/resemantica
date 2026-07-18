@@ -23,6 +23,27 @@ from resemantica.translation.risk import classify_paragraph_risk, classify_parag
 from resemantica.translation.validators import validate_pass3_integrity
 
 
+def test_pass3_disabled_event_is_info(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    from resemantica.orchestration.events import subscribe, unsubscribe
+
+    received = []
+    callback = received.append
+    subscribe("*", callback)
+    try:
+        result = translate_chapter_pass3(
+            release_id="pass3-disabled-info",
+            chapter_number=1,
+            run_id="run-001",
+        )
+    finally:
+        unsubscribe("*", callback)
+
+    assert result["status"] == "skipped"
+    event = next(event for event in received if event.event_type == "translate-chapter.pass3.skipped")
+    assert event.severity == "info"
+
+
 def _write_fixture_epub(epub_path: Path, chapter_xhtml: str) -> None:
     workspace = epub_path.parent / "fixture_book_m9"
     meta_inf = workspace / "META-INF"
@@ -750,7 +771,7 @@ class TestPass3SkipAndPipeline:
 
         class FailPass2:
             def generate_text(self, *, model_name: str, prompt: str) -> str:
-                if "## INSTRUCTIONS" in prompt:
+                if "PASS1" in prompt:
                     return "You ⟦B_1⟧good⟦/B_1⟧?"
                 return ""
         client = FailPass2()

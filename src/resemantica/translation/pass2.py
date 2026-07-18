@@ -254,16 +254,17 @@ def translate_pass2(
             "block_id": block_id,
             "segment_id": segment_id,
         }
-        logger.warning(
-            "Pass 2 JSON parse failed; falling back to original draft "
-            "(model={}, chapter={}, block={}, segment={})",
-            model_name,
-            chapter_number,
-            block_id,
-            segment_id,
-        )
         if fallback_callback is not None:
             fallback_callback(payload)
+        else:
+            logger.warning(
+                "Pass 2 JSON parse failed; falling back to original draft "
+                "(model={}, chapter={}, block={}, segment={})",
+                model_name,
+                chapter_number,
+                block_id,
+                segment_id,
+            )
         return draft_text
 
     fidelity_errors_found = result.get("fidelity_errors_found", False)
@@ -279,16 +280,17 @@ def translate_pass2(
             "block_id": block_id,
             "segment_id": segment_id,
         }
-        logger.warning(
-            "Pass 2 fidelity errors found but corrected_text is empty; falling back to original draft "
-            "(model={}, chapter={}, block={}, segment={})",
-            model_name,
-            chapter_number,
-            block_id,
-            segment_id,
-        )
         if fallback_callback is not None:
             fallback_callback(payload)
+        else:
+            logger.warning(
+                "Pass 2 fidelity errors found but corrected_text is empty; falling back to original draft "
+                "(model={}, chapter={}, block={}, segment={})",
+                model_name,
+                chapter_number,
+                block_id,
+                segment_id,
+            )
         return draft_text
 
     return str(corrected_text)
