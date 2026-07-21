@@ -97,3 +97,4 @@ Always follow the milestone sequence below.
 | M77 | task-77 | M76 | Warning Quality And Tracking Write Serialization |
 | M78 | task-78 | M77 | Pass1 Short-Block Resegmentation Recovery |
 | M79 | task-79 | M78 | Pass1 Mixed-Language Candidate Repair |
+| M80 | task-80 | M79 | Pass1 Mixed-Language Pass2 Handoff |

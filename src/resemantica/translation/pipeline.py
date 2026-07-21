@@ -536,6 +536,14 @@ def translate_chapter_pass1(
                 )
                 draft_text = pass1_result.text
                 structure = validate_structure(cleaned_source, draft_text)
+                deferred_warnings = (
+                    [
+                        "Deferred untranslated Chinese spans to Pass 2: "
+                        f"{', '.join(pass1_result.untranslated_spans)}."
+                    ]
+                    if pass1_result.untranslated_spans and draft_text
+                    else []
+                )
                 structure_errors = (
                     [pass1_result.failure_reason]
                     if pass1_result.failure_reason is not None
@@ -547,7 +555,7 @@ def translate_chapter_pass1(
                         "block_id": block_id,
                         "status": structure.status,
                         "errors": structure_errors,
-                        "warnings": structure.warnings,
+                        "warnings": [*structure.warnings, *deferred_warnings],
                     }
                 )
 
@@ -596,6 +604,9 @@ def translate_chapter_pass1(
                                 "was_resegmented": False,
                                 "segments": [],
                                 "status": "success",
+                                "untranslated_chinese_spans": list(
+                                    pass1_result.untranslated_spans
+                                ),
                             }
                         )
                         _emit_translation_event(
@@ -716,6 +727,14 @@ def translate_chapter_pass1(
                     )
                     segment_draft = segment_result.text
                     segment_structure = validate_structure(segment_cleaned, segment_draft)
+                    segment_deferred_warnings = (
+                        [
+                            "Deferred untranslated Chinese spans to Pass 2: "
+                            f"{', '.join(segment_result.untranslated_spans)}."
+                        ]
+                        if segment_result.untranslated_spans and segment_draft
+                        else []
+                    )
                     segment_errors = (
                         [segment_result.failure_reason]
                         if segment_result.failure_reason is not None
@@ -727,7 +746,10 @@ def translate_chapter_pass1(
                             "block_id": segment_id,
                             "status": segment_structure.status,
                             "errors": segment_errors,
-                            "warnings": segment_structure.warnings,
+                            "warnings": [
+                                *segment_structure.warnings,
+                                *segment_deferred_warnings,
+                            ],
                         }
                     )
                     if not segment_structure.is_valid:
@@ -740,6 +762,9 @@ def translate_chapter_pass1(
                             "segment_id": segment_id,
                             "source_text_zh": segment_cleaned,
                             "draft_text": segment_draft,
+                            "untranslated_chinese_spans": list(
+                                segment_result.untranslated_spans
+                            ),
                         }
                     )
 

@@ -35,6 +35,8 @@ Recover a mostly-English Pass 1 response that retains Chinese text without disca
 - Content generation remains bounded to the initial request plus two retries.
 - Pass 2 receives only non-empty, English-only Pass 1 output.
 
+> Superseded by M80: after both correction retries, an eligible mixed Latin/Chinese candidate is preserved for strict repair in Pass 2 instead of being rejected here.
+
 ## Tests Or Smoke Checks
 
 - `uv run --extra dev pytest tests\translation tests\orchestration -q`
@@ -59,4 +61,4 @@ uv run rsem run retry-failed -r 1 -R 001 -c resemantica-pilot.toml -t translate-
 uv run rsem run retry-failed -r 1 -R 001 -c resemantica-pilot.toml -t translate-range -s 422 -e 422
 ```
 
-The repair must reuse compatible successful Pass 1 blocks, regenerate failed block `ch422_blk085`, reject any remaining Chinese output, and complete the chapter translation checkpoint before the production run resumes.
+M80 supersedes this recovery path for repeated mixed-language output: the latest eligible candidate is handed to Pass 2, which must remove every remaining Chinese span before the chapter translation checkpoint can complete.

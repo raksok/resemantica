@@ -103,8 +103,8 @@ def test_pass1_retry_exhaustion_reports_untranslated_chinese_spans() -> None:
         source_text="桐叶洲原文",
     )
 
-    assert result.text == ""
+    assert result.text == "Again English with 桐叶 left."
     assert result.untranslated_spans == ("桐叶",)
-    assert result.failure_reason == "Candidate output contains untranslated Chinese spans: 桐叶."
+    assert result.failure_reason is None
     assert "Mostly English with 桐叶 left." in client.prompts[1]
     assert "Still English with 桐叶 left." in client.prompts[2]

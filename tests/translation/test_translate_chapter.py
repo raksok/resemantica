@@ -182,6 +182,22 @@ class ScriptedResegmentedPass2LLM:
         )
 
 
+class MixedLanguageHandoffLLM:
+    def __init__(self, *, pass2_responses: list[str]) -> None:
+        self.pass1_calls = 0
+        self.pass2_responses = iter(pass2_responses)
+        self.pass2_calls = 0
+        self.pass2_prompts: list[str] = []
+
+    def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+        if "translation auditor" in prompt:
+            self.pass2_calls += 1
+            self.pass2_prompts.append(prompt)
+            return next(self.pass2_responses)
+        self.pass1_calls += 1
+        return "Mao Xiaodong spoke of the 桐叶 Continent."
+
+
 def _extract_one_chapter(tmp_path: Path, chapter_xhtml: str, release_id: str) -> None:
     input_epub = tmp_path / f"{release_id}.epub"
     _write_fixture_epub(input_epub, chapter_xhtml)
@@ -262,9 +278,11 @@ class BatchPass2LLM:
         *,
         batch_response: str | None = None,
         invalid_block_id: str | None = None,
+        repair_mixed_single: bool = False,
     ) -> None:
         self.batch_response = batch_response
         self.invalid_block_id = invalid_block_id
+        self.repair_mixed_single = repair_mixed_single
         self.batch_calls = 0
         self.single_calls = 0
         self.batch_block_counts: list[int] = []
@@ -302,6 +320,13 @@ class BatchPass2LLM:
         if "translation auditor" in prompt:
             self.single_calls += 1
             self.single_prompts.append(prompt)
+            if self.repair_mixed_single and "桐叶" in prompt:
+                return json.dumps(
+                    {
+                        "fidelity_errors_found": True,
+                        "corrected_text": "Parasol Leaf draft.",
+                    }
+                )
             return json.dumps({"fidelity_errors_found": False, "corrected_text": ""})
         return "Unexpected."
 
@@ -592,6 +617,129 @@ def test_mixed_language_pass1_candidate_recovers_without_resegmentation(
     assert block["status"] == "success"
     assert block["was_resegmented"] is False
     assert block["draft_text"] == repaired_candidate
+
+
+def test_exhausted_mixed_pass1_candidate_is_repaired_by_pass2(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m80-mixed-language-handoff"
+    source = "茅小冬提到了桐叶洲。"
+    _extract_one_chapter(
+        tmp_path,
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{source}</p></body></html>
+''',
+        release_id,
+    )
+    corrected = "Mao Xiaodong spoke of the Parasol Leaf Continent."
+    client = MixedLanguageHandoffLLM(
+        pass2_responses=[
+            json.dumps(
+                {
+                    "fidelity_errors_found": True,
+                    "corrected_text": "Mao Xiaodong spoke of the 桐叶 Continent.",
+                }
+            ),
+            json.dumps(
+                {
+                    "fidelity_errors_found": True,
+                    "corrected_text": corrected,
+                }
+            ),
+        ]
+    )
+    config = _retry_test_config(retries=1)
+
+    pass1 = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        config=config,
+        llm_client=client,  # type: ignore[arg-type]
+    )
+
+    assert pass1["status"] == "success"
+    assert client.pass1_calls == 3
+    block = pass1["blocks"][0]
+    assert block["status"] == "success"
+    assert block["was_resegmented"] is False
+    assert block["draft_text"] == "Mao Xiaodong spoke of the 桐叶 Continent."
+    assert block["untranslated_chinese_spans"] == ["桐叶"]
+    pass1_artifact = json.loads(Path(pass1["pass1_artifact"]).read_text(encoding="utf-8"))
+    assert pass1_artifact["structure_validation"][0]["warnings"] == [
+        "Deferred untranslated Chinese spans to Pass 2: 桐叶."
+    ]
+
+    pass2 = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        config=config,
+        llm_client=client,  # type: ignore[arg-type]
+    )
+
+    assert pass2["status"] == "success"
+    assert pass2["blocks"][0]["output_text_en"] == corrected
+    assert client.pass2_calls == 2
+    assert all("untranslated Chinese" in prompt for prompt in client.pass2_prompts)
+
+
+def test_pass2_fails_when_mixed_output_survives_validation_retries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m80-mixed-language-exhausted"
+    source = "茅小冬提到了桐叶洲。"
+    _extract_one_chapter(
+        tmp_path,
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{source}</p></body></html>
+''',
+        release_id,
+    )
+    mixed_response = json.dumps(
+        {
+            "fidelity_errors_found": False,
+            "corrected_text": "",
+        }
+    )
+    client = MixedLanguageHandoffLLM(pass2_responses=[mixed_response, mixed_response])
+    config = _retry_test_config(retries=1)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        config=config,
+        llm_client=client,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="Pass 2 failed validation"):
+        translate_chapter_pass2(
+            release_id=release_id,
+            chapter_number=1,
+            run_id="run-001",
+            config=config,
+            llm_client=client,  # type: ignore[arg-type]
+        )
+
+    assert client.pass2_calls == 2
+    paths = derive_paths(config, release_id=release_id)
+    artifact = json.loads(
+        (
+            paths.release_root
+            / "runs"
+            / "run-001"
+            / "translation"
+            / "chapter-1"
+            / "pass2.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert artifact["fidelity_validation"][0]["errors"] == [
+        "Translated output contains untranslated Chinese spans: 桐叶."
+    ]
 
 
 def test_failed_resegmentation_reports_child_errors(tmp_path: Path, monkeypatch) -> None:
@@ -1122,6 +1270,53 @@ def test_pass2_invalid_batch_result_falls_back_only_affected_block(
     assert client.batch_calls == 1
     assert client.single_calls == 1
     assert "源文本2" in client.single_prompts[0]
+    artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
+    assert artifact["batching"]["batch_fallback_blocks"] == 1
+
+
+def test_pass2_batch_mixed_draft_falls_back_only_affected_block(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m80-pass2-batch-mixed"
+    run_id = "run-001"
+    config = _manual_pass2_config(batch_max_blocks=8)
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>甲。</p><p>乙。</p></body></html>
+""",
+        release_id,
+    )
+    mixed_draft = "Mostly English with 桐叶 left."
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[
+            _normal_pass1_block(1, draft_text=mixed_draft),
+            _normal_pass1_block(2),
+        ],
+    )
+
+    client = BatchPass2LLM(repair_mixed_single=True)
+    result = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=client,
+        config=config,
+    )
+
+    assert result["status"] == "success"
+    assert client.batch_calls == 1
+    assert client.single_calls == 1
+    assert mixed_draft in client.single_prompts[0]
+    assert [block["output_text_en"] for block in result["blocks"]] == [
+        "Parasol Leaf draft.",
+        "Draft 2.",
+    ]
     artifact = json.loads(Path(result["pass2_artifact"]).read_text(encoding="utf-8"))
     assert artifact["batching"]["batch_fallback_blocks"] == 1
 

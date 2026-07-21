@@ -10,6 +10,7 @@ from resemantica.settings import AppConfig, load_config
 
 _CHINESE_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
 _CHINESE_SPAN_RE = re.compile(r"[\u4e00-\u9fff]+")
+_LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 
 _COF_RE = re.compile(r"</?think>", re.IGNORECASE)
 _COF_CONTENT_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
@@ -56,6 +57,10 @@ def _normalize_pass1_response(text: str) -> str:
 
 def _untranslated_chinese_spans(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_CHINESE_SPAN_RE.findall(text)))
+
+
+def _is_mixed_language_candidate(text: str, spans: tuple[str, ...]) -> bool:
+    return bool(spans and _LATIN_CHAR_RE.search(text))
 
 
 def _mixed_language_correction(candidate: str, spans: tuple[str, ...]) -> str:
@@ -131,6 +136,11 @@ def _translate_pass1_with_diagnostics(
             return Pass1TranslationResult(text=candidate)
         if attempt == _CONTENT_RETRY_COUNT:
             if untranslated_spans:
+                if _is_mixed_language_candidate(candidate, untranslated_spans):
+                    return Pass1TranslationResult(
+                        text=candidate,
+                        untranslated_spans=untranslated_spans,
+                    )
                 span_list = ", ".join(untranslated_spans)
                 return Pass1TranslationResult(
                     text="",

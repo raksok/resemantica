@@ -5,10 +5,15 @@ import re
 from resemantica.validators import ValidationResult
 
 _PLACEHOLDER_RE = re.compile(r"⟦/?[A-Z]+_\d+⟧")
+_CHINESE_SPAN_RE = re.compile(r"[\u4e00-\u9fff]+")
 
 
 def _placeholder_tokens(text: str) -> list[str]:
     return _PLACEHOLDER_RE.findall(text)
+
+
+def untranslated_chinese_spans(text: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(_CHINESE_SPAN_RE.findall(text)))
 
 
 def validate_structure(source_text: str, candidate_text: str) -> ValidationResult:
@@ -39,6 +44,12 @@ def validate_basic_fidelity(source_text: str, output_text: str) -> ValidationRes
         errors.append("Translated output is empty.")
     if output_text.strip() == source_text.strip():
         warnings.append("Output is identical to source text.")
+    remaining_spans = untranslated_chinese_spans(output_text)
+    if remaining_spans:
+        errors.append(
+            "Translated output contains untranslated Chinese spans: "
+            f"{', '.join(remaining_spans)}."
+        )
 
     return ValidationResult(status="failed" if errors else "success", errors=errors, warnings=warnings)
 
@@ -75,4 +86,3 @@ def validate_pass3_integrity(
         warnings.append("Pass 3 output is identical to source text (meaning drift suspected).")
 
     return ValidationResult(status="failed" if errors else "success", errors=errors, warnings=warnings)
-
