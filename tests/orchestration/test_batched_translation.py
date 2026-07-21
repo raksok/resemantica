@@ -393,7 +393,20 @@ def test_batched_translate_range_propagates_failed_pass1_status(
 
     monkeypatch.setattr(
         "resemantica.translation.pipeline.translate_chapter_pass1",
-        lambda **kwargs: {"status": "failed", "pass1_artifact": "pass1.json"},
+        lambda **kwargs: {
+            "status": "failed",
+            "pass1_artifact": "pass1.json",
+            "blocks": [
+                {
+                    "block_id": "ch001_blk001",
+                    "status": "failed",
+                    "errors": [
+                        "ch001_blk001_seg01: Candidate output contains untranslated Chinese "
+                        "spans: 桐叶."
+                    ],
+                }
+            ],
+        },
     )
 
     def pass2(**kwargs):
@@ -412,8 +425,44 @@ def test_batched_translate_range_propagates_failed_pass1_status(
 
     assert result.success is False
     assert result.checkpoint["pass1_completed"] == []
-    assert result.checkpoint["failures"] == {1: "Pass 1 is incomplete."}
+    assert result.checkpoint["failures"] == {
+        1: (
+            "Pass 1 is incomplete: ch001_blk001: ch001_blk001_seg01: Candidate output "
+            "contains untranslated Chinese spans: 桐叶."
+        )
+    }
     assert pass2_called is False
+
+
+def test_translate_chapter_reports_failed_pass1_block_details(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "chapter-pass1-failed"
+    _write_chapter(release_id, 1)
+    monkeypatch.setattr(
+        "resemantica.translation.pipeline.translate_chapter_pass1",
+        lambda **kwargs: {
+            "status": "failed",
+            "pass1_artifact": "pass1.json",
+            "blocks": [
+                {
+                    "block_id": "ch001_blk007",
+                    "status": "failed",
+                    "errors": ["Candidate output is empty."],
+                }
+            ],
+        },
+    )
+
+    result = OrchestrationRunner(release_id, "run").run_stage(
+        "translate-chapter",
+        chapter_number=1,
+    )
+
+    assert result.success is False
+    assert result.message == "Pass 1 is incomplete: ch001_blk007: Candidate output is empty."
 
 
 def test_chunked_batched_translate_range_runs_model_order_per_chunk(

@@ -43,6 +43,23 @@ def test_pass1_prompt_budget_failure_before_llm_call() -> None:
     assert client.calls == 0
 
 
+def test_pass1_mixed_language_correction_is_budget_checked(monkeypatch) -> None:
+    monkeypatch.setattr(budget_mod, "count_tokens", lambda text: len(text))
+    client = GuardedClient("English draft with 桐叶 remaining.")
+
+    with pytest.raises(PromptBudgetError, match="stage=translate.pass1 chapter=7"):
+        translate_pass1(
+            client=client,
+            model_name="model",
+            prompt_template="{SOURCE_TEXT}",
+            source_text="中文",
+            config=AppConfig(budget=BudgetConfig(max_context_per_pass=100)),
+            chapter_number=7,
+        )
+
+    assert client.calls == 1
+
+
 def test_pass2_prompt_budget_failure_before_llm_call() -> None:
     client = GuardedClient(json.dumps({"fidelity_errors_found": False}))
 

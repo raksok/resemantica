@@ -29,7 +29,7 @@ from resemantica.translation.checkpoints import (
     load_checkpoint,
     save_checkpoint,
 )
-from resemantica.translation.pass1 import translate_pass1
+from resemantica.translation.pass1 import _translate_pass1_with_diagnostics
 from resemantica.translation.pass2 import (
     Pass2BatchResponseError,
     ensure_pass2_batch_prompt_within_budget,
@@ -114,8 +114,8 @@ def _reusable_pass2_blocks(
     return reusable
 
 
-def _split_for_retry(text: str, max_chars: int = 1500) -> list[str]:
-    if len(text) <= max_chars:
+def _split_for_retry(text: str, max_chars: int = 1500, *, force: bool = False) -> list[str]:
+    if len(text) <= max_chars and not force:
         return [text]
     pattern = re.compile(r"[^\u3002\uff01\uff1f!?\\.]+[\u3002\uff01\uff1f!?\\.]?")
     parts = [piece for piece in pattern.findall(text) if piece]
@@ -137,6 +137,20 @@ def _split_for_retry(text: str, max_chars: int = 1500) -> list[str]:
         current = part[max_chars:]
     if current:
         segments.append(current)
+
+    if len(segments) == 1 and force:
+        midpoint = len(text) / 2
+        boundaries = [
+            match.end()
+            for match in re.finditer(r"[\u3002\uff01\uff1f!?\.\uff0c,\uff1b;\uff1a:]", text)
+            if not _is_symbol_only_source(text[: match.end()])
+            and not _is_symbol_only_source(text[match.end() :])
+        ]
+        if boundaries:
+            split_at = min(boundaries, key=lambda position: (abs(position - midpoint), position))
+            segments = [text[:split_at], text[split_at:]]
+    if "".join(segments) != text:
+        return [text]
     return segments
 
 
@@ -508,7 +522,7 @@ def translate_chapter_pass1(
                     )
                     continue
 
-                draft_text = translate_pass1(
+                pass1_result = _translate_pass1_with_diagnostics(
                     client=client,
                     model_name=model_name,
                     prompt_template=pass1_prompt.template,
@@ -520,13 +534,19 @@ def translate_chapter_pass1(
                     config=config_obj,
                     chapter_number=chapter_number,
                 )
+                draft_text = pass1_result.text
                 structure = validate_structure(cleaned_source, draft_text)
+                structure_errors = (
+                    [pass1_result.failure_reason]
+                    if pass1_result.failure_reason is not None
+                    else structure.errors
+                )
                 pass1_structure_checks.append(
                     {
                         "stage": "pass1",
                         "block_id": block_id,
                         "status": structure.status,
-                        "errors": structure.errors,
+                        "errors": structure_errors,
                         "warnings": structure.warnings,
                     }
                 )
@@ -564,6 +584,7 @@ def translate_chapter_pass1(
                             }
                         )
                         structure = validate_structure(cleaned_source, "")
+                        structure_errors = structure.errors
                     else:
                         pass1_blocks.append(
                             {
@@ -598,7 +619,7 @@ def translate_chapter_pass1(
                         message=f"Pass1 structure validation failed for {block_id}",
                         payload={
                             "pass_name": "pass1",
-                            "errors": structure.errors,
+                            "errors": structure_errors,
                             "warnings": structure.warnings,
                         },
                     )
@@ -614,7 +635,7 @@ def translate_chapter_pass1(
                             "was_resegmented": False,
                             "segments": [],
                             "status": "failed",
-                            "errors": structure.errors,
+                            "errors": structure_errors,
                         }
                     )
                     _emit_translation_event(
@@ -625,11 +646,11 @@ def translate_chapter_pass1(
                         block_id=block_id,
                         severity="error",
                         message=f"Pass1 validation failed for {block_id}",
-                        payload={"pass_name": "pass1", "errors": structure.errors},
+                        payload={"pass_name": "pass1", "errors": structure_errors},
                     )
                     continue
 
-                retry_segments = _split_for_retry(cleaned_source, max_chars=750)
+                retry_segments = _split_for_retry(cleaned_source, max_chars=750, force=True)
                 if len(retry_segments) <= 1:
                     pass1_blocks.append(
                         {
@@ -641,7 +662,7 @@ def translate_chapter_pass1(
                             "was_resegmented": False,
                             "segments": [],
                             "status": "failed",
-                            "errors": structure.errors,
+                            "errors": structure_errors,
                         }
                     )
                     _emit_translation_event(
@@ -652,12 +673,13 @@ def translate_chapter_pass1(
                         block_id=block_id,
                         severity="error",
                         message=f"Pass1 validation failed for {block_id}",
-                        payload={"errors": structure.errors},
+                        payload={"errors": structure_errors},
                     )
                     continue
 
                 segment_payloads: list[dict[str, Any]] = []
                 segment_failed = False
+                segment_failure_errors: list[str] = []
                 _emit_translation_event(
                     release_id=release_id,
                     run_id=run_id,
@@ -680,7 +702,7 @@ def translate_chapter_pass1(
                 for segment_index, segment_source in enumerate(retry_segments, start=1):
                     segment_id = f"{parent_block_id}_seg{segment_index:02d}"
                     segment_cleaned = _prevalidate_source(segment_source)
-                    segment_draft = translate_pass1(
+                    segment_result = _translate_pass1_with_diagnostics(
                         client=client,
                         model_name=model_name,
                         prompt_template=pass1_prompt.template,
@@ -692,18 +714,27 @@ def translate_chapter_pass1(
                         config=config_obj,
                         chapter_number=chapter_number,
                     )
+                    segment_draft = segment_result.text
                     segment_structure = validate_structure(segment_cleaned, segment_draft)
+                    segment_errors = (
+                        [segment_result.failure_reason]
+                        if segment_result.failure_reason is not None
+                        else segment_structure.errors
+                    )
                     pass1_structure_checks.append(
                         {
                             "stage": "pass1_resegment",
                             "block_id": segment_id,
                             "status": segment_structure.status,
-                            "errors": segment_structure.errors,
+                            "errors": segment_errors,
                             "warnings": segment_structure.warnings,
                         }
                     )
                     if not segment_structure.is_valid:
                         segment_failed = True
+                        segment_failure_errors.extend(
+                            f"{segment_id}: {error}" for error in segment_errors
+                        )
                     segment_payloads.append(
                         {
                             "segment_id": segment_id,
@@ -722,7 +753,7 @@ def translate_chapter_pass1(
                         "was_resegmented": True,
                         "segments": segment_payloads,
                         "status": "failed" if segment_failed else "success",
-                        "errors": [] if not segment_failed else ["Resegmentation pass1 failed."],
+                        "errors": segment_failure_errors,
                     }
                 )
                 if segment_failed:
@@ -734,6 +765,7 @@ def translate_chapter_pass1(
                         block_id=parent_block_id,
                         severity="error",
                         message=f"Pass1 resegmentation failed for {parent_block_id}",
+                        payload={"pass_name": "pass1", "errors": segment_failure_errors},
                     )
                     _emit_translation_event(
                         release_id=release_id,
@@ -743,7 +775,7 @@ def translate_chapter_pass1(
                         block_id=parent_block_id,
                         severity="error",
                         message=f"Pass1 resegmentation failed for {parent_block_id}",
-                        payload={"pass_name": "pass1"},
+                        payload={"pass_name": "pass1", "errors": segment_failure_errors},
                     )
 
             pass1_failed = any(block.get("status") == "failed" for block in pass1_blocks)

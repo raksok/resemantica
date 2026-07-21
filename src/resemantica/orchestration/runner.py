@@ -35,6 +35,24 @@ class ProductionPlan:
         }
 
 
+def _pass1_incomplete_message(result: dict[str, Any]) -> str:
+    details: list[str] = []
+    blocks = result.get("blocks")
+    if isinstance(blocks, list):
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("status") != "failed":
+                continue
+            block_id = str(block.get("block_id", "unknown-block"))
+            errors = block.get("errors")
+            if isinstance(errors, list) and errors:
+                details.append(f"{block_id}: {', '.join(str(error) for error in errors)}")
+            else:
+                details.append(block_id)
+    if details:
+        return f"Pass 1 is incomplete: {'; '.join(details)}"
+    return "Pass 1 is incomplete."
+
+
 class OrchestrationRunner:
     def __init__(
         self,
@@ -806,6 +824,7 @@ class OrchestrationRunner:
             payload={"artifact_path": pass1_result.get("pass1_artifact")},
         )
         if pass1_result.get("status") != "success":
+            message = _pass1_incomplete_message(pass1_result)
             checkpoint = {
                 "chapter_number": chapter_number,
                 "pass1_status": pass1_result.get("status"),
@@ -813,7 +832,7 @@ class OrchestrationRunner:
             return StageResult(
                 False,
                 "translate-chapter",
-                "Pass 1 is incomplete.",
+                message,
                 checkpoint=checkpoint,
                 metadata=checkpoint,
             )
@@ -1116,7 +1135,7 @@ class OrchestrationRunner:
                             force=force,
                         )
                         if result.get("status") != "success":
-                            raise RuntimeError("Pass 1 is incomplete.")
+                            raise RuntimeError(_pass1_incomplete_message(result))
                         pass1_completed.append(chapter_number)
                         if chapter_number in failures:
                             del failures[chapter_number]

@@ -19,6 +19,7 @@ from resemantica.settings import (
 )
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pipeline import (
+    _split_for_retry,
     translate_chapter_pass1,
     translate_chapter_pass2,
 )
@@ -395,6 +396,12 @@ def test_failed_pass1_artifact_resumes_only_failed_blocks(tmp_path: Path, monkey
         llm_client=first_client,  # type: ignore[arg-type]
     )
     assert first["status"] == "failed"
+    failed_block = first["blocks"][1]
+    assert failed_block["status"] == "failed"
+    assert failed_block["was_resegmented"] is False
+    assert failed_block["errors"] == [
+        "Candidate output contains untranslated Chinese spans: 仍是中文."
+    ]
 
     repair_client = CountingPass1LLM({"第二段。": ["Second paragraph."]})
     repaired = translate_chapter_pass1(
@@ -432,6 +439,8 @@ def test_hard_stop_on_placeholder_structural_failure(tmp_path: Path, monkeypatch
         llm_client=client,
     )
     assert r1["status"] == "failed"
+    assert r1["blocks"][0]["was_resegmented"] is False
+    assert r1["blocks"][0]["status"] == "failed"
 
     with pytest.raises(RuntimeError, match="Pass 1 is incomplete"):
         translate_chapter_pass2(
@@ -442,7 +451,7 @@ def test_hard_stop_on_placeholder_structural_failure(tmp_path: Path, monkeypatch
         )
 
 
-def test_reactive_resegmentation_on_structural_failure(tmp_path: Path, monkeypatch) -> None:
+def test_reactive_resegmentation_on_long_structural_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     long_text = "这是一个很长的句子。" * 220
     _extract_one_chapter(
@@ -465,6 +474,158 @@ def test_reactive_resegmentation_on_structural_failure(tmp_path: Path, monkeypat
     first_block = pass1_artifact["blocks"][0]
     assert first_block["was_resegmented"] is True
     assert len(first_block["segments"]) >= 2
+    assert (
+        "".join(segment["source_text_zh"] for segment in first_block["segments"])
+        == first_block["source_text_zh"]
+    )
+
+
+def test_split_for_retry_forces_short_block_at_safe_boundary() -> None:
+    source = "甲甲甲，乙乙乙乙，丙丙。"
+
+    segments = _split_for_retry(source, max_chars=750, force=True)
+
+    assert len(segments) == 2
+    assert segments[0][-1] in "，,；;：:。！？!?."
+    assert "".join(segments) == source
+
+
+def test_short_pass1_failure_recovers_with_clause_resegmentation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m78-short-pass1-resegment"
+    source = (
+        "陈平安见钱袋子和铜钱应该真没有什么玄机，反而心情好转几分，犹豫了一下，"
+        "没有放入地盘更大的咫尺物，而是收起来放入方寸物飞剑十五当中，"
+        "陈平安笑着揉了揉裴钱的小脑袋，黑炭小丫头笑眯起眼。"
+    )
+    _extract_one_chapter(
+        tmp_path,
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{source}</p></body></html>
+''',
+        release_id,
+    )
+    retry_segments = _split_for_retry(source, max_chars=750, force=True)
+    assert len(retry_segments) == 2
+    client = CountingPass1LLM(
+        {
+            source: ["", "", ""],
+            retry_segments[0]: ["Recovered first clause."],
+            retry_segments[1]: ["Recovered second clause."],
+        }
+    )
+    events: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "resemantica.translation.pipeline._emit_translation_event",
+        lambda **kwargs: events.append(kwargs),
+    )
+
+    result = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert len(client.pass1_prompts) == 5
+    block = result["blocks"][0]
+    assert block["status"] == "success"
+    assert block["was_resegmented"] is True
+    assert [segment["draft_text"] for segment in block["segments"]] == [
+        "Recovered first clause.",
+        "Recovered second clause.",
+    ]
+    assert "".join(segment["source_text_zh"] for segment in block["segments"]) == source
+    retry_event = next(event for event in events if event["event_type"] == "paragraph_retry")
+    assert retry_event["block_id"] == "ch001_blk001"
+    assert retry_event["payload"] == {
+        "segment_count": 2,
+        "pass_name": "pass1",
+    }
+
+
+def test_mixed_language_pass1_candidate_recovers_without_resegmentation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m79-mixed-language-repair"
+    source = (
+        "茅小冬哈哈笑道：“可你以为宝瓶洲的上五境修士，是裴钱和李槐收藏的那些小玩意儿，"
+        "随随便便就能拿出来显摆？大隋唯一一位玉璞境，是位戈阳高氏的老祖宗，"
+        "还是个不擅长厮杀的说书先生，早已经去了你家乡的披云山。"
+        "加上如今那位桐叶洲飞升境大修士身死道消。”"
+    )
+    mixed_candidate = (
+        "Mao Xiaodong laughed heartily. The great cultivator from the桐叶 Continent "
+        "had already passed away."
+    )
+    repaired_candidate = (
+        "Mao Xiaodong laughed heartily. The great cultivator from the Parasol Leaf "
+        "Continent had already passed away."
+    )
+    _extract_one_chapter(
+        tmp_path,
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{source}</p></body></html>
+''',
+        release_id,
+    )
+    client = CountingPass1LLM({source: [mixed_candidate, repaired_candidate]})
+
+    result = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "success"
+    assert len(client.pass1_prompts) == 2
+    assert mixed_candidate in client.pass1_prompts[1]
+    assert "桐叶" in client.pass1_prompts[1]
+    block = result["blocks"][0]
+    assert block["status"] == "success"
+    assert block["was_resegmented"] is False
+    assert block["draft_text"] == repaired_candidate
+
+
+def test_failed_resegmentation_reports_child_errors(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m79-resegmentation-errors"
+    source = "甲甲甲，乙乙乙乙，丙丙。"
+    _extract_one_chapter(
+        tmp_path,
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{source}</p></body></html>
+''',
+        release_id,
+    )
+    segments = _split_for_retry(source, max_chars=750, force=True)
+    client = CountingPass1LLM(
+        {
+            source: ["", "", ""],
+            segments[0]: ["", "", ""],
+            segments[1]: ["", "", ""],
+        }
+    )
+
+    result = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id="run-001",
+        llm_client=client,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "failed"
+    assert result["blocks"][0]["errors"] == [
+        "ch001_blk001_seg01: Candidate output is empty.",
+        "ch001_blk001_seg02: Candidate output is empty.",
+    ]
 
 
 def test_pass2_retries_structural_failure_for_one_block(tmp_path: Path, monkeypatch) -> None:

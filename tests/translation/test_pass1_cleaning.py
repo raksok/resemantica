@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from resemantica.translation.pass1 import _clean_pass1_response, translate_pass1
+from resemantica.translation.pass1 import (
+    _clean_pass1_response,
+    _translate_pass1_with_diagnostics,
+    translate_pass1,
+)
 
 
 class TestPass1Cleaning:
@@ -64,6 +68,9 @@ def test_pass1_retries_empty_or_chinese_output_with_english_only_instruction() -
     assert result == "Complete English translation."
     assert len(client.prompts) == 3
     assert all("English only" in prompt for prompt in client.prompts[1:])
+    assert "仍然是中文" not in client.prompts[1]
+    assert "仍然是中文" in client.prompts[2]
+    assert "PREVIOUS_RESPONSE" in client.prompts[2]
 
 
 def test_pass1_retry_exhaustion_returns_empty() -> None:
@@ -78,3 +85,26 @@ def test_pass1_retry_exhaustion_returns_empty() -> None:
 
     assert result == ""
     assert len(client.prompts) == 3
+
+
+def test_pass1_retry_exhaustion_reports_untranslated_chinese_spans() -> None:
+    client = _RetryClient(
+        [
+            "Mostly English with 桐叶 left.",
+            "Still English with 桐叶 left.",
+            "Again English with 桐叶 left.",
+        ]
+    )
+
+    result = _translate_pass1_with_diagnostics(
+        client=client,  # type: ignore[arg-type]
+        model_name="translator",
+        prompt_template="SOURCE_TEXT: {SOURCE_TEXT}",
+        source_text="桐叶洲原文",
+    )
+
+    assert result.text == ""
+    assert result.untranslated_spans == ("桐叶",)
+    assert result.failure_reason == "Candidate output contains untranslated Chinese spans: 桐叶."
+    assert "Mostly English with 桐叶 left." in client.prompts[1]
+    assert "Still English with 桐叶 left." in client.prompts[2]

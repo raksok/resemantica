@@ -95,3 +95,5 @@ Always follow the milestone sequence below.
 | M75 | task-75 | M74 | Pass2 Request Batching And Context Guardrails |
 | M76 | task-76 | M75 | Translation Completeness Remediation |
 | M77 | task-77 | M76 | Warning Quality And Tracking Write Serialization |
+| M78 | task-78 | M77 | Pass1 Short-Block Resegmentation Recovery |
+| M79 | task-79 | M78 | Pass1 Mixed-Language Candidate Repair |
