@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import zipfile
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from loguru import logger
 
 from resemantica.epub.extractor import extract_epub
 from resemantica.llm import budget as budget_mod
+from resemantica.orchestration.stop import StopRequested, StopToken
 from resemantica.settings import (
     AppConfig,
     BudgetConfig,
@@ -17,6 +19,7 @@ from resemantica.settings import (
     TranslationConfig,
     derive_paths,
 )
+from resemantica.tracking.repo import ensure_tracking_db, load_events
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pipeline import (
     _split_for_retry,
@@ -203,6 +206,173 @@ def _extract_one_chapter(tmp_path: Path, chapter_xhtml: str, release_id: str) ->
     _write_fixture_epub(input_epub, chapter_xhtml)
     result = extract_epub(input_path=input_epub, release_id=release_id)
     assert result.status == "success"
+
+
+def test_pass1_stop_persists_completed_block_and_resume_reuses_it(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m81-pass1-stop"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>第一段。</p><p>第二段。</p>
+</body></html>
+""",
+        release_id,
+    )
+    token = StopToken()
+
+    class StopAfterFirst:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            self.calls += 1
+            token.request_stop()
+            return "First paragraph."
+
+    stopping_client = StopAfterFirst()
+    with pytest.raises(StopRequested) as stopped:
+        translate_chapter_pass1(
+            release_id=release_id,
+            chapter_number=1,
+            run_id=run_id,
+            llm_client=stopping_client,
+            stop_token=token,
+        )
+
+    assert stopped.value.interrupt_report is not None
+    assert stopped.value.interrupt_report.completed_count == 1
+    paths = derive_paths(AppConfig(), release_id=release_id)
+    artifact_path = paths.release_root / "runs" / run_id / "translation" / "chapter-1" / "pass1.json"
+    stopped_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert stopped_payload["status"] == "stopped"
+    assert len(stopped_payload["blocks"]) == 1
+    conn = ensure_tracking_db(release_id)
+    try:
+        event_types = [
+            event.event_type
+            for event in load_events(conn, run_id=run_id, release_id=release_id)
+        ]
+    finally:
+        conn.close()
+    assert "translate-chapter.pass1.failed" not in event_types
+
+    class ResumeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            self.calls += 1
+            return "Second paragraph."
+
+    resume_client = ResumeClient()
+    resumed = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=resume_client,
+    )
+
+    assert resumed["status"] == "success"
+    assert resume_client.calls == 1
+    assert len(resumed["blocks"]) == 2
+
+
+def test_pass2_stop_drains_active_unit_and_cancels_remaining_unit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m81-pass2-stop"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>第一段。</p><p>第二段。</p>
+</body></html>
+""",
+        release_id,
+    )
+    config = _retry_test_config(retries=0)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=ScriptedLLM(),
+    )
+
+    started = threading.Event()
+    release = threading.Event()
+    token = StopToken()
+
+    class BlockingPass2:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_text(self, *, model_name: str, prompt: str) -> str:  # noqa: ARG002
+            self.calls += 1
+            started.set()
+            assert release.wait(timeout=5)
+            return json.dumps(
+                {
+                    "fidelity_errors_found": False,
+                    "analysis": "No fidelity errors.",
+                    "corrected_text": "Segment draft.",
+                }
+            )
+
+    client = BlockingPass2()
+    errors: list[BaseException] = []
+
+    def run_pass2() -> None:
+        try:
+            translate_chapter_pass2(
+                release_id=release_id,
+                chapter_number=1,
+                run_id=run_id,
+                config=config,
+                llm_client=client,
+                stop_token=token,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=run_pass2)
+    thread.start()
+    assert started.wait(timeout=5)
+    token.request_stop()
+    release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], StopRequested)
+    report = errors[0].interrupt_report
+    assert report is not None
+    assert report.drained_count == 1
+    assert report.canceled_count == 1
+    assert client.calls == 1
+    paths = derive_paths(config, release_id=release_id)
+    artifact_path = paths.release_root / "runs" / run_id / "translation" / "chapter-1" / "pass2.json"
+    stopped_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert stopped_payload["status"] == "stopped"
+    assert len(stopped_payload["blocks"]) == 1
+    conn = ensure_tracking_db(release_id)
+    try:
+        event_types = [
+            event.event_type
+            for event in load_events(conn, run_id=run_id, release_id=release_id)
+        ]
+    finally:
+        conn.close()
+    assert "translate-chapter.pass2.failed" not in event_types
 
 
 def _retry_test_config(*, retries: int) -> AppConfig:

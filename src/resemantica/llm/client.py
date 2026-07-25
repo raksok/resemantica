@@ -154,6 +154,14 @@ class LLMClient:
     def record_cache_hit(self) -> None:
         self._usage_totals.llm_cache_hit_count += 1
 
+    def concurrency_limit(self, model_name: str) -> int:
+        """Return the effective request concurrency for a model."""
+        return _throttle_for_model(
+            model_name,
+            self.max_concurrent_requests_per_model,
+            self.throttle_groups,
+        ).limit
+
     def translate_glossary_candidate(
         self,
         *,

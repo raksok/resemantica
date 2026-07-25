@@ -23,7 +23,7 @@ from resemantica.glossary.pipeline import (
 from resemantica.logging_config import configure_logging
 from resemantica.orchestration import OrchestrationRunner
 from resemantica.orchestration.cleanup import CLEANUP_SCOPES
-from resemantica.orchestration.stop import StopRequested, StopToken
+from resemantica.orchestration.stop import InterruptReport, StopRequested, StopToken
 from resemantica.settings import AppConfig, derive_paths, load_config
 
 
@@ -179,6 +179,16 @@ def _with_cli_progress(fn, *, stop_token: StopToken | None = None, verbosity: in
             return fn()
     except StopRequested as exc:
         print(f"status=stopped\nmessage={exc.message}")
+        report = exc.interrupt_report or InterruptReport(
+            stage="command",
+            phase=str(exc.checkpoint.get("phase") or exc.checkpoint.get("pass") or "task"),
+            unit_kind="task",
+            completed_count=0,
+            drained_count=1,
+            canceled_count=0,
+            checkpoint=exc.checkpoint,
+        )
+        _print_interrupt_report(report.to_dict())
         return _INTERRUPTED_STOP
     finally:
         _uninstall_interrupt_handlers(stop_token)
@@ -204,6 +214,26 @@ def _rich_status_style(status: str) -> str:
     }.get(status, "cyan")
 
 
+def _print_interrupt_report(report: dict[str, Any], *, table: Table | None = None) -> None:
+    rows = (
+        ("Stopped phase", report.get("phase")),
+        ("Task unit", report.get("unit_kind")),
+        ("Completed", report.get("completed_count")),
+        ("Drained active", report.get("drained_count")),
+        ("Canceled queued", report.get("canceled_count")),
+        ("Last durable", report.get("last_durable_unit")),
+        ("Resume from", report.get("next_resumable_unit")),
+    )
+    for label, value in rows:
+        if value is None:
+            continue
+        if table is not None:
+            table.add_row(label, str(value))
+        else:
+            key = label.lower().replace(" ", "_")
+            print(f"{key}={value}")
+
+
 def _print_stage_result(result: Any) -> None:
     status = _status_text(result)
     metadata = getattr(result, "metadata", {}) or {}
@@ -214,6 +244,9 @@ def _print_stage_result(result: Any) -> None:
     table.add_row("Status", status)
     if getattr(result, "message", ""):
         table.add_row("Message", str(result.message))
+    interrupt_report = metadata.get("interrupt_report")
+    if isinstance(interrupt_report, dict):
+        _print_interrupt_report(interrupt_report, table=table)
     warnings = metadata.get("warnings")
     if isinstance(warnings, list) and warnings:
         table.add_row("Warnings", " | ".join(str(item) for item in warnings))
@@ -1378,6 +1411,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.run_command == "retry-failed":
             from resemantica.orchestration.retry_failed import execute_retry_failed
 
+            stop_token = StopToken()
             retry_result = _with_cli_progress(
                 lambda: execute_retry_failed(
                     release_id=args.release,
@@ -1388,7 +1422,9 @@ def main(argv: list[str] | None = None) -> int:
                     chapter_end=args.end,
                     dry_run=bool(getattr(args, "dry_run", False)),
                     config=config,
+                    stop_token=stop_token,
                 ),
+                stop_token=stop_token,
                 verbosity=int(getattr(args, "verbose", 0) or 0),
             )
             if retry_result is _INTERRUPTED_STOP:

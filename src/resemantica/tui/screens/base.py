@@ -940,6 +940,16 @@ class BaseScreen(Screen):
         self.app.active_action = None
         self.app.active_stop_token = None
         self.app.active_stop_requested = False
+        if getattr(result, "stopped", False):
+            metadata = getattr(result, "metadata", {}) or {}
+            report = metadata.get("interrupt_report", {})
+            drained = report.get("drained_count", 0) if isinstance(report, dict) else 0
+            canceled = report.get("canceled_count", 0) if isinstance(report, dict) else 0
+            self.notify(
+                f"Stopped: drained {drained} active, canceled {canceled} queued",
+                severity="warning",
+                timeout=5,
+            )
         self._refresh_all()
 
     def _on_worker_failure(self, action_key: str, exc: Exception) -> None:

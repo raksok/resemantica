@@ -18,7 +18,7 @@ from resemantica.utils import _read_json
 from .events import emit_event
 from .gates import GateReport, check_stage_gate
 from .models import CALLABLE_STAGES, STAGE_ORDER, StageResult, legal_transition
-from .stop import StopRequested, StopToken, raise_if_stop_requested
+from .stop import InterruptReport, StopRequested, StopToken, raise_if_stop_requested
 
 
 @dataclass(slots=True)
@@ -329,12 +329,23 @@ class OrchestrationRunner:
                 stop_token=active_stop_token,
             )
         except StopRequested as exc:
+            report = exc.interrupt_report or InterruptReport(
+                stage=stage_name,
+                phase=str(exc.checkpoint.get("phase") or exc.checkpoint.get("pass") or "stage"),
+                unit_kind="task",
+                completed_count=0,
+                drained_count=1,
+                canceled_count=0,
+                checkpoint=exc.checkpoint,
+            )
+            metadata: dict[str, object] = {"checkpoint": exc.checkpoint}
+            metadata["interrupt_report"] = report.to_dict()
             result = StageResult(
                 success=True,
                 stage_name=stage_name,
                 message=exc.message,
                 checkpoint=exc.checkpoint,
-                metadata={"checkpoint": exc.checkpoint},
+                metadata=metadata,
                 stopped=True,
             )
         except Exception as exc:
@@ -355,7 +366,17 @@ class OrchestrationRunner:
             saved_checkpoint["chapter_start"] = chapter_start
         if chapter_end is not None:
             saved_checkpoint["chapter_end"] = chapter_end
-        self._update_run_state(stage_name, status, saved_checkpoint)
+        state_metadata = (
+            {"interrupt_report": result.metadata["interrupt_report"]}
+            if result.stopped and "interrupt_report" in result.metadata
+            else None
+        )
+        self._update_run_state(
+            stage_name,
+            status,
+            saved_checkpoint,
+            metadata=state_metadata,
+        )
         event_type = (
             f"{stage_name}.stopped"
             if result.stopped
@@ -440,6 +461,8 @@ class OrchestrationRunner:
         stage: str,
         status: str,
         checkpoint: dict[str, Any],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> RunState:
         conn = ensure_tracking_db(self.release_id)
         try:
@@ -451,11 +474,14 @@ class OrchestrationRunner:
                     stage_name=stage,
                     status=status,
                     checkpoint=checkpoint,
+                    metadata=dict(metadata or {}),
                 )
             else:
                 state.stage_name = stage
                 state.status = status
                 state.checkpoint = checkpoint
+                if metadata is not None:
+                    state.metadata.update(metadata)
             if status in {"completed", "failed", "stopped"}:
                 state.finished_at = datetime.now(timezone.utc).isoformat()
             elif status == "running":
@@ -813,6 +839,7 @@ class OrchestrationRunner:
             config=self.config,
             llm_client=shared_client,
             force=force,
+            stop_token=stop_token,
         )
         emit_event(
             self.run_id,
@@ -848,6 +875,7 @@ class OrchestrationRunner:
             config=self.config,
             llm_client=shared_client,
             force=force,
+            stop_token=stop_token,
         )
         emit_event(
             self.run_id,
@@ -1133,6 +1161,7 @@ class OrchestrationRunner:
                             config=self.config,
                             llm_client=client,
                             force=force,
+                            stop_token=stop_token,
                         )
                         if result.get("status") != "success":
                             raise RuntimeError(_pass1_incomplete_message(result))
@@ -1148,6 +1177,8 @@ class OrchestrationRunner:
                             message="Pass1 artifact written",
                             payload={"artifact_path": result.get("pass1_artifact"), "pass_name": "pass1"},
                         )
+                    except StopRequested:
+                        raise
                     except Exception as exc:
                         logger.opt(exception=True).error(
                             "Batched pass1 failed (release={}, run={}, chapter={})",
@@ -1192,6 +1223,7 @@ class OrchestrationRunner:
                             config=self.config,
                             llm_client=client,
                             force=force,
+                            stop_token=stop_token,
                         )
                         pass2_completed.append(chapter_number)
                         emit_event(
@@ -1203,6 +1235,8 @@ class OrchestrationRunner:
                             message="Pass2 artifact written",
                             payload={"artifact_path": result.get("pass2_artifact"), "pass_name": "pass2"},
                         )
+                    except StopRequested:
+                        raise
                     except Exception as exc:
                         logger.opt(exception=True).error(
                             "Batched pass2 failed (release={}, run={}, chapter={})",

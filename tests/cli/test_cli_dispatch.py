@@ -586,6 +586,35 @@ class TestCliDispatch:
         assert "status=success" in out
         assert "message=ok" in out
 
+    def test_stopped_stage_result_prints_interrupt_report(self, capsys):
+        from resemantica.orchestration.models import StageResult
+
+        cli_mod._print_stage_result(
+            StageResult(
+                True,
+                "translate-range",
+                "drained",
+                metadata={
+                    "interrupt_report": {
+                        "phase": "pass2",
+                        "unit_kind": "work_unit",
+                        "completed_count": 4,
+                        "drained_count": 1,
+                        "canceled_count": 7,
+                        "last_durable_unit": "ch001_blk004",
+                        "next_resumable_unit": "ch001_blk005",
+                    }
+                },
+                stopped=True,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Drained active" in out
+        assert "Canceled queued" in out
+        assert "ch001_blk005" in out
+        assert "status=stopped" in out
+
     def test_glossary_review_prints_json_and_csv_paths(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
         captured = {}

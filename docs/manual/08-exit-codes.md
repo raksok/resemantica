@@ -15,11 +15,14 @@ Resemantica supports two-stage interrupt via `StopToken` (`orchestration/stop.py
 
 **First Ctrl+C** — Graceful stop:
 - `StopToken.requested` is set via a `threading.Event`
-- Running LLM calls complete their current generation
-- Pipeline code calls `raise_if_stop_requested()` at granular checkpoints, which raises `StopRequested` carrying a `checkpoint` dict for resumption
+- No new LLM task is admitted after the stop is observed
+- Running LLM tasks complete and persist their current durable block, batch, candidate, vote, phase, or chapter unit
+- Executor work that has not started is canceled; active work is drained
+- Pipeline code raises `StopRequested` with a durable checkpoint and interrupt report
 - Review/promote commands for glossary and idioms use the same tokenized path and poll between DB reads, validation, durable writes, and artifact writes
 - No data loss; pipeline resumable via `uv run rsem run resume`
-- Prints: `Stopping after current task...`
+- Prints a final report containing completed, drained, and canceled counts and the resume boundary
+- Initial signal message: `Stopping after current task...`
 
 **Second Ctrl+C** — Force stop:
 - Sets `StopToken.force = True`

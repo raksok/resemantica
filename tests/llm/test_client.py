@@ -343,6 +343,23 @@ def test_throttle_group_serializes_different_model_names() -> None:
     assert openai_client.completions.max_active_total == 1
 
 
+def test_concurrency_limit_uses_matching_throttle_group() -> None:
+    client = LLMClient(
+        base_url="http://local",
+        timeout_seconds=30,
+        max_concurrent_requests_per_model=1,
+        throttle_groups={
+            "analysts": {
+                "model_names": ["analyst"],
+                "max_concurrent_requests": 3,
+            }
+        },
+    )
+
+    assert client.concurrency_limit("analyst") == 3
+    assert client.concurrency_limit("translator") == 1
+
+
 def test_model_semaphore_releases_after_exception() -> None:
     client = LLMClient(
         base_url="http://local",

@@ -19,6 +19,7 @@ from resemantica.llm.prompts import load_prompt
 from resemantica.orchestration.chunk_checkpoints import list_chunk_checkpoints
 from resemantica.orchestration.events import emit_event
 from resemantica.orchestration.models import StageResult
+from resemantica.orchestration.stop import StopToken
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import hash_locked_glossary, hash_validated_summary
 from resemantica.tracking.repo import (
@@ -844,6 +845,7 @@ def execute_retry_failed(
     chapter_end: int | None = None,
     dry_run: bool = False,
     config: AppConfig | None = None,
+    stop_token: StopToken | None = None,
 ) -> StageResult:
     config_obj = config or load_config()
     plan = plan_retry_failed(
@@ -876,6 +878,7 @@ def execute_retry_failed(
     )
     results: list[dict[str, object]] = []
     success = True
+    stopped_result: StageResult | None = None
     from resemantica.orchestration.runner import OrchestrationRunner
 
     tracking_conn = ensure_tracking_db(release_id)
@@ -884,7 +887,12 @@ def execute_retry_failed(
     finally:
         tracking_conn.close()
 
-    runner = OrchestrationRunner(release_id, run_id, config=config_obj)
+    runner = OrchestrationRunner(
+        release_id,
+        run_id,
+        config=config_obj,
+        stop_token=stop_token,
+    )
     try:
         for item in plan.retryable:
             if item.stage == "preprocess-summaries" and item.chapter_start is not None:
@@ -911,6 +919,7 @@ def execute_retry_failed(
                 chapter_end=item.chapter_end,
                 allow_rewind=True,
                 force=False,
+                stop_token=stop_token,
             )
             results.append(
                 {
@@ -920,6 +929,9 @@ def execute_retry_failed(
                     "metadata": result.metadata,
                 }
             )
+            if result.stopped:
+                stopped_result = result
+                break
             if not result.success:
                 success = False
                 break
@@ -931,19 +943,51 @@ def execute_retry_failed(
             finally:
                 tracking_conn.close()
 
-    message = "Retry-failed completed" if success else "Retry-failed stopped after failed retry"
+    stopped = stopped_result is not None
+    message = (
+        f"Retry-failed stopped during {stopped_result.stage_name}"
+        if stopped_result is not None
+        else "Retry-failed completed"
+        if success
+        else "Retry-failed stopped after failed retry"
+    )
+    event_type = (
+        "retry-failed.stopped"
+        if stopped
+        else "retry-failed.completed"
+        if success
+        else "retry-failed.failed"
+    )
     emit_event(
         run_id,
         release_id,
-        "retry-failed.completed" if success else "retry-failed.failed",
+        event_type,
         "retry-failed",
-        severity="info" if success else "error",
+        severity="info" if success or stopped else "error",
         message=message,
-        payload={"plan": plan.to_dict(), "results": results},
+        payload={
+            "plan": plan.to_dict(),
+            "results": results,
+            "interrupt_report": (
+                stopped_result.metadata.get("interrupt_report")
+                if stopped_result is not None
+                else None
+            ),
+        },
     )
     return StageResult(
-        success=success,
+        success=success or stopped,
         stage_name="retry-failed",
         message=message,
-        metadata={**plan.to_dict(), "results": results},
+        checkpoint=stopped_result.checkpoint if stopped_result is not None else {},
+        metadata={
+            **plan.to_dict(),
+            "results": results,
+            **(
+                {"interrupt_report": stopped_result.metadata.get("interrupt_report")}
+                if stopped_result is not None
+                else {}
+            ),
+        },
+        stopped=stopped,
     )

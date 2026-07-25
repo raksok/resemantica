@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -36,7 +35,13 @@ from resemantica.orchestration.chunk_checkpoints import (
     load_chunk_checkpoint,
     save_chunk_checkpoint,
 )
-from resemantica.orchestration.stop import StopRequested, StopToken, raise_if_stop_requested
+from resemantica.orchestration.drain import DrainResult, run_interruptible_pool
+from resemantica.orchestration.stop import (
+    InterruptReport,
+    StopRequested,
+    StopToken,
+    raise_if_stop_requested,
+)
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
     derive_english_summary,
@@ -986,27 +991,39 @@ def preprocess_continuity(
                         existing_english.append((zh_result, en_record))
 
                 completed_english: list[_GraphContinuityEnResult] = []
+                continuity_drain = DrainResult(False, (), (), 0)
                 if english_jobs:
-                    with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
-                        futures = {
-                            executor.submit(
-                                _derive_graph_compact_english,
-                                db_path=paths.db_path,
-                                release_id=release_id,
-                                run_id=run_id,
-                                llm_client=client,
-                                model_name=config_obj.models.translator_name,
-                                prompt=prompt_en,
-                                zh_result=zh_result,
-                                locked_glossary=locked_glossary,
-                                glossary_hash=glossary_hash,
-                                config=config_obj,
-                            ): zh_result
-                            for zh_result in english_jobs
-                        }
-                        for future in as_completed(futures):
-                            failed_chapter_number = futures[future].chapter_number
-                            completed_english.append(future.result())
+                    def derive_english(
+                        zh_result: _GraphContinuityZhResult,
+                    ) -> _GraphContinuityEnResult:
+                        return _derive_graph_compact_english(
+                            db_path=paths.db_path,
+                            release_id=release_id,
+                            run_id=run_id,
+                            llm_client=client,
+                            model_name=config_obj.models.translator_name,
+                            prompt=prompt_en,
+                            zh_result=zh_result,
+                            locked_glossary=locked_glossary,
+                            glossary_hash=glossary_hash,
+                            config=config_obj,
+                        )
+
+                    continuity_drain = run_interruptible_pool(
+                        english_jobs,
+                        max_workers=min(
+                            config_obj.summaries.chapter_concurrency,
+                            (
+                                client.concurrency_limit(config_obj.models.translator_name)
+                                if isinstance(client, LLMClient)
+                                else config_obj.summaries.chapter_concurrency
+                            ),
+                        ),
+                        stop_token=stop_token,
+                        worker=derive_english,
+                        consume=lambda _source, result: completed_english.append(result),
+                        unit_id=lambda result: str(result.chapter_number),
+                    )
 
                 english_by_chapter: dict[int, tuple[_GraphContinuityZhResult, Any]] = {
                     zh_result.chapter_number: (zh_result, en_record)
@@ -1021,6 +1038,8 @@ def preprocess_continuity(
                     english_by_chapter[en_result.chapter_number] = (source, en_result.en_record)
 
                 for zh_result in sorted(zh_results, key=lambda result: result.chapter_number):
+                    if zh_result.chapter_number not in english_by_chapter:
+                        continue
                     en_record = english_by_chapter[zh_result.chapter_number][1]
                     _write_graph_continuity_artifact(
                         path=zh_result.artifact_path,
@@ -1049,10 +1068,43 @@ def preprocess_continuity(
                         summary_id=zh_result.record.summary_id,
                         artifact_path=str(zh_result.artifact_path),
                     )
-                    raise_if_stop_requested(
-                        stop_token,
-                        checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
-                        message=f"Continuity refresh stopped after chapter {zh_result.chapter_number}",
+                    if not continuity_drain.stopped:
+                        raise_if_stop_requested(
+                            stop_token,
+                            checkpoint={"refreshed_chapters": [row["chapter_number"] for row in refreshed]},
+                            message=f"Continuity refresh stopped after chapter {zh_result.chapter_number}",
+                        )
+
+                if continuity_drain.stopped:
+                    completed_numbers = [row["chapter_number"] for row in refreshed]
+                    next_chapter = next(
+                        (
+                            result.chapter_number
+                            for result in english_jobs
+                            if result.chapter_number not in english_by_chapter
+                        ),
+                        None,
+                    )
+                    checkpoint = {"refreshed_chapters": completed_numbers}
+                    raise StopRequested(
+                        "Continuity stopped after draining active English derivation tasks",
+                        checkpoint=checkpoint,
+                        interrupt_report=InterruptReport(
+                            stage=_STAGE_NAME,
+                            phase="english",
+                            unit_kind="chapter",
+                            completed_count=len(continuity_drain.completed_unit_ids),
+                            drained_count=len(continuity_drain.drained_unit_ids),
+                            canceled_count=continuity_drain.canceled_count,
+                            last_durable_unit=(
+                                str(completed_numbers[-1]) if completed_numbers else None
+                            ),
+                            next_resumable_unit=(
+                                str(next_chapter) if next_chapter is not None else None
+                            ),
+                            checkpoint=checkpoint,
+                            llm_usage=capture_usage_snapshot(client).to_payload(),
+                        ),
                     )
 
                 if chunked:

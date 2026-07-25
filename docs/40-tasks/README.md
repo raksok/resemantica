@@ -98,3 +98,4 @@ Always follow the milestone sequence below.
 | M78 | task-78 | M77 | Pass1 Short-Block Resegmentation Recovery |
 | M79 | task-79 | M78 | Pass1 Mixed-Language Candidate Repair |
 | M80 | task-80 | M79 | Pass1 Mixed-Language Pass2 Handoff |
+| M81 | task-81 | M80 | Graceful Task-Level Drain And Exit |

@@ -238,7 +238,9 @@ class PreprocessingScreen(BaseScreen):
             )
             lbl = sdef["label"] if sdef else snapshot.active_action
             if getattr(self.app, "active_stop_requested", False):
-                parts.append(f"[cyan]{self._spinner_frame()} Stopping after current chapter...[/]")
+                parts.append(
+                    f"[cyan]{self._spinner_frame()} Draining active tasks and canceling queued tasks...[/]"
+                )
             else:
                 parts.append(f"[cyan]{self._spinner_frame()} {lbl} in progress...[/]")
         if snapshot.latest_failure:

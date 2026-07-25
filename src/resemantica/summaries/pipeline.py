@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -36,8 +35,14 @@ from resemantica.orchestration.chunk_checkpoints import (
     load_chunk_checkpoint,
     save_chunk_checkpoint,
 )
+from resemantica.orchestration.drain import run_interruptible_pool
 from resemantica.orchestration.events import emit_event
-from resemantica.orchestration.stop import StopToken, raise_if_stop_requested
+from resemantica.orchestration.stop import (
+    InterruptReport,
+    StopRequested,
+    StopToken,
+    raise_if_stop_requested,
+)
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.summaries.derivation import (
     build_story_so_far,
@@ -558,6 +563,8 @@ def _run_chinese_phase(
                 reason="prompt_budget_exceeded",
                 zh_usage_payload=usage_payload_delta(llm_client, usage_before),
             )
+        except StopRequested:
+            raise
         except Exception as exc:
             _emit(
                 run_id,
@@ -1013,70 +1020,113 @@ def preprocess_summaries(
         chinese_results: dict[int, _ChinesePhaseResult] = {}
         phase1_refs = [ref for ref in chunk_refs if ref.chapter_number > zh_skip_until]
         try:
-            with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
-                chinese_futures = []
-                for ref in phase1_refs:
-                    raise_if_stop_requested(
-                        stop_token,
-                        checkpoint={"chapter_artifacts": list(results_by_chapter.values())},
-                        message="Summaries preprocess stopped before next chapter",
+            def run_chinese(ref: ChapterRef) -> _ChinesePhaseResult:
+                return _run_chinese_phase(
+                    ref=ref,
+                    db_path=paths.db_path,
+                    release_id=release_id,
+                    run_id=run_id,
+                    config=config_obj,
+                    llm_client=client,
+                    prompt_structured=prompt_structured,
+                    prompt_validate=prompt_validate,
+                    cache_root=paths.release_root / "cache" / "llm",
+                    exclude_patterns=exclude_patterns,
+                )
+
+            def consume_chinese(
+                _ref: ChapterRef,
+                chinese_result: _ChinesePhaseResult,
+            ) -> None:
+                nonlocal zh_skip_until
+                chinese_results[chinese_result.chapter_number] = chinese_result
+                entry: dict[str, Any] = {
+                    "chapter_number": chinese_result.chapter_number,
+                    "chapter_source_hash": chinese_result.chapter_source_hash,
+                }
+                if chinese_result.status == "skipped":
+                    entry["status"] = "skipped"
+                    if chinese_result.reason is not None:
+                        entry["reason"] = chinese_result.reason
+                elif chinese_result.status == "failed":
+                    entry["status"] = "failed"
+                    if chinese_result.reason is not None:
+                        entry["reason"] = chinese_result.reason
+                if chinese_result.warnings:
+                    entry["warnings"] = chinese_result.warnings
+                if chinese_result.llm_validation_flags:
+                    entry["llm_validation_flags"] = chinese_result.llm_validation_flags
+                if chinese_result.llm_validation_warnings:
+                    entry["llm_validation_warnings"] = chinese_result.llm_validation_warnings
+                results_by_chapter[chinese_result.chapter_number] = entry
+
+                conn = open_connection(paths.db_path)
+                ensure_schema(conn, "summaries")
+                try:
+                    new_zh_checkpoint = _advance_chinese_checkpoint(
+                        completed=chinese_results,
+                        current=zh_skip_until,
+                        ordered_numbers=ordered_numbers,
                     )
-                    chinese_futures.append(
-                        executor.submit(
-                            _run_chinese_phase,
-                            ref=ref,
-                            db_path=paths.db_path,
+                    if new_zh_checkpoint > zh_skip_until:
+                        set_summary_checkpoint(
+                            conn,
                             release_id=release_id,
                             run_id=run_id,
-                            config=config_obj,
-                            llm_client=client,
-                            prompt_structured=prompt_structured,
-                            prompt_validate=prompt_validate,
-                            cache_root=paths.release_root / "cache" / "llm",
-                            exclude_patterns=exclude_patterns,
+                            zh_last_chapter=new_zh_checkpoint,
                         )
-                    )
-                for chinese_future in as_completed(chinese_futures):
-                    chinese_result = chinese_future.result()
-                    chinese_results[chinese_result.chapter_number] = chinese_result
-                    entry: dict[str, Any] = {
-                        "chapter_number": chinese_result.chapter_number,
-                        "chapter_source_hash": chinese_result.chapter_source_hash,
-                    }
-                    if chinese_result.status == "skipped":
-                        entry["status"] = "skipped"
-                        if chinese_result.reason is not None:
-                            entry["reason"] = chinese_result.reason
-                    elif chinese_result.status == "failed":
-                        entry["status"] = "failed"
-                        if chinese_result.reason is not None:
-                            entry["reason"] = chinese_result.reason
-                    if chinese_result.warnings:
-                        entry["warnings"] = chinese_result.warnings
-                    if chinese_result.llm_validation_flags:
-                        entry["llm_validation_flags"] = chinese_result.llm_validation_flags
-                    if chinese_result.llm_validation_warnings:
-                        entry["llm_validation_warnings"] = chinese_result.llm_validation_warnings
-                    results_by_chapter[chinese_result.chapter_number] = entry
+                        zh_skip_until = new_zh_checkpoint
+                finally:
+                    conn.close()
 
-                    conn = open_connection(paths.db_path)
-                    ensure_schema(conn, "summaries")
-                    try:
-                        new_zh_checkpoint = _advance_chinese_checkpoint(
-                            completed=chinese_results,
-                            current=zh_skip_until,
-                            ordered_numbers=ordered_numbers,
-                        )
-                        if new_zh_checkpoint > zh_skip_until:
-                            set_summary_checkpoint(
-                                conn,
-                                release_id=release_id,
-                                run_id=run_id,
-                                zh_last_chapter=new_zh_checkpoint,
-                            )
-                            zh_skip_until = new_zh_checkpoint
-                    finally:
-                        conn.close()
+            chinese_drain = run_interruptible_pool(
+                phase1_refs,
+                max_workers=min(
+                    config_obj.summaries.chapter_concurrency,
+                    (
+                        client.concurrency_limit(config_obj.models.analyst_name)
+                        if isinstance(client, LLMClient)
+                        else config_obj.summaries.chapter_concurrency
+                    ),
+                ),
+                stop_token=stop_token,
+                worker=run_chinese,
+                consume=consume_chinese,
+                unit_id=lambda ref: str(ref.chapter_number),
+            )
+            if chinese_drain.stopped:
+                completed_numbers = sorted(chinese_results)
+                next_chapter = next(
+                    (
+                        ref.chapter_number
+                        for ref in phase1_refs
+                        if ref.chapter_number not in chinese_results
+                    ),
+                    None,
+                )
+                interrupt_checkpoint = {
+                    "chapter_artifacts": list(results_by_chapter.values())
+                }
+                raise StopRequested(
+                    "Summaries stopped after draining active Chinese summary tasks",
+                    checkpoint=interrupt_checkpoint,
+                    interrupt_report=InterruptReport(
+                        stage=_STAGE_NAME,
+                        phase="chinese",
+                        unit_kind="chapter",
+                        completed_count=len(chinese_drain.completed_unit_ids),
+                        drained_count=len(chinese_drain.drained_unit_ids),
+                        canceled_count=chinese_drain.canceled_count,
+                        last_durable_unit=(
+                            str(completed_numbers[-1]) if completed_numbers else None
+                        ),
+                        next_resumable_unit=(
+                            str(next_chapter) if next_chapter is not None else None
+                        ),
+                        checkpoint=interrupt_checkpoint,
+                        llm_usage=capture_usage_snapshot(client).to_payload(),
+                    ),
+                )
 
             failed_chinese = [
                 result
@@ -1480,78 +1530,127 @@ def preprocess_summaries(
 
             phase3_jobs = [job for job in english_jobs if job.chapter_number > en_skip_until]
             completed_english: dict[int, _EnglishPhaseResult] = {}
-            with ThreadPoolExecutor(max_workers=config_obj.summaries.chapter_concurrency) as executor:
-                english_futures = {
-                    executor.submit(
-                        _run_english_phase,
-                        job=job,
-                        db_path=paths.db_path,
-                        release_id=release_id,
-                        run_id=run_id,
-                        config=config_obj,
-                        llm_client=client,
-                        prompt_en=prompt_en,
-                    ): job
-                    for job in phase3_jobs
-                }
-                for english_future in as_completed(english_futures):
-                    job = english_futures[english_future]
-                    english_result = english_future.result()
-                    completed_english[english_result.chapter_number] = english_result
-                    _write_json(
-                        english_result.en_artifact,
-                        {
-                            "release_id": release_id,
-                            "run_id": run_id,
-                            "chapter_number": english_result.chapter_number,
-                            "schema_version": 1,
-                            "derived": {
-                                "chapter_summary_en_short": english_result.chapter_record,
-                                "story_so_far_en": english_result.story_record,
-                            },
+
+            def run_english(job: _EnglishPhaseJob) -> _EnglishPhaseResult:
+                return _run_english_phase(
+                    job=job,
+                    db_path=paths.db_path,
+                    release_id=release_id,
+                    run_id=run_id,
+                    config=config_obj,
+                    llm_client=client,
+                    prompt_en=prompt_en,
+                )
+
+            def consume_english(
+                job: _EnglishPhaseJob,
+                english_result: _EnglishPhaseResult,
+            ) -> None:
+                nonlocal en_skip_until
+                completed_english[english_result.chapter_number] = english_result
+                _write_json(
+                    english_result.en_artifact,
+                    {
+                        "release_id": release_id,
+                        "run_id": run_id,
+                        "chapter_number": english_result.chapter_number,
+                        "schema_version": 1,
+                        "derived": {
+                            "chapter_summary_en_short": english_result.chapter_record,
+                            "story_so_far_en": english_result.story_record,
                         },
+                    },
+                )
+                results_by_chapter[english_result.chapter_number]["en_artifact"] = str(
+                    english_result.en_artifact
+                )
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.english_derivation_completed",
+                    chapter_number=english_result.chapter_number,
+                    message=f"English summary derivation completed for chapter {english_result.chapter_number}",
+                    model_name=config_obj.models.translator_name,
+                    summary_count=2,
+                    **english_result.en_usage_payload,
+                )
+                _emit(
+                    run_id,
+                    release_id,
+                    f"{_STAGE_NAME}.chapter_completed",
+                    chapter_number=english_result.chapter_number,
+                    summary_count=5,
+                    **_sum_usage_payloads(job.zh_usage_payload, english_result.en_usage_payload),
+                )
+                conn = open_connection(paths.db_path)
+                ensure_schema(conn, "summaries")
+                try:
+                    new_en_checkpoint = _advance_english_checkpoint(
+                        conn=conn,
+                        release_id=release_id,
+                        completed=completed_english,
+                        current=en_skip_until,
+                        ordered_numbers=ordered_numbers,
                     )
-                    results_by_chapter[english_result.chapter_number]["en_artifact"] = str(
-                        english_result.en_artifact
-                    )
-                    _emit(
-                        run_id,
-                        release_id,
-                        f"{_STAGE_NAME}.english_derivation_completed",
-                        chapter_number=english_result.chapter_number,
-                        message=f"English summary derivation completed for chapter {english_result.chapter_number}",
-                        model_name=config_obj.models.translator_name,
-                        summary_count=2,
-                        **english_result.en_usage_payload,
-                    )
-                    _emit(
-                        run_id,
-                        release_id,
-                        f"{_STAGE_NAME}.chapter_completed",
-                        chapter_number=english_result.chapter_number,
-                        summary_count=5,
-                        **_sum_usage_payloads(job.zh_usage_payload, english_result.en_usage_payload),
-                    )
-                    conn = open_connection(paths.db_path)
-                    ensure_schema(conn, "summaries")
-                    try:
-                        new_en_checkpoint = _advance_english_checkpoint(
-                            conn=conn,
+                    if new_en_checkpoint > en_skip_until:
+                        set_summary_checkpoint(
+                            conn,
                             release_id=release_id,
-                            completed=completed_english,
-                            current=en_skip_until,
-                            ordered_numbers=ordered_numbers,
+                            run_id=run_id,
+                            en_last_chapter=new_en_checkpoint,
                         )
-                        if new_en_checkpoint > en_skip_until:
-                            set_summary_checkpoint(
-                                conn,
-                                release_id=release_id,
-                                run_id=run_id,
-                                en_last_chapter=new_en_checkpoint,
-                            )
-                            en_skip_until = new_en_checkpoint
-                    finally:
-                        conn.close()
+                        en_skip_until = new_en_checkpoint
+                finally:
+                    conn.close()
+
+            english_drain = run_interruptible_pool(
+                phase3_jobs,
+                max_workers=min(
+                    config_obj.summaries.chapter_concurrency,
+                    (
+                        client.concurrency_limit(config_obj.models.translator_name)
+                        if isinstance(client, LLMClient)
+                        else config_obj.summaries.chapter_concurrency
+                    ),
+                ),
+                stop_token=stop_token,
+                worker=run_english,
+                consume=consume_english,
+                unit_id=lambda job: str(job.chapter_number),
+            )
+            if english_drain.stopped:
+                completed_numbers = sorted(completed_english)
+                next_chapter = next(
+                    (
+                        job.chapter_number
+                        for job in phase3_jobs
+                        if job.chapter_number not in completed_english
+                    ),
+                    None,
+                )
+                interrupt_checkpoint = {
+                    "chapter_artifacts": list(results_by_chapter.values())
+                }
+                raise StopRequested(
+                    "Summaries stopped after draining active English summary tasks",
+                    checkpoint=interrupt_checkpoint,
+                    interrupt_report=InterruptReport(
+                        stage=_STAGE_NAME,
+                        phase="english",
+                        unit_kind="chapter",
+                        completed_count=len(english_drain.completed_unit_ids),
+                        drained_count=len(english_drain.drained_unit_ids),
+                        canceled_count=english_drain.canceled_count,
+                        last_durable_unit=(
+                            str(completed_numbers[-1]) if completed_numbers else None
+                        ),
+                        next_resumable_unit=(
+                            str(next_chapter) if next_chapter is not None else None
+                        ),
+                        checkpoint=interrupt_checkpoint,
+                        llm_usage=capture_usage_snapshot(client).to_payload(),
+                    ),
+                )
 
             conn = open_connection(paths.db_path)
             ensure_schema(conn, "summaries")
@@ -1600,6 +1699,8 @@ def preprocess_summaries(
                     )
                 finally:
                     conn.close()
+        except StopRequested:
+            raise
         except Exception as exc:
             if chunked:
                 payload = _chunk_event_payload(

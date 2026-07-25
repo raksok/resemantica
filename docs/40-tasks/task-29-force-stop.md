@@ -1,5 +1,9 @@
 # Task 29: Force Stop — Immediate Kill + Faster Graceful Stop
 
+> Superseded for first-signal granularity by M81. The second Ctrl+C force-exit
+> behavior remains current; graceful stops now drain active durable tasks and
+> cancel queued work instead of stopping only between translation passes.
+
 ## Goal
 
 Add force stop (second Ctrl+C = `os._exit(130)`) and improve graceful stop granularity from chapter-level to pass-level in sequential translation, so the process stops quickly when requested.

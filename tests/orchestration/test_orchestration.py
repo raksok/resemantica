@@ -416,6 +416,7 @@ class TestRunStage:
 
         assert state is not None
         assert state.status == "stopped"
+        assert state.metadata["interrupt_report"]["stage"] == "reset"
         assert [event.event_type for event in events].count("reset.stopped") == 1
 
     def test_stage_completed_event_persists_llm_usage_payload(self, monkeypatch):
@@ -625,6 +626,67 @@ class TestRetryFailed:
         finally:
             conn.close()
         assert restored == original
+
+    def test_retry_failed_propagates_graceful_stop_without_failure_event(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-graceful-stop"
+        run_id = "001"
+
+        from resemantica.orchestration.models import StageResult
+        from resemantica.orchestration.retry_failed import RetryFailedPlan, RetryUnit
+
+        plan = RetryFailedPlan(
+            release_id=release_id,
+            run_id=run_id,
+            stage="translate-range",
+            retryable=[RetryUnit("translate-range", 3, 3, "failed", [3])],
+        )
+        monkeypatch.setattr("resemantica.orchestration.retry_failed.plan_retry_failed", lambda **kwargs: plan)
+        token = StopToken()
+        seen_tokens: list[StopToken | None] = []
+
+        def fake_run_stage(self, stage_name, **kwargs):
+            seen_tokens.append(kwargs.get("stop_token"))
+            return StageResult(
+                True,
+                stage_name,
+                "drained",
+                checkpoint={"completed_chapters": [3]},
+                metadata={
+                    "interrupt_report": {
+                        "stage": stage_name,
+                        "phase": "pass2",
+                        "drained_count": 1,
+                        "canceled_count": 2,
+                    }
+                },
+                stopped=True,
+            )
+
+        monkeypatch.setattr(OrchestrationRunner, "run_stage", fake_run_stage)
+
+        result = execute_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="translate-range",
+            stop_token=token,
+        )
+
+        assert result.stopped is True
+        assert result.metadata["interrupt_report"]["canceled_count"] == 2
+        assert seen_tokens == [token]
+        conn = ensure_tracking_db(release_id)
+        try:
+            events = load_events(conn, run_id=run_id, release_id=release_id)
+        finally:
+            conn.close()
+        event_types = [event.event_type for event in events]
+        assert "retry-failed.stopped" in event_types
+        assert "retry-failed.failed" not in event_types
 
     def test_retry_failed_reports_llm_content_validation_summary_failure(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

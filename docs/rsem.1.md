@@ -224,6 +224,11 @@ EXIT CODES
     2     Invalid arguments.
     130   Interrupted (Ctrl+C).
 
+    On the first Ctrl+C, Resemantica stops admitting new LLM tasks,
+    cancels queued tasks, drains and persists active tasks, prints the
+    durable resume boundary, and exits 130. A second Ctrl+C force exits
+    immediately and may leave partial artifacts.
+
 FILES
     resemantica.toml            Main configuration (TOML).
     artifacts/releases/<id>/    Release root directory.

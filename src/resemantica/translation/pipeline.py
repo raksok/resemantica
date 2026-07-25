@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import sqlite3
 import time
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,8 @@ from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.llm.budget import PromptBudgetError
 from resemantica.llm.client import LLMClient, capture_usage_snapshot, usage_payload_delta
 from resemantica.llm.prompts import load_prompt
+from resemantica.orchestration.drain import run_interruptible_pool
+from resemantica.orchestration.stop import InterruptReport, StopRequested, StopToken
 from resemantica.settings import AppConfig, derive_paths, load_config
 from resemantica.translation.bundle_context import (
     extract_glossary_target_terms_for_pass3,
@@ -322,6 +323,7 @@ def translate_chapter_pass1(
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
     force: bool = False,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -456,6 +458,68 @@ def translate_chapter_pass1(
             pass1_blocks: list[dict[str, Any]] = []
             pass1_structure_checks = []
 
+            def persist_pass1_progress(status: str) -> dict[str, Any]:
+                payload = {
+                    "release_id": release_id,
+                    "run_id": run_id,
+                    "chapter_number": chapter_number,
+                    "pass_name": "pass1",
+                    "model_name": model_name,
+                    "prompt_version": pass1_prompt.version,
+                    "source_hash": source_hash,
+                    "blocks": pass1_blocks,
+                    "structure_validation": pass1_structure_checks,
+                    "status": status,
+                }
+                _write_json(pass1_artifact_path, payload)
+                save_checkpoint(
+                    conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    chapter_number=chapter_number,
+                    pass_name="pass1",
+                    source_hash=source_hash,
+                    prompt_version=pass1_prompt.version,
+                    packet_version_hash=packet_version_hash,
+                    status=status,
+                    artifact_path=str(pass1_artifact_path),
+                )
+                return payload
+
+            def finish_pass1_block(block_id: str) -> None:
+                stopping = bool(stop_token and stop_token.requested)
+                persist_pass1_progress("stopped" if stopping else "running")
+                if not stopping:
+                    return
+                next_block = (
+                    str(records[len(pass1_blocks)]["block_id"])
+                    if len(pass1_blocks) < len(records)
+                    else None
+                )
+                checkpoint = {
+                    "chapter_number": chapter_number,
+                    "pass": "pass1",
+                    "completed_blocks": len(pass1_blocks),
+                    "last_durable_unit": block_id,
+                }
+                report = InterruptReport(
+                    stage="translate-chapter",
+                    phase="pass1",
+                    unit_kind="block",
+                    completed_count=len(pass1_blocks),
+                    drained_count=1,
+                    canceled_count=max(0, len(records) - len(pass1_blocks)),
+                    last_durable_unit=block_id,
+                    next_resumable_unit=next_block,
+                    checkpoint=checkpoint,
+                    llm_usage=usage_payload_delta(client, usage_before),
+                )
+                raise StopRequested(
+                    f"Stopped after pass1 block {block_id}",
+                    checkpoint=checkpoint,
+                    interrupt_report=report,
+                )
+
             for record in records:
                 source_text = str(record["source_text_zh"])
                 cleaned_source = _prevalidate_source(source_text)
@@ -486,6 +550,7 @@ def translate_chapter_pass1(
                         message=f"Pass1 reused successful block {block_id}",
                         payload={"pass_name": "pass1", "status": "cached"},
                     )
+                    finish_pass1_block(block_id)
                     continue
 
                 if _is_symbol_only_source(cleaned_source):
@@ -520,6 +585,7 @@ def translate_chapter_pass1(
                         message=f"Pass1 preserved non-translatable block {block_id}",
                         payload={"pass_name": "pass1", "status": "passthrough"},
                     )
+                    finish_pass1_block(block_id)
                     continue
 
                 pass1_result = _translate_pass1_with_diagnostics(
@@ -618,6 +684,7 @@ def translate_chapter_pass1(
                             message=f"Pass1 completed for {block_id}",
                             payload={"pass_name": "pass1"},
                         )
+                        finish_pass1_block(block_id)
                         continue
                 else:
                     _emit_translation_event(
@@ -659,6 +726,7 @@ def translate_chapter_pass1(
                         message=f"Pass1 validation failed for {block_id}",
                         payload={"pass_name": "pass1", "errors": structure_errors},
                     )
+                    finish_pass1_block(block_id)
                     continue
 
                 retry_segments = _split_for_retry(cleaned_source, max_chars=750, force=True)
@@ -686,6 +754,7 @@ def translate_chapter_pass1(
                         message=f"Pass1 validation failed for {block_id}",
                         payload={"errors": structure_errors},
                     )
+                    finish_pass1_block(block_id)
                     continue
 
                 segment_payloads: list[dict[str, Any]] = []
@@ -803,31 +872,11 @@ def translate_chapter_pass1(
                         payload={"pass_name": "pass1", "errors": segment_failure_errors},
                     )
 
+                finish_pass1_block(parent_block_id)
+
             pass1_failed = any(block.get("status") == "failed" for block in pass1_blocks)
-            pass1_payload = {
-                "release_id": release_id,
-                "run_id": run_id,
-                "chapter_number": chapter_number,
-                "pass_name": "pass1",
-                "model_name": model_name,
-                "prompt_version": pass1_prompt.version,
-                "source_hash": source_hash,
-                "blocks": pass1_blocks,
-                "structure_validation": pass1_structure_checks,
-                "status": "failed" if pass1_failed else "success",
-            }
-            _write_json(pass1_artifact_path, pass1_payload)
-            save_checkpoint(
-                conn,
-                release_id=release_id,
-                run_id=run_id,
-                chapter_number=chapter_number,
-                pass_name="pass1",
-                source_hash=source_hash,
-                prompt_version=pass1_prompt.version,
-                packet_version_hash=packet_version_hash,
-                status=str(pass1_payload["status"]),
-                artifact_path=str(pass1_artifact_path),
+            pass1_payload = persist_pass1_progress(
+                "failed" if pass1_failed else "success"
             )
             if pass1_failed:
                 failed_count = sum(1 for b in pass1_blocks if b.get("status") == "failed")
@@ -882,6 +931,8 @@ def translate_chapter_pass1(
             "blocks": pass1_payload.get("blocks", []),
             **usage_payload_delta(client, usage_before),
         }
+    except StopRequested:
+        raise
     except Exception as exc:
         _emit_translation_event(
             release_id=release_id,
@@ -1709,6 +1760,7 @@ def translate_chapter_pass2(
     project_root: Path | None = None,
     llm_client: LLMClient | None = None,
     force: bool = False,
+    stop_token: StopToken | None = None,
 ) -> dict[str, Any]:
     config_obj = config or load_config()
     paths = derive_paths(config_obj, release_id=release_id, project_root=project_root)
@@ -1854,8 +1906,38 @@ def translate_chapter_pass2(
                     continue
                 blocks_to_process.append(block)
 
+            def persist_pass2_progress(status: str) -> dict[str, Any]:
+                payload = {
+                    "release_id": release_id,
+                    "run_id": run_id,
+                    "chapter_number": chapter_number,
+                    "pass_name": "pass2",
+                    "model_name": analyst_model,
+                    "prompt_version": pass2_prompt.version,
+                    "batch_prompt_version": pass2_batch_prompt.version,
+                    "source_hash": source_hash,
+                    "blocks": pass2_blocks,
+                    "structure_validation": pass2_structure_checks,
+                    "fidelity_validation": fidelity_checks,
+                    "batching": pass2_batching,
+                    "status": status,
+                }
+                _write_json(pass2_artifact_path, payload)
+                save_checkpoint(
+                    conn,
+                    release_id=release_id,
+                    run_id=run_id,
+                    chapter_number=chapter_number,
+                    pass_name="pass2",
+                    source_hash=source_hash,
+                    prompt_version=pass2_prompt.version,
+                    packet_version_hash=packet_version_hash,
+                    status=status,
+                    artifact_path=str(pass2_artifact_path),
+                )
+                return payload
+
             if blocks_to_process:
-                concurrency = config_obj.translation.pass2_concurrency
                 work_units = _pack_pass2_work_units(
                     blocks_to_process,
                     pass2_batch_prompt_template=pass2_batch_prompt.template,
@@ -1864,20 +1946,21 @@ def translate_chapter_pass2(
                     config=config_obj,
                     chapter_number=chapter_number,
                 )
-                with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                    fut_map: dict[Future, int] = {}
-                    batch_number = 0
-                    batch_numbers_by_index: dict[int, int] = {}
-                    for i, unit in enumerate(work_units):
-                        if unit["kind"] == "batch":
-                            batch_number += 1
-                            batch_numbers_by_index[i] = batch_number
-                        else:
-                            batch_numbers_by_index[i] = 0
-                        fut = executor.submit(
-                            _process_pass2_work_unit,
+                batch_number = 0
+                indexed_units: list[tuple[int, dict[str, Any]]] = []
+                for unit in work_units:
+                    if unit["kind"] == "batch":
+                        batch_number += 1
+                        indexed_units.append((batch_number, unit))
+                    else:
+                        indexed_units.append((0, unit))
+
+                def process_unit(item: tuple[int, dict[str, Any]]) -> tuple:
+                    unit_batch_number, unit = item
+                    try:
+                        return _process_pass2_work_unit(
                             unit,
-                            batch_index=batch_numbers_by_index[i],
+                            batch_index=unit_batch_number,
                             pass2_batch_prompt_template=pass2_batch_prompt.template,
                             pass2_prompt_template=pass2_prompt.template,
                             analyst_model=analyst_model,
@@ -1889,35 +1972,93 @@ def translate_chapter_pass2(
                             chapter_number=chapter_number,
                             config=config_obj,
                         )
-                        fut_map[fut] = i
+                    except Exception as exc:
+                        block_id = str(unit["blocks"][0].get("block_id", ""))
+                        _emit_translation_event(
+                            release_id=release_id,
+                            run_id=run_id,
+                            event_type="pass2.failed",
+                            chapter_number=chapter_number,
+                            block_id=block_id,
+                            severity="error",
+                            message=f"Pass2 worker failed for {block_id}: {exc}",
+                            payload={"pass_name": "pass2", "reason": str(exc)},
+                        )
+                        raise
 
-                    results: dict[int, tuple] = {}
-                    for future in as_completed(fut_map):
-                        idx = fut_map[future]
-                        try:
-                            results[idx] = future.result()
-                        except Exception as exc:
-                            block_id = str(work_units[idx]["blocks"][0].get("block_id", ""))
-                            _emit_translation_event(
-                                release_id=release_id,
-                                run_id=run_id,
-                                event_type="pass2.failed",
-                                chapter_number=chapter_number,
-                                block_id=block_id,
-                                severity="error",
-                                message=f"Pass2 worker failed for {block_id}: {exc}",
-                                payload={"pass_name": "pass2", "reason": str(exc)},
-                            )
-                            raise
-
-                for idx in sorted(results):
-                    block_results, struct_checks, unit_fidelity_checks, unit_stats = results[idx]
+                def consume_unit(
+                    _item: tuple[int, dict[str, Any]],
+                    unit_result: tuple,
+                ) -> None:
+                    block_results, struct_checks, unit_fidelity_checks, unit_stats = unit_result
                     pass2_blocks.extend(block_results)
                     pass2_structure_checks.extend(struct_checks)
                     fidelity_checks.extend(unit_fidelity_checks)
                     pass2_batching["batches_attempted"] += int(unit_stats["batches_attempted"])
                     pass2_batching["batch_fallbacks"] += int(unit_stats["batch_fallbacks"])
                     pass2_batching["batch_fallback_blocks"] += int(unit_stats["batch_fallback_blocks"])
+                    persist_pass2_progress(
+                        "stopped" if stop_token and stop_token.requested else "running"
+                    )
+
+                drain_result = run_interruptible_pool(
+                    indexed_units,
+                    max_workers=min(
+                        config_obj.translation.pass2_concurrency,
+                        (
+                            client.concurrency_limit(analyst_model)
+                            if isinstance(client, LLMClient)
+                            else config_obj.translation.pass2_concurrency
+                        ),
+                    ),
+                    stop_token=stop_token,
+                    worker=process_unit,
+                    consume=consume_unit,
+                    unit_id=lambda item: ",".join(
+                        str(block.get("block_id", ""))
+                        for block in item[1]["blocks"]
+                    ),
+                )
+                if drain_result.stopped:
+                    persist_pass2_progress("stopped")
+                    completed_block_ids = {
+                        str(block.get("block_id", ""))
+                        for block in pass2_blocks
+                    }
+                    next_block = next(
+                        (
+                            str(block["block_id"])
+                            for block in pass1_blocks
+                            if str(block["block_id"]) not in completed_block_ids
+                        ),
+                        None,
+                    )
+                    checkpoint = {
+                        "chapter_number": chapter_number,
+                        "pass": "pass2",
+                        "completed_blocks": sorted(completed_block_ids),
+                    }
+                    report = InterruptReport(
+                        stage="translate-chapter",
+                        phase="pass2",
+                        unit_kind="work_unit",
+                        completed_count=len(drain_result.completed_unit_ids),
+                        drained_count=len(drain_result.drained_unit_ids),
+                        canceled_count=drain_result.canceled_count,
+                        last_durable_unit=(
+                            drain_result.completed_unit_ids[-1]
+                            if drain_result.completed_unit_ids
+                            else None
+                        ),
+                        next_resumable_unit=next_block,
+                        checkpoint=checkpoint,
+                        llm_usage=usage_payload_delta(client, usage_before),
+                    )
+                    raise StopRequested(
+                        "Stopped after draining active pass2 work",
+                        checkpoint=checkpoint,
+                        interrupt_report=report,
+                    )
 
             pass2_by_id = {str(block["block_id"]): block for block in pass2_blocks}
             pass2_blocks = [pass2_by_id[str(block["block_id"])] for block in pass1_blocks]
@@ -1925,33 +2066,8 @@ def translate_chapter_pass2(
             pass2_failed = any(check["status"] == "failed" for check in pass2_structure_checks) or any(
                 check["status"] == "failed" for check in fidelity_checks
             )
-            pass2_payload = {
-                "release_id": release_id,
-                "run_id": run_id,
-                "chapter_number": chapter_number,
-                "pass_name": "pass2",
-                "model_name": analyst_model,
-                "prompt_version": pass2_prompt.version,
-                "batch_prompt_version": pass2_batch_prompt.version,
-                "source_hash": source_hash,
-                "blocks": pass2_blocks,
-                "structure_validation": pass2_structure_checks,
-                "fidelity_validation": fidelity_checks,
-                "batching": pass2_batching,
-                "status": "failed" if pass2_failed else "success",
-            }
-            _write_json(pass2_artifact_path, pass2_payload)
-            save_checkpoint(
-                conn,
-                release_id=release_id,
-                run_id=run_id,
-                chapter_number=chapter_number,
-                pass_name="pass2",
-                source_hash=source_hash,
-                prompt_version=pass2_prompt.version,
-                packet_version_hash=packet_version_hash,
-                status=str(pass2_payload["status"]),
-                artifact_path=str(pass2_artifact_path),
+            pass2_payload = persist_pass2_progress(
+                "failed" if pass2_failed else "success"
             )
 
         pass1_structure_checks_from_artifact = list(pass1_payload.get("structure_validation", []))
@@ -2037,6 +2153,8 @@ def translate_chapter_pass2(
             "blocks": pass2_blocks,
             **usage_payload_delta(client, usage_before),
         }
+    except StopRequested:
+        raise
     except Exception as exc:
         _emit_translation_event(
             release_id=release_id,
