@@ -214,6 +214,7 @@ def translate_pass2(
     local_relationships: str = "",
     continuity_notes: str = "",
     retrieval_evidence: str = "",
+    validation_feedback: list[str] | None = None,
     chapter_number: int | None = None,
     block_id: str | None = None,
     segment_id: str | None = None,
@@ -236,6 +237,14 @@ def translate_pass2(
             "RETRIEVAL_EVIDENCE": retrieval_evidence,
         },
     )
+    if validation_feedback:
+        feedback = "\n".join(f"- {error}" for error in validation_feedback)
+        prompt = (
+            f"{prompt}\n\n## VALIDATION_FEEDBACK\n"
+            "The previous candidate failed deterministic validation. "
+            "Correct every issue below in this attempt:\n"
+            f"{feedback}"
+        )
     ensure_prompt_within_budget(
         prompt,
         config=config or load_config(),

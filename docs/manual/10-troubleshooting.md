@@ -114,6 +114,16 @@ chapter.
 3. Lower `pass2_batch_max_blocks` if batch prompts are near the context limit
 4. Keep Qwen throttle-group `system_prompt` in `[llm.throttle_groups.qwen]`; do not copy it into Pass 2 prompts
 
+### Pass 2 fails because Chinese remains in one block
+
+Inspect the failed block and exact span in `runs/<run>/translation/chapter-<n>/pass2.json`, then retry the chapter without `--force`:
+
+```powershell
+uv run rsem run retry-failed -r <release> -R <run> -t translate-range -s <chapter> -e <chapter>
+```
+
+The retry revalidates cached outputs, preserves passing siblings, and regenerates only invalid or missing blocks. Exact validation errors are included in the affected block's repair prompt. Pass 3 remains blocked if any Chinese span survives the configured retries.
+
 ### Qwen overloads when multiple Qwen model IDs are configured
 
 **Cause:** Different configured Qwen names can still route to the same local backend. Without a throttle group, exact model names use independent semaphores and may issue concurrent requests to that shared backend.

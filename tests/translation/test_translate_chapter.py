@@ -22,10 +22,76 @@ from resemantica.settings import (
 from resemantica.tracking.repo import ensure_tracking_db, load_events
 from resemantica.translation.pass2 import translate_pass2
 from resemantica.translation.pipeline import (
+    _reusable_pass2_blocks,
     _split_for_retry,
     translate_chapter_pass1,
     translate_chapter_pass2,
 )
+
+
+def test_pass2_cache_revalidation_supports_passthrough_and_resegmented_blocks() -> None:
+    expected = [
+        {
+            "block_id": "ch001_blk001",
+            "parent_block_id": "ch001_blk001",
+            "source_text_zh": "—",
+            "passthrough": True,
+        },
+        {
+            "block_id": "ch001_blk002",
+            "parent_block_id": "ch001_blk002",
+            "source_text_zh": "甲。乙。",
+            "was_resegmented": True,
+            "segments": [
+                {"segment_id": "ch001_blk002_seg01", "source_text_zh": "甲。"},
+                {"segment_id": "ch001_blk002_seg02", "source_text_zh": "乙。"},
+            ],
+        },
+    ]
+    cached = [
+        {
+            "block_id": "ch001_blk001",
+            "parent_block_id": "ch001_blk001",
+            "source_text_zh": "—",
+            "output_text_en": "—",
+        },
+        {
+            "block_id": "ch001_blk002",
+            "parent_block_id": "ch001_blk002",
+            "source_text_zh": "甲。乙。",
+            "output_text_en": "First. Second.",
+            "segments": [
+                {"segment_id": "ch001_blk002_seg01", "output_text_en": "First. "},
+                {"segment_id": "ch001_blk002_seg02", "output_text_en": "Second."},
+            ],
+        },
+    ]
+
+    reusable, structure_checks, fidelity_checks, feedback = _reusable_pass2_blocks(
+        expected,
+        cached,
+        placeholders_by_block={},
+    )
+
+    assert set(reusable) == {"ch001_blk001", "ch001_blk002"}
+    assert len(structure_checks) == 3
+    assert len(fidelity_checks) == 2
+    assert feedback == {}
+
+
+def test_pass2_cache_revalidation_rejects_non_string_output() -> None:
+    expected = [_normal_pass1_block(1)]
+    cached = [
+        {
+            "block_id": "ch001_blk001",
+            "parent_block_id": "ch001_blk001",
+            "source_text_zh": "源文本1。",
+            "output_text_en": None,
+        }
+    ]
+
+    with pytest.raises(RuntimeError, match="malformed block mappings"):
+        _reusable_pass2_blocks(expected, cached, placeholders_by_block={})
 
 
 def _write_fixture_epub(epub_path: Path, chapter_xhtml: str) -> None:
@@ -910,6 +976,40 @@ def test_pass2_fails_when_mixed_output_survives_validation_retries(
     assert artifact["fidelity_validation"][0]["errors"] == [
         "Translated output contains untranslated Chinese spans: 桐叶."
     ]
+    chapter_report = json.loads(
+        (
+            paths.release_root
+            / "runs"
+            / "run-001"
+            / "validation"
+            / "chapter-1"
+            / "chapter.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert chapter_report["status"] == "failed"
+    assert "VALIDATION_FEEDBACK" not in client.pass2_prompts[0]
+    assert "## VALIDATION_FEEDBACK" in client.pass2_prompts[1]
+    assert (
+        "Translated output contains untranslated Chinese spans: 桐叶."
+        in client.pass2_prompts[1]
+    )
+
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id="run-001", release_id=release_id, limit=100)
+    finally:
+        conn.close()
+    assert any(
+        event.event_type == "translate-chapter.pass2.failed"
+        and event.block_id == "ch001_blk001"
+        for event in events
+    )
+    assert not any(
+        event.event_type == "translate-chapter.paragraph_completed"
+        and event.block_id == "ch001_blk001"
+        and event.payload.get("pass_name") == "pass2"
+        for event in events
+    )
 
 
 def test_failed_resegmentation_reports_child_errors(tmp_path: Path, monkeypatch) -> None:
@@ -1109,6 +1209,93 @@ def test_pass2_repairs_only_missing_cached_blocks(tmp_path: Path, monkeypatch) -
     assert repair_client.single_calls == 1
     assert len(repaired["blocks"]) == 2
     assert repaired["blocks"][0] == preserved
+
+
+def test_pass2_retry_revalidates_cached_blocks_and_repairs_only_failed_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m82-pass2-failed-cache"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>一掬水。</p><p>第二段。</p></body></html>
+''',
+        release_id,
+    )
+    config = _retry_test_config(retries=1)
+    mixed_draft = "He measured it using the 掬 method."
+    _write_pass1_artifact(
+        config=config,
+        release_id=release_id,
+        run_id=run_id,
+        blocks=[
+            _normal_pass1_block(1, draft_text=mixed_draft),
+            _normal_pass1_block(2),
+        ],
+    )
+
+    failing_client = MixedLanguageHandoffLLM(
+        pass2_responses=[
+            json.dumps({"fidelity_errors_found": False, "corrected_text": ""}),
+            json.dumps({"fidelity_errors_found": False, "corrected_text": ""}),
+            json.dumps({"fidelity_errors_found": False, "corrected_text": ""}),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="Pass 2 failed validation"):
+        translate_chapter_pass2(
+            release_id=release_id,
+            chapter_number=1,
+            run_id=run_id,
+            config=config,
+            llm_client=failing_client,  # type: ignore[arg-type]
+        )
+
+    paths = derive_paths(config, release_id=release_id)
+    artifact_path = (
+        paths.release_root / "runs" / run_id / "translation" / "chapter-1" / "pass2.json"
+    )
+    failed_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    preserved = next(
+        block for block in failed_artifact["blocks"] if block["block_id"] == "ch001_blk002"
+    )
+
+    repair_client = MixedLanguageHandoffLLM(
+        pass2_responses=[
+            json.dumps(
+                {
+                    "fidelity_errors_found": True,
+                    "corrected_text": "He measured it using the cupped-hand method.",
+                }
+            )
+        ]
+    )
+    repaired = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=repair_client,  # type: ignore[arg-type]
+    )
+
+    assert repaired["status"] == "success"
+    assert repair_client.pass2_calls == 1
+    assert "## VALIDATION_FEEDBACK" in repair_client.pass2_prompts[0]
+    assert "untranslated Chinese spans: 掬" in repair_client.pass2_prompts[0]
+    repaired_by_id = {block["block_id"]: block for block in repaired["blocks"]}
+    assert repaired_by_id["ch001_blk002"] == preserved
+    assert repaired_by_id["ch001_blk001"]["restored_text_en"] == (
+        "He measured it using the cupped-hand method."
+    )
+    repaired_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert len(repaired_artifact["structure_validation"]) == 2
+    assert len(repaired_artifact["fidelity_validation"]) == 2
+    assert all(
+        check["status"] == "success"
+        for check in repaired_artifact["fidelity_validation"]
+    )
 
 
 def test_pass2_rejects_extra_cached_block_mapping(tmp_path: Path, monkeypatch) -> None:

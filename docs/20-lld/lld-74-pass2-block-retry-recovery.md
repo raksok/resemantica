@@ -19,9 +19,13 @@ For resegmented pass1 blocks, the whole pass2 block task retries as a unit. Segm
 
 Each retry emits `pass2.retry` with chapter number, block or segment id, attempt, max attempts, remaining retries, and reason. Exhausted failures keep the existing `pass2.failed` and chapter/stage failure behavior.
 
+Task 82 adds the exact previous deterministic errors to each later single-block prompt. Exhausted fidelity candidates remain in the failed artifact for diagnosis, emit `pass2.failed`, and no longer emit `paragraph_completed`.
+
 ## Retry-Failed Planning
 
 `run retry-failed --stage translate-range` treats translation checkpoint `status = 'success'` as complete. Missing, failed, or incomplete pass3 state remains retryable through normal `translate-range` resume behavior.
+
+Failed Pass 2 checkpoints are resumed with `force=false`. Before reuse, every cached candidate is revalidated; invalid candidates are regenerated while passing siblings retain their cached output.
 
 ## Tests
 

@@ -605,9 +605,11 @@ class TestRetryFailed:
         )
         monkeypatch.setattr("resemantica.orchestration.retry_failed.plan_retry_failed", lambda **kwargs: plan)
         seen_checkpoints: list[dict[str, object]] = []
+        seen_force: list[bool] = []
 
         def fake_execute(self, stage_name, **kwargs):
             seen_checkpoints.append(dict(kwargs["checkpoint"]))
+            seen_force.append(bool(kwargs["force"]))
             return StageResult(True, stage_name, "repaired", checkpoint={"completed_chapters": [3]})
 
         monkeypatch.setattr(OrchestrationRunner, "_execute_stage", fake_execute)
@@ -620,6 +622,7 @@ class TestRetryFailed:
 
         assert result.success is True
         assert seen_checkpoints == [{}]
+        assert seen_force == [False]
         conn = ensure_tracking_db(release_id)
         try:
             restored = load_run_state(conn, run_id)

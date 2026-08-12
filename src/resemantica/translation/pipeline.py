@@ -74,7 +74,14 @@ def _is_reusable_pass1_block(block: dict[str, Any], *, source_text: str) -> bool
 def _reusable_pass2_blocks(
     expected_blocks: list[dict[str, Any]],
     cached_blocks: object,
-) -> dict[str, dict[str, Any]]:
+    *,
+    placeholders_by_block: dict[str, list[PlaceholderEntry]],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, list[str]],
+]:
     expected_by_id = {str(block["block_id"]): block for block in expected_blocks}
     if len(expected_by_id) != len(expected_blocks):
         raise RuntimeError("Pass 1 contains duplicate block mappings.")
@@ -82,6 +89,9 @@ def _reusable_pass2_blocks(
         raise RuntimeError("Pass 2 cache contains malformed block mappings.")
 
     reusable: dict[str, dict[str, Any]] = {}
+    structure_checks: list[dict[str, Any]] = []
+    fidelity_checks: list[dict[str, Any]] = []
+    validation_feedback: dict[str, list[str]] = {}
     extra: list[str] = []
     malformed: list[str] = []
     seen: set[str] = set()
@@ -104,15 +114,156 @@ def _reusable_pass2_blocks(
         ):
             malformed.append(block_id)
             continue
-        output = block.get("restored_text_en") or block.get("output_text_en")
-        if isinstance(output, str) and output.strip():
-            reusable[block_id] = block
+        if bool(expected.get("passthrough")):
+            raw_output = block.get("output_text_en")
+            if not isinstance(raw_output, str):
+                malformed.append(block_id)
+                continue
+            output = raw_output
+            if output != str(expected.get("source_text_zh", "")):
+                validation_feedback[block_id] = [
+                    "Cached passthrough output does not match the source text."
+                ]
+                continue
+            normalized = dict(block)
+            normalized["restored_text_en"] = output
+            normalized["restoration_warnings"] = []
+            reusable[block_id] = normalized
+            structure_checks.append(
+                {
+                    "stage": "pass2",
+                    "block_id": block_id,
+                    "status": "success",
+                    "errors": [],
+                    "warnings": [],
+                }
+            )
+            fidelity_checks.append(
+                {
+                    "block_id": block_id,
+                    "status": "success",
+                    "errors": [],
+                    "warnings": [],
+                }
+            )
+            continue
+
+        block_structure_checks: list[dict[str, Any]] = []
+        if bool(expected.get("was_resegmented")):
+            expected_segments = expected.get("segments")
+            cached_segments = block.get("segments")
+            if not isinstance(expected_segments, list) or not isinstance(cached_segments, list):
+                malformed.append(block_id)
+                continue
+            expected_segment_ids = [
+                str(segment.get("segment_id", ""))
+                for segment in expected_segments
+                if isinstance(segment, dict)
+            ]
+            cached_segment_ids = [
+                str(segment.get("segment_id", ""))
+                for segment in cached_segments
+                if isinstance(segment, dict)
+            ]
+            if (
+                len(expected_segment_ids) != len(expected_segments)
+                or len(cached_segment_ids) != len(cached_segments)
+                or cached_segment_ids != expected_segment_ids
+            ):
+                malformed.append(block_id)
+                continue
+            segment_outputs: list[str] = []
+            segment_invalid = False
+            segment_malformed = False
+            for expected_segment, cached_segment in zip(
+                expected_segments,
+                cached_segments,
+                strict=True,
+            ):
+                segment_source = str(expected_segment["source_text_zh"])
+                raw_segment_output = cached_segment.get("output_text_en")
+                if not isinstance(raw_segment_output, str):
+                    segment_malformed = True
+                    break
+                segment_output = raw_segment_output
+                structure = validate_structure(segment_source, segment_output)
+                block_structure_checks.append(
+                    {
+                        "stage": "pass2_resegment",
+                        "block_id": str(expected_segment["segment_id"]),
+                        "status": structure.status,
+                        "errors": structure.errors,
+                        "warnings": structure.warnings,
+                    }
+                )
+                segment_outputs.append(segment_output)
+                segment_invalid = segment_invalid or not structure.is_valid
+            if segment_malformed:
+                malformed.append(block_id)
+                continue
+            output_text = "".join(segment_outputs)
+            if str(block.get("output_text_en", "")) != output_text:
+                malformed.append(block_id)
+                continue
+            if segment_invalid:
+                validation_feedback[block_id] = [
+                    error
+                    for check in block_structure_checks
+                    for error in check["errors"]
+                ]
+                continue
+        else:
+            raw_output = block.get("output_text_en")
+            if not isinstance(raw_output, str):
+                malformed.append(block_id)
+                continue
+            output_text = raw_output
+            structure = validate_structure(str(expected["source_text_zh"]), output_text)
+            block_structure_checks.append(
+                {
+                    "stage": "pass2",
+                    "block_id": block_id,
+                    "status": structure.status,
+                    "errors": structure.errors,
+                    "warnings": structure.warnings,
+                }
+            )
+            if not structure.is_valid:
+                validation_feedback[block_id] = list(structure.errors)
+                continue
+
+        restored_text, restore_warnings = restore_from_placeholders(
+            output_text,
+            placeholders_by_block.get(str(expected["parent_block_id"]), []),
+        )
+        if any(_is_blocking_restore_warning(warning) for warning in restore_warnings):
+            validation_feedback[block_id] = [
+                warning for warning in restore_warnings if _is_blocking_restore_warning(warning)
+            ]
+            continue
+        fidelity = validate_basic_fidelity(str(expected["source_text_zh"]), restored_text)
+        if not fidelity.is_valid:
+            validation_feedback[block_id] = list(fidelity.errors)
+            continue
+        normalized = dict(block)
+        normalized["restored_text_en"] = restored_text
+        normalized["restoration_warnings"] = restore_warnings
+        reusable[block_id] = normalized
+        structure_checks.extend(block_structure_checks)
+        fidelity_checks.append(
+            {
+                "block_id": block_id,
+                "status": fidelity.status,
+                "errors": fidelity.errors,
+                "warnings": fidelity.warnings,
+            }
+        )
 
     if extra:
         raise RuntimeError(f"Pass 2 cache contains extra block mappings: {sorted(extra)}")
     if malformed:
         raise RuntimeError(f"Pass 2 cache contains malformed block mappings: {sorted(malformed)}")
-    return reusable
+    return reusable, structure_checks, fidelity_checks, validation_feedback
 
 
 def _split_for_retry(text: str, max_chars: int = 1500, *, force: bool = False) -> list[str]:
@@ -1063,6 +1214,22 @@ def _finalize_pass2_normal_block(
                 "warnings": fidelity.warnings,
             },
         )
+    if not fidelity.is_valid:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="pass2.failed",
+            chapter_number=chapter_number,
+            block_id=block_id,
+            severity="error",
+            message=f"Pass2 fidelity validation failed for block {block_id}",
+            payload={
+                "pass_name": "pass2",
+                "reason": "fidelity_validation_failed",
+                "errors": fidelity.errors,
+                "warnings": fidelity.warnings,
+            },
+        )
 
     block_result = {
         "block_id": block_id,
@@ -1073,15 +1240,16 @@ def _finalize_pass2_normal_block(
         "restored_text_en": restored_text,
         "restoration_warnings": restore_warnings,
     }
-    _emit_translation_event(
-        release_id=release_id,
-        run_id=run_id,
-        event_type="paragraph_completed",
-        chapter_number=chapter_number,
-        block_id=block_id,
-        message=f"Pass2 completed for {block_id}",
-        payload={"pass_name": "pass2"},
-    )
+    if fidelity.is_valid:
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type="paragraph_completed",
+            chapter_number=chapter_number,
+            block_id=block_id,
+            message=f"Pass2 completed for {block_id}",
+            payload={"pass_name": "pass2"},
+        )
     return block_result, [structure_check], fidelity_check
 
 
@@ -1098,6 +1266,7 @@ def _process_pass2_block_once(
     chapter_number: int,
     config: AppConfig,
     emit_failure_events: bool = True,
+    validation_feedback: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     source_text = str(block["source_text_zh"])
     parent_block_id = str(block["parent_block_id"])
@@ -1178,6 +1347,7 @@ def _process_pass2_block_once(
                 block_id=parent_block_id,
                 segment_id=segment_id,
                 config=config,
+                validation_feedback=validation_feedback,
                 fallback_callback=lambda payload: _emit_pass2_fallback_event(
                     release_id=release_id,
                     run_id=run_id,
@@ -1274,6 +1444,22 @@ def _process_pass2_block_once(
                     "warnings": fidelity.warnings,
                 },
             )
+        if not fidelity.is_valid:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="pass2.failed",
+                chapter_number=chapter_number,
+                block_id=parent_block_id,
+                severity="error",
+                message=f"Pass2 fidelity validation failed for block {parent_block_id}",
+                payload={
+                    "pass_name": "pass2",
+                    "reason": "fidelity_validation_failed",
+                    "errors": fidelity.errors,
+                    "warnings": fidelity.warnings,
+                },
+            )
         block_result = {
             "block_id": parent_block_id,
             "parent_block_id": parent_block_id,
@@ -1283,15 +1469,16 @@ def _process_pass2_block_once(
             "segments": segment_outputs,
             "restoration_warnings": restore_warnings,
         }
-        _emit_translation_event(
-            release_id=release_id,
-            run_id=run_id,
-            event_type="paragraph_completed",
-            chapter_number=chapter_number,
-            block_id=parent_block_id,
-            message=f"Pass2 completed for {parent_block_id}",
-            payload={"pass_name": "pass2"},
-        )
+        if fidelity.is_valid:
+            _emit_translation_event(
+                release_id=release_id,
+                run_id=run_id,
+                event_type="paragraph_completed",
+                chapter_number=chapter_number,
+                block_id=parent_block_id,
+                message=f"Pass2 completed for {parent_block_id}",
+                payload={"pass_name": "pass2"},
+            )
         return block_result, structure_checks, fidelity_check
 
     block_id = str(block["block_id"])
@@ -1313,6 +1500,7 @@ def _process_pass2_block_once(
         chapter_number=chapter_number,
         block_id=block_id,
         config=config,
+        validation_feedback=validation_feedback,
         fallback_callback=lambda payload: _emit_pass2_fallback_event(
             release_id=release_id,
             run_id=run_id,
@@ -1343,9 +1531,11 @@ def _process_pass2_block(
     run_id: str,
     chapter_number: int,
     config: AppConfig,
+    validation_feedback: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     max_attempts = config.translation.pass2_validation_retries + 1
     last_error: Pass2ValidationRetryableError | None = None
+    current_feedback = list(validation_feedback or [])
     for attempt in range(1, max_attempts + 1):
         try:
             return _process_pass2_block_once(
@@ -1360,9 +1550,12 @@ def _process_pass2_block(
                 chapter_number=chapter_number,
                 config=config,
                 emit_failure_events=attempt == max_attempts,
+                validation_feedback=current_feedback,
             )
         except Pass2ValidationRetryableError as exc:
             last_error = exc
+            errors = exc.payload.get("errors", [])
+            current_feedback = [str(error) for error in errors] if isinstance(errors, list) else []
             if attempt >= max_attempts:
                 raise
             _emit_translation_event(
@@ -1555,6 +1748,7 @@ def _process_pass2_batch_work_unit(
     run_id: str,
     chapter_number: int,
     config: AppConfig,
+    initial_validation_feedback_by_id: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     block_ids = [str(block["block_id"]) for block in blocks]
     prompt = render_pass2_batch_prompt(
@@ -1602,6 +1796,7 @@ def _process_pass2_batch_work_unit(
     block_results_by_id: dict[str, dict[str, Any]] = {}
     structure_checks_by_id: dict[str, list[dict[str, Any]]] = {}
     fidelity_checks_by_id: dict[str, dict[str, Any]] = {}
+    validation_feedback_by_id = dict(initial_validation_feedback_by_id or {})
     affected_set = set(affected_block_ids)
     for block in blocks:
         block_id = str(block["block_id"])
@@ -1626,6 +1821,9 @@ def _process_pass2_batch_work_unit(
             affected_block_ids.append(block_id)
             affected_set.add(block_id)
             fallback_reason = fallback_reason or exc.reason
+            errors = exc.payload.get("errors", [])
+            if isinstance(errors, list):
+                validation_feedback_by_id[block_id] = [str(error) for error in errors]
             continue
         block_results_by_id[block_id] = block_result
         structure_checks_by_id[block_id] = structure_checks
@@ -1658,6 +1856,7 @@ def _process_pass2_batch_work_unit(
                 run_id=run_id,
                 chapter_number=chapter_number,
                 config=config,
+                validation_feedback=validation_feedback_by_id.get(block_id),
             )
             block_results_by_id[block_id] = block_result
             structure_checks_by_id[block_id] = structure_checks
@@ -1713,6 +1912,7 @@ def _process_pass2_work_unit(
     run_id: str,
     chapter_number: int,
     config: AppConfig,
+    initial_validation_feedback_by_id: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     blocks = list(unit["blocks"])
     if unit["kind"] == "batch":
@@ -1730,6 +1930,7 @@ def _process_pass2_work_unit(
             run_id=run_id,
             chapter_number=chapter_number,
             config=config,
+            initial_validation_feedback_by_id=initial_validation_feedback_by_id,
         )
 
     block_result, structure_checks, fidelity_check = _process_pass2_block(
@@ -1743,6 +1944,9 @@ def _process_pass2_work_unit(
         run_id=run_id,
         chapter_number=chapter_number,
         config=config,
+        validation_feedback=(initial_validation_feedback_by_id or {}).get(
+            str(blocks[0]["block_id"])
+        ),
     )
     return [block_result], structure_checks, [fidelity_check], {
         "batches_attempted": 0,
@@ -1848,15 +2052,24 @@ def translate_chapter_pass2(
 
         cached_payload: dict[str, Any] | None = None
         reusable_cached_blocks: dict[str, dict[str, Any]] = {}
+        reusable_structure_checks: list[dict[str, Any]] = []
+        reusable_fidelity_checks: list[dict[str, Any]] = []
+        cached_validation_feedback: dict[str, list[str]] = {}
         if (
             not force
             and pass2_checkpoint is not None
             and Path(pass2_checkpoint.artifact_path).exists()
         ):
             cached_payload = _read_json(Path(pass2_checkpoint.artifact_path))
-            reusable_cached_blocks = _reusable_pass2_blocks(
+            (
+                reusable_cached_blocks,
+                reusable_structure_checks,
+                reusable_fidelity_checks,
+                cached_validation_feedback,
+            ) = _reusable_pass2_blocks(
                 pass1_blocks,
                 cached_payload.get("blocks"),
+                placeholders_by_block=placeholders_by_block,
             )
 
         if (
@@ -1866,10 +2079,19 @@ def translate_chapter_pass2(
             and cached_payload is not None
             and len(reusable_cached_blocks) == len(pass1_blocks)
         ):
-            pass2_blocks = list(cached_payload.get("blocks", []))
-            pass2_structure_checks = list(cached_payload.get("structure_validation", []))
-            fidelity_checks = list(cached_payload.get("fidelity_validation", []))
-            pass2_payload = cached_payload
+            pass2_blocks = [
+                reusable_cached_blocks[str(block["block_id"])] for block in pass1_blocks
+            ]
+            pass2_structure_checks = list(reusable_structure_checks)
+            fidelity_checks = list(reusable_fidelity_checks)
+            pass2_payload = {
+                **cached_payload,
+                "blocks": pass2_blocks,
+                "structure_validation": pass2_structure_checks,
+                "fidelity_validation": fidelity_checks,
+                "status": "success",
+            }
+            _write_json(Path(pass2_checkpoint.artifact_path), pass2_payload)
             logger.info("Chapter {} pass2: using cached artifact", chapter_number)
             _emit_translation_event(
                 release_id=release_id,
@@ -1889,8 +2111,8 @@ def translate_chapter_pass2(
                 for block in pass1_blocks
                 if str(block["block_id"]) in reusable_cached_blocks
             ]
-            pass2_structure_checks = []
-            fidelity_checks = []
+            pass2_structure_checks = list(reusable_structure_checks)
+            fidelity_checks = list(reusable_fidelity_checks)
             pass2_batching: dict[str, Any] = {
                 "enabled": config_obj.translation.pass2_batch_max_blocks > 1,
                 "max_blocks": config_obj.translation.pass2_batch_max_blocks,
@@ -1971,6 +2193,7 @@ def translate_chapter_pass2(
                             run_id=run_id,
                             chapter_number=chapter_number,
                             config=config_obj,
+                            initial_validation_feedback_by_id=cached_validation_feedback,
                         )
                     except Exception as exc:
                         block_id = str(unit["blocks"][0].get("block_id", ""))
@@ -2101,6 +2324,7 @@ def translate_chapter_pass2(
         chapter_status = "failed" if (
             pass1_payload.get("status") == "failed"
             or any(check["status"] == "failed" for check in pass2_structure_checks)
+            or any(check["status"] == "failed" for check in fidelity_checks)
         ) else "success"
         pass3_enabled = config_obj.translation.pass3_default
         _write_json(

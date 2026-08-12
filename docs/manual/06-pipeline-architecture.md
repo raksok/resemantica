@@ -165,7 +165,7 @@ For each chapter, the translation sub-stage runs:
 
 Pass 3 is only applied to paragraphs flagged as high-risk by the risk classifier (score > `risk_threshold_high`), or when `pass3_default` is enabled.
 
-Pass 1 bypasses the model for punctuation/symbol-only and placeholder-only blocks, preserving their source exactly. Empty or Chinese-bearing model output receives two English-only correction attempts. Pass 2 starts only when all extracted parent blocks have successful Pass 1 output, and cached Pass 1/2 artifacts are repaired at block granularity rather than accepted solely from checkpoint status.
+Pass 1 bypasses the model for punctuation/symbol-only and placeholder-only blocks, preserving their source exactly. Empty or Chinese-bearing model output receives two English-only correction attempts. Pass 2 starts only when all extracted parent blocks have successful Pass 1 output. Cached Pass 2 candidates are rerun through structural, restoration, and fidelity validation; only passing blocks are reused, while invalid or missing blocks receive targeted repair with the previous validation errors.
 
 ## Event Bus
 

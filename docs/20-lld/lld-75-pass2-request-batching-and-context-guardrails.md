@@ -44,7 +44,7 @@ If one block cannot fit in the batch prompt, it falls back to the existing singl
 
 ## Fallback
 
-Batch recovery reruns only affected blocks through `_process_pass2_block()` and its existing `pass2_validation_retries` loop.
+Batch recovery reruns only affected blocks through `_process_pass2_block()` and its existing `pass2_validation_retries` loop. The first single-block fallback receives the exact errors from batch validation, and later attempts receive the immediately preceding candidate's errors.
 
 Fallback reasons include:
 
