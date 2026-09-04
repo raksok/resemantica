@@ -100,3 +100,6 @@ Always follow the milestone sequence below.
 | M80 | task-80 | M79 | Pass1 Mixed-Language Pass2 Handoff |
 | M81 | task-81 | M80 | Graceful Task-Level Drain And Exit |
 | M82 | task-82 | M81 | Pass2 Safe Cache Recovery And Targeted Retries |
+| M83 | task-83 | M82 | Crash-Safe JSON Checkpoints And Cache Recovery |
+| M84 | task-84 | M83 | Range-Safe Translation Recovery And Rebuild Preflight |
+| M85 | task-85 | M84 | Rebuild Direct-Input Gate |

@@ -114,6 +114,37 @@ chapter.
 3. Lower `pass2_batch_max_blocks` if batch prompts are near the context limit
 4. Keep Qwen throttle-group `system_prompt` in `[llm.throttle_groups.qwen]`; do not copy it into Pass 2 prompts
 
+### Translation retry fails with `JSONDecodeError` after an outage
+
+**Cause:** A power interruption may have stopped an older in-place checkpoint write after the destination was truncated or allocated but before valid JSON reached storage. The traceback identifies the affected `pass1.json`, `pass2.json`, or `pass3.json`; a NUL-filled file commonly reports `Expecting value: line 1 column 1 (char 0)`.
+
+**Fix:** Update to the crash-safe checkpoint code and rerun the affected chapter without `--force`:
+
+```powershell
+uv run rsem run retry-failed -r <release> -R <run> -t translate-range -s <chapter> -e <chapter>
+```
+
+The translation pass logs the unreadable cache, emits a `translate-chapter.passN.cache_invalid` warning event with the artifact path and parse reason, regenerates that pass, and atomically replaces the damaged artifact. Earlier valid passes remain reusable. If the traceback instead says a required upstream artifact is unreadable, retry that upstream pass first; downstream passes never continue from corrupt input.
+
+### Rebuild reports a chapter missing even though its extracted JSON exists
+
+**Cause:** Extracted chapter JSON proves the source chapter exists, not that every extracted parent block has a final Pass 2/3 translation. An older narrowed retry could reuse the same numeric chunk index with different chapter bounds, skip part of the requested range, and leave a nominally successful checkpoint beside incomplete artifacts.
+
+**Fix:** Preview the artifact-aware recovery set, then run the same command without `-n` after reviewing the count:
+
+```powershell
+uv run rsem run retry-failed -r <release> -R <run> -c <config> -t translate-range -n
+uv run rsem run retry-failed -r <release> -R <run> -c <config> -t translate-range
+```
+
+Repeat the dry-run; it should report no remaining translation retries. Then run `uv run rsem rebuild -r <release> -R <run> -c <config>`. Current chunk recovery validates stored bounds and final artifacts, while rebuild preflight stops before changing existing outputs if any required block is still missing.
+
+### Rebuild reports unresolved votes or missing summaries after translation completed
+
+**Cause:** Older rebuild gate logic repeated cumulative preprocessing checks even though reconstruction reads only extracted chapters, placeholder maps, and final Pass 2/3 artifacts. This could also generate a large glossary review file before returning the unrelated failure.
+
+**Fix:** Update to the direct-input rebuild gate and rerun the same `rsem rebuild` command. No glossary review application, summary regeneration, `--force`, or run-state cleanup is required. Earlier stages still enforce those prerequisites when they are run again; rebuild continues only when its own final block audit passes.
+
 ### Pass 2 fails because Chinese remains in one block
 
 Inspect the failed block and exact span in `runs/<run>/translation/chapter-<n>/pass2.json`, then retry the chapter without `--force`:

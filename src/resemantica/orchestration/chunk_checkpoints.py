@@ -25,6 +25,24 @@ class ChunkCheckpoint:
         return asdict(self)
 
 
+def checkpoint_covers(
+    checkpoint: ChunkCheckpoint,
+    *,
+    chapter_start: int,
+    chapter_end: int,
+) -> bool:
+    return checkpoint.chapter_start <= chapter_start and checkpoint.chapter_end >= chapter_end
+
+
+def checkpoint_can_be_replaced_by(
+    checkpoint: ChunkCheckpoint,
+    *,
+    chapter_start: int,
+    chapter_end: int,
+) -> bool:
+    return chapter_start <= checkpoint.chapter_start and chapter_end >= checkpoint.chapter_end
+
+
 def ensure_chunk_checkpoint_schema(conn: sqlite3.Connection) -> None:
     ensure_schema(conn, "chunk_checkpoints")
 

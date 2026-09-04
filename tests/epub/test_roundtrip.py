@@ -5,6 +5,8 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+import pytest
+
 from resemantica.db.sqlite import ensure_schema, open_connection
 from resemantica.db.summary_repo import save_summary_draft
 from resemantica.epub.extractor import extract_epub
@@ -302,6 +304,42 @@ def test_rebuild_translated_epub_skips_non_story_chapter_without_translation(
     assert not chapter_artifact.exists()
     rebuilt_chapter = _read_zip_file(result.output_path, "OEBPS/chapter1.xhtml").decode("utf-8")
     assert "版权页。" in rebuilt_chapter
+
+
+def test_rebuild_preflight_preserves_existing_outputs_when_translation_is_incomplete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    input_epub = tmp_path / "incomplete.epub"
+    _write_fixture_epub(
+        input_epub,
+        chapters=[
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文。</p></body></html>""",
+        ],
+    )
+    release_id = "rebuild-preflight-incomplete"
+    run_id = "production"
+    extract_epub(input_path=input_epub, release_id=release_id)
+    paths = derive_paths(load_config(), release_id=release_id)
+    reconstruction_root = paths.release_root / "runs" / run_id / "reconstruction"
+    work_dir = reconstruction_root / "work"
+    work_dir.mkdir(parents=True)
+    marker_path = work_dir / "existing.txt"
+    marker_path.write_text("preserve me", encoding="utf-8")
+    output_path = reconstruction_root / "reconstructed.epub"
+    output_path.write_bytes(b"previous epub")
+
+    with pytest.raises(RuntimeError, match="EPUB rebuild preflight failed for 1 chapter"):
+        rebuild_translated_epub(
+            release_id=release_id,
+            run_id=run_id,
+            config=load_config(),
+        )
+
+    assert output_path.read_bytes() == b"previous epub"
+    assert marker_path.read_text(encoding="utf-8") == "preserve me"
 
 
 def test_rebuild_translated_epub_updates_ncx_from_translated_heading(

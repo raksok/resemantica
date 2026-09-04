@@ -561,6 +561,35 @@ class TestCliDispatch:
         assert result == 0
         assert captured["verbosity"] == 3
 
+    def test_rebuild_main_enforces_stage_gates(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        captured = {}
+
+        class FakeResult:
+            success = True
+            stopped = False
+            stage_name = "epub-rebuild"
+            message = "ok"
+            metadata = {}
+
+        def fake_run_stage(self, stage_name, **kwargs):
+            captured["stage_name"] = stage_name
+            captured["kwargs"] = kwargs
+            return FakeResult()
+
+        monkeypatch.setattr(cli_mod, "_with_cli_progress", lambda fn, **kwargs: fn())
+        monkeypatch.setattr(cli_mod, "configure_logging", lambda **kwargs: None)
+        monkeypatch.setattr(
+            "resemantica.orchestration.runner.OrchestrationRunner.run_stage",
+            fake_run_stage,
+        )
+
+        result = cli_mod.main(["rebuild", "--release", "r1", "--run", "run-1"])
+
+        assert result == 0
+        assert captured["stage_name"] == "epub-rebuild"
+        assert captured["kwargs"]["enforce_gates"] is True
+
     def test_stage_result_output_keeps_key_value_lines(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
 

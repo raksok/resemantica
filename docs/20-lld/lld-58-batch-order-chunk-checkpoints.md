@@ -52,7 +52,7 @@ For each active translation chunk:
 3. Run pass3 for chapters with completed pass2 in the chunk.
 4. Mark the chunk completed after pass3 finishes for the chunk.
 
-Existing pass checkpoints and run-state pass lists remain the normal resume authority; chunk checkpoints provide cleanup boundaries.
+Existing pass checkpoints and artifacts remain the normal per-chapter resume authority; chunk checkpoints provide progress and cleanup boundaries. A completed translation chunk is reusable only when its stored chapter bounds cover the current chunk and every requested chapter passes the final translation completeness audit. Exact or safely widened ranges may update a row. Narrower, shifted, disjoint, and partially overlapping ranges execute without overwriting the incompatible row at that chunk index. `--force` bypasses reuse but retains the same overwrite protection.
 
 ## Continuity Execution
 

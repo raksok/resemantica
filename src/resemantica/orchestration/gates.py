@@ -65,6 +65,26 @@ def check_stage_gate(
     )
     report.metadata["chapter_numbers"] = selected
 
+    if stage_name == "epub-rebuild":
+        rebuild_story_chapters, non_story_rebuild_chapters, rebuild_chapters = _rebuild_chapter_scope(
+            db_path=paths.db_path,
+            release_root=paths.release_root,
+            release_id=release_id,
+            run_id=run_id,
+            chapter_numbers=selected,
+        )
+        report.metadata["story_chapter_numbers"] = rebuild_story_chapters
+        report.metadata["rebuild_chapter_numbers"] = rebuild_chapters
+        report.metadata["rebuild_non_story_chapter_numbers"] = non_story_rebuild_chapters
+        _check_rebuild_inputs(
+            report,
+            release_root=paths.release_root,
+            run_id=run_id,
+            placeholders_dir=paths.extracted_placeholders_dir,
+            chapter_numbers=rebuild_chapters,
+        )
+        return report
+
     if stage_name in {"preprocess-summaries", "preprocess-glossary"}:
         return report
 
@@ -74,7 +94,6 @@ def check_stage_gate(
         "preprocess-continuity",
         "packets-build",
         "translate-range",
-        "epub-rebuild",
     }:
         _check_unresolved_preprocess_votes(report, db_path=paths.db_path, release_id=release_id)
 
@@ -85,7 +104,6 @@ def check_stage_gate(
         "preprocess-continuity",
         "packets-build",
         "translate-range",
-        "epub-rebuild",
     }:
         story_chapters = _check_summary_inputs(
             report,
@@ -96,7 +114,7 @@ def check_stage_gate(
         )
         report.metadata["story_chapter_numbers"] = story_chapters
 
-    if stage_name in {"preprocess-continuity", "packets-build", "translate-range", "epub-rebuild"}:
+    if stage_name in {"preprocess-continuity", "packets-build", "translate-range"}:
         _check_graph_inputs(
             report,
             db_path=paths.db_path,
@@ -104,7 +122,7 @@ def check_stage_gate(
             release_id=release_id,
         )
 
-    if stage_name in {"translate-range", "epub-rebuild"}:
+    if stage_name == "translate-range":
         _check_packet_inputs(
             report,
             db_path=paths.db_path,
@@ -112,26 +130,6 @@ def check_stage_gate(
             release_id=release_id,
             run_id=run_id,
             chapter_numbers=story_chapters,
-        )
-
-    if stage_name == "epub-rebuild":
-        non_story_rebuild_chapters = _non_story_chapters_with_rebuild_artifacts(
-            db_path=paths.db_path,
-            release_root=paths.release_root,
-            release_id=release_id,
-            run_id=run_id,
-            chapter_numbers=selected,
-            story_chapter_numbers=story_chapters,
-        )
-        rebuild_chapters = sorted({*story_chapters, *non_story_rebuild_chapters})
-        report.metadata["rebuild_chapter_numbers"] = rebuild_chapters
-        report.metadata["rebuild_non_story_chapter_numbers"] = non_story_rebuild_chapters
-        _check_rebuild_inputs(
-            report,
-            release_root=paths.release_root,
-            run_id=run_id,
-            placeholders_dir=paths.extracted_placeholders_dir,
-            chapter_numbers=rebuild_chapters,
         )
 
     return report
@@ -476,47 +474,44 @@ def _has_known_packet_skip(
         conn.close()
 
 
-def _non_story_chapters_with_rebuild_artifacts(
+def _rebuild_chapter_scope(
     *,
     db_path: Path,
     release_root: Path,
     release_id: str,
     run_id: str,
     chapter_numbers: list[int],
-    story_chapter_numbers: list[int],
-) -> list[int]:
-    candidates = sorted(set(chapter_numbers) - set(story_chapter_numbers))
-    if not candidates:
-        return []
+) -> tuple[list[int], list[int], list[int]]:
+    selected = set(chapter_numbers)
+    explicit_non_story: set[int] = set()
     conn = _connect_existing(db_path)
-    if conn is None or not _table_exists(conn, "summary_drafts"):
-        if conn is not None:
-            conn.close()
-        return []
-
-    translation_root = release_root / "runs" / run_id / "translation"
-    non_story_chapters: list[int] = []
-    try:
-        for number in candidates:
-            row = conn.execute(
-                """
-                SELECT is_story_chapter
+    if conn is not None:
+        try:
+            if _table_exists(conn, "summary_drafts"):
+                rows = conn.execute(
+                    """
+                SELECT chapter_number
                 FROM summary_drafts
                 WHERE release_id = ?
-                  AND chapter_number = ?
                   AND summary_type = 'chapter_summary_zh_structured'
-                LIMIT 1
+                  AND is_story_chapter = 0
                 """,
-                (release_id, number),
-            ).fetchone()
-            if row is None or int(row["is_story_chapter"]) != 0:
-                continue
-            translation_dir = translation_root / f"chapter-{number}"
-            if (translation_dir / "pass3.json").exists() or (translation_dir / "pass2.json").exists():
-                non_story_chapters.append(number)
-    finally:
-        conn.close()
-    return non_story_chapters
+                    (release_id,),
+                ).fetchall()
+                explicit_non_story = {int(row["chapter_number"]) for row in rows} & selected
+        finally:
+            conn.close()
+
+    story_chapters = sorted(selected - explicit_non_story)
+    translation_root = release_root / "runs" / run_id / "translation"
+    non_story_rebuild_chapters = sorted(
+        number
+        for number in explicit_non_story
+        if (translation_root / f"chapter-{number}" / "pass3.json").exists()
+        or (translation_root / f"chapter-{number}" / "pass2.json").exists()
+    )
+    rebuild_chapters = sorted({*story_chapters, *non_story_rebuild_chapters})
+    return story_chapters, non_story_rebuild_chapters, rebuild_chapters
 
 
 def _check_rebuild_inputs(

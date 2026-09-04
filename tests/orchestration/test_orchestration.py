@@ -965,11 +965,40 @@ class TestRetryFailed:
         run_id = "production"
         self._write_extracted_chapter(release_id, 1)
 
+        import json
+
         from resemantica.db.sqlite import open_connection
         from resemantica.settings import derive_paths, load_config
         from resemantica.translation.checkpoints import ensure_checkpoint_schema, save_checkpoint
 
         paths = derive_paths(load_config(), release_id=release_id)
+        chapter_path = paths.extracted_chapters_dir / "chapter-1.json"
+        chapter = json.loads(chapter_path.read_text(encoding="utf-8"))
+        chapter["records"] = [
+            {
+                "block_id": "ch001_blk001",
+                "parent_block_id": "ch001_blk001",
+                "source_text_zh": "正文。",
+            }
+        ]
+        chapter_path.write_text(json.dumps(chapter), encoding="utf-8")
+        translation_dir = paths.release_root / "runs" / run_id / "translation" / "chapter-1"
+        translation_dir.mkdir(parents=True)
+        pass2_path = translation_dir / "pass2.json"
+        pass2_path.write_text(
+            json.dumps(
+                {
+                    "blocks": [
+                        {
+                            "block_id": "ch001_blk001",
+                            "parent_block_id": "ch001_blk001",
+                            "restored_text_en": "Body.",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         conn = open_connection(paths.db_path)
         try:
             ensure_checkpoint_schema(conn)
@@ -982,7 +1011,7 @@ class TestRetryFailed:
                 source_hash="hash-ch1",
                 prompt_version="prompt",
                 status="success",
-                artifact_path="pass2.json",
+                artifact_path=str(pass2_path),
             )
         finally:
             conn.close()
@@ -995,6 +1024,78 @@ class TestRetryFailed:
 
         assert plan.retryable == []
         assert plan.non_retryable == []
+
+    def test_retry_failed_translation_retries_incomplete_success_artifact(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        release_id = "retry-translation-incomplete-success"
+        run_id = "production"
+        self._write_extracted_chapter(release_id, 1)
+
+        import json
+
+        from resemantica.db.sqlite import open_connection
+        from resemantica.settings import derive_paths, load_config
+        from resemantica.translation.checkpoints import ensure_checkpoint_schema, save_checkpoint
+
+        paths = derive_paths(load_config(), release_id=release_id)
+        chapter_path = paths.extracted_chapters_dir / "chapter-1.json"
+        chapter = json.loads(chapter_path.read_text(encoding="utf-8"))
+        chapter["records"] = [
+            {
+                "block_id": f"ch001_blk00{number}",
+                "parent_block_id": f"ch001_blk00{number}",
+                "source_text_zh": f"第{number}段。",
+            }
+            for number in (1, 2)
+        ]
+        chapter_path.write_text(json.dumps(chapter), encoding="utf-8")
+        translation_dir = paths.release_root / "runs" / run_id / "translation" / "chapter-1"
+        translation_dir.mkdir(parents=True)
+        pass2_path = translation_dir / "pass2.json"
+        pass2_path.write_text(
+            json.dumps(
+                {
+                    "blocks": [
+                        {
+                            "block_id": "ch001_blk001",
+                            "parent_block_id": "ch001_blk001",
+                            "restored_text_en": "First paragraph.",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        conn = open_connection(paths.db_path)
+        try:
+            ensure_checkpoint_schema(conn)
+            save_checkpoint(
+                conn,
+                release_id=release_id,
+                run_id=run_id,
+                chapter_number=1,
+                pass_name="pass2",
+                source_hash="hash-ch1",
+                prompt_version="prompt",
+                status="success",
+                artifact_path=str(pass2_path),
+            )
+        finally:
+            conn.close()
+
+        plan = plan_retry_failed(
+            release_id=release_id,
+            run_id=run_id,
+            stage="translate-range",
+        )
+
+        assert len(plan.retryable) == 1
+        assert plan.retryable[0].chapters == [1]
+        assert plan.retryable[0].reason == "failed_or_incomplete_translation_checkpoint"
 
 
 class TestM11CleanupScopes:

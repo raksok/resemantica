@@ -1017,6 +1017,8 @@ class OrchestrationRunner:
     ) -> StageResult:
         from resemantica.db.sqlite import open_connection
         from resemantica.orchestration.chunk_checkpoints import (
+            checkpoint_can_be_replaced_by,
+            checkpoint_covers,
             last_completed_chunk,
             load_chunk_checkpoint,
             save_chunk_checkpoint,
@@ -1095,7 +1097,9 @@ class OrchestrationRunner:
             }
 
         for chunk_index, chunk in enumerate(chunks):
-            if chunked and not force:
+            chunk_checkpoint = None
+            persist_chunk_checkpoint = chunked
+            if chunked:
                 conn = open_connection(paths.db_path)
                 try:
                     chunk_checkpoint = load_chunk_checkpoint(
@@ -1107,8 +1111,23 @@ class OrchestrationRunner:
                     )
                 finally:
                     conn.close()
-                if chunk_checkpoint is not None and chunk_checkpoint.status == "completed":
-                    continue
+                if chunk_checkpoint is not None:
+                    persist_chunk_checkpoint = checkpoint_can_be_replaced_by(
+                        chunk_checkpoint,
+                        chapter_start=chunk[0],
+                        chapter_end=chunk[-1],
+                    )
+                    if (
+                        not force
+                        and chunk_checkpoint.status == "completed"
+                        and checkpoint_covers(
+                            chunk_checkpoint,
+                            chapter_start=chunk[0],
+                            chapter_end=chunk[-1],
+                        )
+                        and not self._translation_completeness_errors(chunk)
+                    ):
+                        continue
 
             if chunked:
                 started_payload = chunk_payload(chunk_index, chunk)
@@ -1120,21 +1139,22 @@ class OrchestrationRunner:
                     message=f"Translation chunk {chunk_index + 1}/{len(chunks)} started",
                     payload=started_payload,
                 )
-                conn = open_connection(paths.db_path)
-                try:
-                    save_chunk_checkpoint(
-                        conn,
-                        release_id=self.release_id,
-                        run_id=self.run_id,
-                        stage_name="translate-range",
-                        chunk_index=chunk_index,
-                        chapter_start=chunk[0],
-                        chapter_end=chunk[-1],
-                        status="running",
-                        metadata=started_payload,
-                    )
-                finally:
-                    conn.close()
+                if persist_chunk_checkpoint:
+                    conn = open_connection(paths.db_path)
+                    try:
+                        save_chunk_checkpoint(
+                            conn,
+                            release_id=self.release_id,
+                            run_id=self.run_id,
+                            stage_name="translate-range",
+                            chunk_index=chunk_index,
+                            chapter_start=chunk[0],
+                            chapter_end=chunk[-1],
+                            status="running",
+                            metadata=started_payload,
+                        )
+                    finally:
+                        conn.close()
 
             try:
                 for chapter_number in chunk:
@@ -1343,6 +1363,37 @@ class OrchestrationRunner:
                             message=f"Translation chunk {chunk_index + 1}/{len(chunks)} failed",
                             payload={**failed_payload, "failures": failures},
                         )
+                        if persist_chunk_checkpoint:
+                            conn = open_connection(paths.db_path)
+                            try:
+                                save_chunk_checkpoint(
+                                    conn,
+                                    release_id=self.release_id,
+                                    run_id=self.run_id,
+                                    stage_name="translate-range",
+                                    chunk_index=chunk_index,
+                                    chapter_start=chunk[0],
+                                    chapter_end=chunk[-1],
+                                    status="failed",
+                                    metadata={**failed_payload, "failures": failures},
+                                )
+                            finally:
+                                conn.close()
+                    break
+
+                if chunked:
+                    if persist_chunk_checkpoint:
+                        completed_chunk_index = chunk_index
+                    completed_payload = chunk_payload(chunk_index, chunk)
+                    emit_event(
+                        self.run_id,
+                        self.release_id,
+                        "translate-range.chunk_completed",
+                        "translate-range",
+                        message=f"Translation chunk {chunk_index + 1}/{len(chunks)} completed",
+                        payload=completed_payload,
+                    )
+                    if persist_chunk_checkpoint:
                         conn = open_connection(paths.db_path)
                         try:
                             save_chunk_checkpoint(
@@ -1353,39 +1404,11 @@ class OrchestrationRunner:
                                 chunk_index=chunk_index,
                                 chapter_start=chunk[0],
                                 chapter_end=chunk[-1],
-                                status="failed",
-                                metadata={**failed_payload, "failures": failures},
+                                status="completed",
+                                metadata=completed_payload,
                             )
                         finally:
                             conn.close()
-                    break
-
-                if chunked:
-                    completed_chunk_index = chunk_index
-                    completed_payload = chunk_payload(chunk_index, chunk)
-                    emit_event(
-                        self.run_id,
-                        self.release_id,
-                        "translate-range.chunk_completed",
-                        "translate-range",
-                        message=f"Translation chunk {chunk_index + 1}/{len(chunks)} completed",
-                        payload=completed_payload,
-                    )
-                    conn = open_connection(paths.db_path)
-                    try:
-                        save_chunk_checkpoint(
-                            conn,
-                            release_id=self.release_id,
-                            run_id=self.run_id,
-                            stage_name="translate-range",
-                            chunk_index=chunk_index,
-                            chapter_start=chunk[0],
-                            chapter_end=chunk[-1],
-                            status="completed",
-                            metadata=completed_payload,
-                        )
-                    finally:
-                        conn.close()
             except Exception as exc:
                 if chunked:
                     failed_payload = chunk_payload(chunk_index, chunk)
@@ -1398,21 +1421,22 @@ class OrchestrationRunner:
                         message=f"Translation chunk {chunk_index + 1}/{len(chunks)} failed: {exc}",
                         payload={**failed_payload, "reason": str(exc)},
                     )
-                    conn = open_connection(paths.db_path)
-                    try:
-                        save_chunk_checkpoint(
-                            conn,
-                            release_id=self.release_id,
-                            run_id=self.run_id,
-                            stage_name="translate-range",
-                            chunk_index=chunk_index,
-                            chapter_start=chunk[0],
-                            chapter_end=chunk[-1],
-                            status="failed",
-                            metadata={**failed_payload, "reason": str(exc)},
-                        )
-                    finally:
-                        conn.close()
+                    if persist_chunk_checkpoint:
+                        conn = open_connection(paths.db_path)
+                        try:
+                            save_chunk_checkpoint(
+                                conn,
+                                release_id=self.release_id,
+                                run_id=self.run_id,
+                                stage_name="translate-range",
+                                chunk_index=chunk_index,
+                                chapter_start=chunk[0],
+                                chapter_end=chunk[-1],
+                                status="failed",
+                                metadata={**failed_payload, "reason": str(exc)},
+                            )
+                        finally:
+                            conn.close()
                 raise
 
         checkpoint_result = checkpoint_payload()

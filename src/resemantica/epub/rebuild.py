@@ -18,6 +18,7 @@ from resemantica.db.summary_repo import is_non_story_chapter
 from resemantica.epub.models import PlaceholderEntry
 from resemantica.epub.placeholders import restore_from_placeholders
 from resemantica.settings import AppConfig, derive_paths, load_config
+from resemantica.translation.completeness import audit_chapter_translation
 from resemantica.utils import _emit as _emit_shared
 from resemantica.utils import _read_json, _write_json
 
@@ -518,6 +519,36 @@ def _load_final_blocks(translation_dir: Path) -> list[dict[str, Any]]:
     return []
 
 
+def _rebuild_preflight_errors(
+    *,
+    chapter_refs: list[Any],
+    non_story_chapters: set[int],
+    release_root: Path,
+    run_id: str,
+    placeholders_dir: Path,
+) -> dict[int, list[str]]:
+    errors: dict[int, list[str]] = {}
+    translation_root = release_root / "runs" / run_id / "translation"
+    for chapter_ref in chapter_refs:
+        chapter_number = chapter_ref.chapter_number
+        translation_dir = translation_root / f"chapter-{chapter_number}"
+        has_translation = (translation_dir / "pass3.json").exists() or (
+            translation_dir / "pass2.json"
+        ).exists()
+        if chapter_number in non_story_chapters and not has_translation:
+            continue
+
+        chapter_errors: list[str] = []
+        placeholder_path = placeholders_dir / f"chapter-{chapter_number}.json"
+        if not placeholder_path.exists():
+            chapter_errors.append(f"missing placeholder map: {placeholder_path}")
+        audit = audit_chapter_translation(chapter_ref.chapter_path, translation_dir)
+        chapter_errors.extend(audit.errors)
+        if chapter_errors:
+            errors[chapter_number] = chapter_errors
+    return errors
+
+
 def _resolve_source_relative_path(unpacked_dir: Path, source_document_path: str) -> Path:
     direct = Path(source_document_path)
     if (unpacked_dir / direct).exists():
@@ -589,11 +620,6 @@ def rebuild_translated_epub(
     chapter_results: list[ChapterRebuildResult] = []
     translated_titles_by_source: dict[str, str] = {}
     try:
-        if work_dir.exists():
-            shutil.rmtree(work_dir)
-        shutil.copytree(paths.unpacked_dir, work_dir)
-        chapters_out.mkdir(parents=True, exist_ok=True)
-
         conn = open_connection(paths.db_path)
         ensure_schema(conn, "summaries")
         try:
@@ -604,6 +630,37 @@ def rebuild_translated_epub(
             }
         finally:
             conn.close()
+
+        preflight_errors = _rebuild_preflight_errors(
+            chapter_refs=chapter_refs,
+            non_story_chapters=non_story_chapters,
+            release_root=paths.release_root,
+            run_id=run_id,
+            placeholders_dir=paths.extracted_placeholders_dir,
+        )
+        if preflight_errors:
+            chapter_numbers = sorted(preflight_errors)
+            _emit(
+                run_id,
+                release_id,
+                f"{_STAGE_NAME}.preflight_failed",
+                severity="error",
+                message=(
+                    "EPUB rebuild preflight failed for "
+                    f"{len(chapter_numbers)} chapter(s): {chapter_numbers}"
+                ),
+                chapter_numbers=chapter_numbers,
+                errors=preflight_errors,
+            )
+            raise RuntimeError(
+                "EPUB rebuild preflight failed for "
+                f"{len(chapter_numbers)} chapter(s): {chapter_numbers}"
+            )
+
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        shutil.copytree(paths.unpacked_dir, work_dir)
+        chapters_out.mkdir(parents=True, exist_ok=True)
 
         for chapter_ref in chapter_refs:
             _emit(

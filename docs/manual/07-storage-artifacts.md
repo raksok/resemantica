@@ -136,7 +136,7 @@ warnings JSON writes emit artifact events for CLI/TUI counters.
 | `runs` | `run_id` | `release_id`, `workflow_name`, `workflow_status` |
 | `checkpoints` | `checkpoint_id` | `run_id`, `stage_name`, `chapter_number`, `checkpoint_status` |
 | `translation_checkpoints` | `(release_id, run_id, chapter_number, pass_name)` | `source_hash`, `status`, `artifact_path`, `packet_version_hash` |
-| `chunk_checkpoints` | `(release_id, run_id, stage_name, chunk_index)` | `chapter_start`, `chapter_end`, `status`, `metadata_json` |
+| `chunk_checkpoints` | `(release_id, run_id, stage_name, chunk_index)` | `chapter_start`, `chapter_end`, `status`, `metadata_json`; translation reuse also requires stored bounds to cover the requested chunk and complete final artifacts |
 
 ---
 

@@ -45,6 +45,8 @@ class TUIAdapter:
         **options: Any,
     ) -> Any:
         runner = self._runner(stop_token)
+        if stage_name == "epub-rebuild":
+            options["enforce_gates"] = True
         if stop_token is None:
             return runner.run_stage(stage_name, **options)
         return runner.run_stage(stage_name, stop_token=stop_token, **options)
@@ -90,6 +92,7 @@ class TUIAdapter:
                 return runner.run_stage("translate-range", **options)
             return runner.run_stage("translate-range", stop_token=stop_token, **options)
         if workflow_name == "reconstruction":
+            options["enforce_gates"] = True
             if stop_token is None:
                 return runner.run_stage("epub-rebuild", **options)
             return runner.run_stage("epub-rebuild", stop_token=stop_token, **options)

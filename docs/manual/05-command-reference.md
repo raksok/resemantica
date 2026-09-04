@@ -311,6 +311,8 @@ uv run rsem rebuild -r <release> -R <run> [options]
 
 Output: `rebuild/reconstructed.epub`
 
+Rebuild always enforces a direct-input gate and preflights placeholder maps plus complete, non-empty Pass 2/3 block coverage before changing reconstruction outputs. It does not require historical glossary votes, summary files, graph snapshots, or packets after final translations exist. If preflight fails, the existing work tree and EPUB are preserved; repair the reported translation chapters first.
+
 ---
 
 ## `run`

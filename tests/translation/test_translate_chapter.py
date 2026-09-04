@@ -680,6 +680,40 @@ def test_failed_pass1_artifact_resumes_only_failed_blocks(tmp_path: Path, monkey
     ]
 
 
+def test_pass1_unreadable_checkpoint_regenerates_without_force(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m83-pass1-corrupt-cache"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>第一段。</p></body></html>
+''',
+        release_id,
+    )
+    first = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=CountingPass1LLM({"第一段。": ["First draft."]}),  # type: ignore[arg-type]
+    )
+    artifact_path = Path(first["pass1_artifact"])
+    artifact_path.write_bytes(b"\x00" * 64)
+
+    repair_client = CountingPass1LLM({"第一段。": ["Regenerated draft."]})
+    repaired = translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        llm_client=repair_client,  # type: ignore[arg-type]
+    )
+
+    assert repaired["status"] == "success"
+    assert len(repair_client.pass1_prompts) == 1
+    assert repaired["blocks"][0]["draft_text"] == "Regenerated draft."
+    assert json.loads(artifact_path.read_text(encoding="utf-8"))["status"] == "success"
+
+
 def test_hard_stop_on_placeholder_structural_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _extract_one_chapter(
@@ -1209,6 +1243,65 @@ def test_pass2_repairs_only_missing_cached_blocks(tmp_path: Path, monkeypatch) -
     assert repair_client.single_calls == 1
     assert len(repaired["blocks"]) == 2
     assert repaired["blocks"][0] == preserved
+
+
+def test_pass2_unreadable_checkpoint_regenerates_without_force(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "m83-pass2-corrupt-cache"
+    run_id = "run-001"
+    _extract_one_chapter(
+        tmp_path,
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文。</p></body></html>
+''',
+        release_id,
+    )
+    config = _manual_pass2_config(batch_max_blocks=1)
+    translate_chapter_pass1(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=ScriptedLLM(),
+    )
+    first = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=BatchPass2LLM(),  # type: ignore[arg-type]
+    )
+    artifact_path = Path(first["pass2_artifact"])
+    artifact_path.write_bytes(b"\x00" * 64)
+
+    repair_client = BatchPass2LLM()
+    repaired = translate_chapter_pass2(
+        release_id=release_id,
+        chapter_number=1,
+        run_id=run_id,
+        config=config,
+        llm_client=repair_client,  # type: ignore[arg-type]
+    )
+
+    assert repaired["status"] == "success"
+    assert repair_client.single_calls == 1
+    repaired_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert repaired_artifact["status"] == "success"
+    assert len(repaired_artifact["blocks"]) == 1
+    conn = ensure_tracking_db(release_id)
+    try:
+        events = load_events(conn, run_id=run_id, release_id=release_id)
+    finally:
+        conn.close()
+    invalid_cache = next(
+        event
+        for event in events
+        if event.event_type == "translate-chapter.pass2.cache_invalid"
+    )
+    assert invalid_cache.severity == "warning"
+    assert invalid_cache.payload["pass_name"] == "pass2"
+    assert invalid_cache.payload["artifact_path"] == str(artifact_path)
+    assert "Expecting value" in str(invalid_cache.payload["reason"])
 
 
 def test_pass2_retry_revalidates_cached_blocks_and_repairs_only_failed_output(

@@ -617,3 +617,198 @@ def test_chunked_batched_resume_skips_completed_chunk_and_resumes_partial_pass(
         + [("pass2", n) for n in range(11, 16)]
         + [("pass3", n) for n in range(11, 16)]
     )
+
+
+def test_chunked_retry_does_not_reuse_or_overwrite_shifted_chunk_index(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "shifted-chunk-range"
+    run_id = "run"
+    for chapter_number in range(1, 7):
+        _write_chapter(release_id, chapter_number)
+    calls: list[tuple[str, int]] = []
+    pass1, pass2, pass3 = _make_mock_passes(calls)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass1", pass1)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass3", pass3)
+
+    from resemantica.db.sqlite import open_connection
+    from resemantica.orchestration.chunk_checkpoints import (
+        load_chunk_checkpoint,
+        save_chunk_checkpoint,
+    )
+
+    config = AppConfig(
+        translation=TranslationConfig(batched_model_order=True),
+        batch_order=BatchOrderConfig(enabled=True, translation_chunk_size=2),
+    )
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    try:
+        save_chunk_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name="translate-range",
+            chunk_index=0,
+            chapter_start=1,
+            chapter_end=2,
+            status="completed",
+        )
+        save_chunk_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name="translate-range",
+            chunk_index=1,
+            chapter_start=3,
+            chapter_end=4,
+            status="completed",
+        )
+    finally:
+        conn.close()
+
+    result = OrchestrationRunner(release_id, run_id, config=config).run_stage(
+        "translate-range",
+        checkpoint={},
+        chapter_start=2,
+        chapter_end=6,
+    )
+
+    assert result.success is True
+    assert calls == (
+        [(pass_name, n) for pass_name in ("pass1", "pass2", "pass3") for n in (2, 3)]
+        + [(pass_name, n) for pass_name in ("pass1", "pass2", "pass3") for n in (4, 5)]
+        + [(pass_name, 6) for pass_name in ("pass1", "pass2", "pass3")]
+    )
+    conn = open_connection(paths.db_path)
+    try:
+        checkpoint = load_chunk_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name="translate-range",
+            chunk_index=1,
+        )
+    finally:
+        conn.close()
+    assert checkpoint is not None
+    assert (checkpoint.chapter_start, checkpoint.chapter_end) == (3, 4)
+
+
+def test_completed_checkpoint_covering_retry_chunk_is_reused(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "covering-chunk-range"
+    run_id = "run"
+    for chapter_number in range(1, 6):
+        _write_chapter(release_id, chapter_number)
+    calls: list[tuple[str, int]] = []
+    pass1, pass2, pass3 = _make_mock_passes(calls)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass1", pass1)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass3", pass3)
+
+    from resemantica.db.sqlite import open_connection
+    from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+
+    config = AppConfig(
+        translation=TranslationConfig(batched_model_order=True),
+        batch_order=BatchOrderConfig(enabled=True, translation_chunk_size=2),
+    )
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    try:
+        save_chunk_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name="translate-range",
+            chunk_index=0,
+            chapter_start=1,
+            chapter_end=3,
+            status="completed",
+        )
+    finally:
+        conn.close()
+
+    result = OrchestrationRunner(release_id, run_id, config=config).run_stage(
+        "translate-range",
+        checkpoint={},
+        chapter_start=2,
+        chapter_end=5,
+    )
+
+    assert result.success is True
+    assert calls == [
+        (pass_name, chapter_number)
+        for pass_name in ("pass1", "pass2", "pass3")
+        for chapter_number in (4, 5)
+    ]
+
+
+def test_completed_chunk_with_incomplete_artifact_is_reprocessed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "completed-incomplete-chunk"
+    run_id = "run"
+    for chapter_number in range(1, 4):
+        _write_chapter(release_id, chapter_number)
+    calls: list[tuple[str, int]] = []
+    pass1, pass2, pass3 = _make_mock_passes(calls)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass1", pass1)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass2", pass2)
+    monkeypatch.setattr("resemantica.translation.pipeline.translate_chapter_pass3", pass3)
+
+    from resemantica.db.sqlite import open_connection
+    from resemantica.orchestration.chunk_checkpoints import save_chunk_checkpoint
+
+    config = AppConfig(
+        translation=TranslationConfig(batched_model_order=True),
+        batch_order=BatchOrderConfig(enabled=True, translation_chunk_size=2),
+    )
+    paths = derive_paths(config, release_id=release_id)
+    conn = open_connection(paths.db_path)
+    try:
+        save_chunk_checkpoint(
+            conn,
+            release_id=release_id,
+            run_id=run_id,
+            stage_name="translate-range",
+            chunk_index=0,
+            chapter_start=1,
+            chapter_end=2,
+            status="completed",
+        )
+    finally:
+        conn.close()
+
+    runner = OrchestrationRunner(release_id, run_id, config=config)
+    audit_count = 0
+
+    def completeness_errors(chapters: list[int]) -> dict[int, str]:
+        nonlocal audit_count
+        audit_count += 1
+        if audit_count == 1:
+            return {chapters[0]: "incomplete artifact"}
+        return {}
+
+    monkeypatch.setattr(runner, "_translation_completeness_errors", completeness_errors)
+    result = runner.run_stage(
+        "translate-range",
+        checkpoint={},
+        chapter_start=1,
+        chapter_end=3,
+    )
+
+    assert result.success is True
+    assert calls == (
+        [(pass_name, n) for pass_name in ("pass1", "pass2", "pass3") for n in (1, 2)]
+        + [(pass_name, 3) for pass_name in ("pass1", "pass2", "pass3")]
+    )

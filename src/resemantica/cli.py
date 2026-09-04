@@ -1502,6 +1502,7 @@ def main(argv: list[str] | None = None) -> int:
                 "epub-rebuild",
                 allow_rewind=getattr(args, "allow_rewind", False),
                 stop_token=stop_token,
+                enforce_gates=True,
             ),
             stop_token=stop_token,
             verbosity=int(getattr(args, "verbose", 0) or 0),

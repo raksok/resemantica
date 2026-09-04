@@ -50,6 +50,40 @@ from resemantica.utils import _build_llm_client, _read_json, _write_json
 _PLACEHOLDER_RE = re.compile(r"\u27e6/?[A-Z]+_\d+\u27e7")
 
 
+def _read_translation_cache(
+    path: Path,
+    *,
+    release_id: str,
+    run_id: str,
+    pass_name: str,
+    chapter_number: int,
+) -> dict[str, Any] | None:
+    try:
+        return _read_json(path)
+    except (OSError, UnicodeError, ValueError) as exc:
+        logger.warning(
+            "Ignoring unreadable {} cache for chapter {} at {}: {}",
+            pass_name,
+            chapter_number,
+            path,
+            exc,
+        )
+        _emit_translation_event(
+            release_id=release_id,
+            run_id=run_id,
+            event_type=f"{pass_name}.cache_invalid",
+            chapter_number=chapter_number,
+            severity="warning",
+            message=f"Ignoring unreadable {pass_name} cache for chapter {chapter_number}: {exc}",
+            payload={
+                "pass_name": pass_name,
+                "artifact_path": str(path),
+                "reason": str(exc),
+            },
+        )
+        return None
+
+
 def _placeholder_tokens(text: str) -> list[str]:
     return _PLACEHOLDER_RE.findall(text)
 
@@ -567,19 +601,26 @@ def translate_chapter_pass1(
             and pass1_checkpoint is not None
             and Path(pass1_checkpoint.artifact_path).exists()
         ):
-            existing_pass1_payload = _read_json(Path(pass1_checkpoint.artifact_path))
-            existing_blocks = existing_pass1_payload.get("blocks", [])
-            if isinstance(existing_blocks, list):
-                for block in existing_blocks:
-                    if not isinstance(block, dict):
-                        continue
-                    block_id = str(block.get("block_id", ""))
-                    source_text = expected_sources.get(block_id)
-                    if source_text is not None and _is_reusable_pass1_block(
-                        block,
-                        source_text=source_text,
-                    ):
-                        reusable_blocks[block_id] = block
+            existing_pass1_payload = _read_translation_cache(
+                Path(pass1_checkpoint.artifact_path),
+                release_id=release_id,
+                run_id=run_id,
+                pass_name="pass1",
+                chapter_number=chapter_number,
+            )
+            if existing_pass1_payload is not None:
+                existing_blocks = existing_pass1_payload.get("blocks", [])
+                if isinstance(existing_blocks, list):
+                    for block in existing_blocks:
+                        if not isinstance(block, dict):
+                            continue
+                        block_id = str(block.get("block_id", ""))
+                        source_text = expected_sources.get(block_id)
+                        if source_text is not None and _is_reusable_pass1_block(
+                            block,
+                            source_text=source_text,
+                        ):
+                            reusable_blocks[block_id] = block
 
         if (
             not force
@@ -2060,17 +2101,24 @@ def translate_chapter_pass2(
             and pass2_checkpoint is not None
             and Path(pass2_checkpoint.artifact_path).exists()
         ):
-            cached_payload = _read_json(Path(pass2_checkpoint.artifact_path))
-            (
-                reusable_cached_blocks,
-                reusable_structure_checks,
-                reusable_fidelity_checks,
-                cached_validation_feedback,
-            ) = _reusable_pass2_blocks(
-                pass1_blocks,
-                cached_payload.get("blocks"),
-                placeholders_by_block=placeholders_by_block,
+            cached_payload = _read_translation_cache(
+                Path(pass2_checkpoint.artifact_path),
+                release_id=release_id,
+                run_id=run_id,
+                pass_name="pass2",
+                chapter_number=chapter_number,
             )
+            if cached_payload is not None:
+                (
+                    reusable_cached_blocks,
+                    reusable_structure_checks,
+                    reusable_fidelity_checks,
+                    cached_validation_feedback,
+                ) = _reusable_pass2_blocks(
+                    pass1_blocks,
+                    cached_payload.get("blocks"),
+                    placeholders_by_block=placeholders_by_block,
+                )
 
         if (
             not force
@@ -2501,11 +2549,26 @@ def translate_chapter_pass3(
             packet_version_hash=packet_version_hash,
         )
 
+        cached_pass3_payload: dict[str, Any] | None = None
         if (
             not force
             and pass3_checkpoint is not None
             and pass3_checkpoint.status == "success"
             and Path(pass3_checkpoint.artifact_path).exists()
+        ):
+            cached_pass3_payload = _read_translation_cache(
+                Path(pass3_checkpoint.artifact_path),
+                release_id=release_id,
+                run_id=run_id,
+                pass_name="pass3",
+                chapter_number=chapter_number,
+            )
+
+        if (
+            not force
+            and pass3_checkpoint is not None
+            and pass3_checkpoint.status == "success"
+            and cached_pass3_payload is not None
         ):
             logger.info("Chapter {} pass3: using cached artifact", chapter_number)
             _emit_translation_event(

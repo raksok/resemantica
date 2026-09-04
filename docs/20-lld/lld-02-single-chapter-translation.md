@@ -55,13 +55,13 @@ Artifacts:
 ## Command Behavior
 
 - `translate-chapter` targets exactly one chapter.
-- If valid pass checkpoints exist, reruns reuse their complete successful block mappings. Incomplete Pass 1 artifacts retain successful blocks and regenerate only failed or missing blocks. Pass 2 deterministically revalidates cached structure, restoration, and fidelity, then repairs only invalid or missing mappings and rebuilds validation records for reused blocks.
+- If valid pass checkpoints exist, reruns reuse their complete successful block mappings. Incomplete Pass 1 artifacts retain successful blocks and regenerate only failed or missing blocks. Pass 2 deterministically revalidates cached structure, restoration, and fidelity, then repairs only invalid or missing mappings and rebuilds validation records for reused blocks. An unreadable Pass 1, Pass 2, or Pass 3 checkpoint artifact is logged and treated as a cache miss for that pass; required upstream artifacts remain strict inputs.
 - `--force` ignores pass checkpoints for the requested chapter or range; `--force-pass1` remains a backward-compatible alias.
 - If structure validation fails for a placeholder-free block, resegment at sentence boundaries or, for a short single segment, at the safe sentence/clause boundary nearest the midpoint. Retry each segment in Pass 1, then run Pass 2 sequentially with full original block context and prior segment translations against each segment draft before marking the chapter failed.
 - Mixed-language Pass 1 candidates supply their valid English content to each same-model correction request together with the exact remaining Chinese spans. If the latest candidate still contains both Latin letters and Chinese spans after the existing content-attempt budget, Pass 1 records those spans and defers the candidate to Pass 2. Empty and fully Chinese candidates remain invalid.
 - Single and batch Pass 2 prompts require every deferred Chinese span to be translated or transliterated. Deterministic fidelity validation prevents mixed output from reaching Pass 3, retries through the existing block boundary, and reports exact spans on exhaustion. Advancing the Pass 2 prompt versions invalidates older Pass 2 checkpoints under this stricter contract.
 - Pass 2 starts only after every extracted parent block has a successful Pass 1 result. It batches normal block audits by default, retries validation failures at the block task boundary, and falls back affected batch blocks before marking the chapter failed.
-- Outputs are written under the run-scoped translation artifact tree.
+- Outputs are written under the run-scoped translation artifact tree. Shared JSON writes serialize first, flush a same-directory temporary file, and atomically replace the destination so an interrupted update cannot expose a partial destination file.
 
 ## Validation Ownership
 

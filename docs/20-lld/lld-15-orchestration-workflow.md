@@ -63,7 +63,7 @@ If the saved checkpoint contains `chapter_start` or `chapter_end`, those bounds 
 
 Internal stage resume is enabled by default. When production reaches summaries, glossary, idioms, graph, packets, or translation, the stage also skips its own completed durable units. Operators use `--force` on production or an individual command to rebuild the requested scope.
 
-For chunked batch-order stages, `chunk_checkpoints` add a cleanup boundary without replacing normal stage checkpoints. `preprocess-summaries` still resumes from `summary_checkpoints` inside an incomplete chunk. Batched `translate-range` audits the artifact block mappings behind `pass1_completed`, `pass2_completed`, and `pass3_completed`; a nominally completed checkpoint never makes an incomplete artifact reusable.
+For chunked batch-order stages, `chunk_checkpoints` add a cleanup boundary without replacing normal stage checkpoints. `preprocess-summaries` still resumes from `summary_checkpoints` inside an incomplete chunk. Batched `translate-range` requires stored chunk bounds to cover the current chunk and audits the artifact block mappings behind `pass1_completed`, `pass2_completed`, and `pass3_completed`; a matching numeric chunk index or nominally completed checkpoint never makes a different range or incomplete artifact reusable. Incompatible retry ranges execute without overwriting the older row.
 
 ## Failed Unit Retry
 
@@ -104,7 +104,7 @@ Summary rows with `validation_status = "failed"` are audit evidence only. Produc
 - fail the chapter and translation chunk when any extracted parent block lacks a successful Pass 1 result
 - audit complete, non-empty final block coverage before reporting range success
 
-When batched model order and chunking are active, `translate-range` runs pass1, pass2, and pass3 for one chunk before advancing to the next chunk. The stage checkpoint metadata includes chunk progress so production resume and cleanup can identify the last completed chunk. Pass 2 cannot run for a chapter with failed or missing Pass 1 blocks.
+When batched model order and chunking are active, `translate-range` runs pass1, pass2, and pass3 for one chunk before advancing to the next chunk. The stage checkpoint metadata includes chunk progress so production resume and cleanup can identify the last completed chunk. Reuse requires both range coverage and complete final artifacts. Pass 2 cannot run for a chapter with failed or missing Pass 1 blocks.
 
 ## Event Contract
 
@@ -138,7 +138,7 @@ Existing dotted names may be preserved only through a compatibility shim if test
 
 ## CLI Dispatch Rule
 
-Top-level CLI commands may parse arguments and render output, but must not call translation pass functions, packet builders, cleanup functions, or EPUB rebuild functions directly when an orchestration stage exists. Dispatch should be:
+Top-level CLI commands may parse arguments and render output, but must not call translation pass functions, packet builders, cleanup functions, or EPUB rebuild functions directly when an orchestration stage exists. Direct CLI and TUI reconstruction dispatch always enables stage gates. Dispatch should be:
 
 ```text
 CLI args -> OrchestrationRunner -> subsystem service -> events/checkpoints/artifacts

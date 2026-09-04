@@ -161,6 +161,29 @@ def test_tui_adapter_launch_workflow_delegates_to_runner():
     assert runner.calls == [("translate-range", {"chapter_start": 1, "chapter_end": 2})]
 
 
+def test_tui_adapter_reconstruction_enforces_stage_gates():
+    from resemantica.tui.adapter import TUIAdapter
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, Any]]] = []
+
+        def run_stage(self, stage_name: str, **options):
+            self.calls.append((stage_name, options))
+            return {"stage": stage_name, "options": options}
+
+        def run_production(self, **options):
+            return None
+
+    runner = Runner()
+    adapter = TUIAdapter("rel", "run", runner=runner)  # type: ignore[arg-type]
+
+    result = adapter.launch_workflow("reconstruction")
+
+    assert result["stage"] == "epub-rebuild"
+    assert runner.calls == [("epub-rebuild", {"enforce_gates": True})]
+
+
 def test_dialog_chapter_bounds_validation():
     from resemantica.tui.screens.run_dialog import parse_chapter_bounds
 

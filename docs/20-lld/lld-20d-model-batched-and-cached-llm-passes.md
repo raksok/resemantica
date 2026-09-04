@@ -62,7 +62,8 @@ Cache may be represented as JSON artifacts plus SQLite metadata. Cached payloads
 - If pass1 succeeds for all chapters and pass2 fails at one chapter, previously generated pass1 artifacts remain valid checkpoints.
 - Batched mode records per-pass progress in run state.
 - Chunked batched mode also records `chunk_checkpoints` for cleanup boundaries.
-- Cache corruption or parse failure is treated as cache miss, not as successful reuse.
+- Cache corruption or parse failure is treated as cache miss, not as successful reuse. Translation checkpoint reuse follows the same rule for Pass 1, Pass 2, and Pass 3, while required upstream pass artifacts remain strict inputs.
+- Shared JSON artifacts are serialized before a flushed same-directory temporary write and atomically replace their destination. An interrupted update therefore leaves either the previous valid artifact or no destination, both of which are safe to resume.
 - Batched pass-level exception handlers emit `translate-chapter.pass1.failed`, `translate-chapter.pass2.failed`, or `translate-chapter.pass3.failed` with severity `error`, `chapter_number`, `pass_name`, and `reason` before recording the failure in the range checkpoint.
 
 ## Resume After Stop

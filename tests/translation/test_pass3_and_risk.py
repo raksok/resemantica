@@ -759,6 +759,48 @@ class TestPass3SkipAndPipeline:
         )
         assert forced_client.pass3_calls == 1
 
+    def test_unreadable_pass3_checkpoint_regenerates_without_force(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        release_id = "m83-pass3-corrupt-cache"
+        run_id = "run-pass3-corrupt-cache"
+        _extract_one_chapter(
+            tmp_path,
+            """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>你<b>好</b>吗？</p></body></html>
+""",
+            release_id,
+        )
+        from resemantica.settings import AppConfig, TranslationConfig
+
+        config = AppConfig(translation=TranslationConfig(pass3_default=True))
+        first_client = ScriptedLLMPass3()
+        first = _run_full_pipeline(
+            release_id=release_id,
+            chapter_number=1,
+            run_id=run_id,
+            llm_client=first_client,
+            config=config,
+        )
+        artifact_path = Path(first["pass3_artifact"])
+        artifact_path.write_bytes(b"\x00" * 64)
+
+        repair_client = ScriptedLLMPass3()
+        repaired = translate_chapter_pass3(
+            release_id=release_id,
+            chapter_number=1,
+            run_id=run_id,
+            llm_client=repair_client,
+            config=config,
+        )
+
+        assert repaired["status"] == "success"
+        assert repair_client.pass3_calls == first_client.pass3_calls
+        assert json.loads(artifact_path.read_text(encoding="utf-8"))["status"] == "success"
+
     def test_pass2_failure_still_reports(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         _extract_one_chapter(

@@ -2,12 +2,40 @@ from __future__ import annotations
 
 from resemantica.db.sqlite import open_connection
 from resemantica.orchestration.chunk_checkpoints import (
+    ChunkCheckpoint,
+    checkpoint_can_be_replaced_by,
+    checkpoint_covers,
     ensure_chunk_checkpoint_schema,
     last_completed_chunk,
     list_chunk_checkpoints,
     load_chunk_checkpoint,
     save_chunk_checkpoint,
 )
+
+
+def _checkpoint(*, chapter_start: int, chapter_end: int) -> ChunkCheckpoint:
+    return ChunkCheckpoint(
+        release_id="rel",
+        run_id="run",
+        stage_name="translate-range",
+        chunk_index=0,
+        chapter_start=chapter_start,
+        chapter_end=chapter_end,
+        status="completed",
+        metadata={},
+        updated_at="now",
+    )
+
+
+def test_chunk_checkpoint_range_compatibility() -> None:
+    stored = _checkpoint(chapter_start=1, chapter_end=10)
+
+    assert checkpoint_covers(stored, chapter_start=1, chapter_end=10)
+    assert checkpoint_covers(stored, chapter_start=3, chapter_end=7)
+    assert not checkpoint_covers(stored, chapter_start=7, chapter_end=12)
+    assert checkpoint_can_be_replaced_by(stored, chapter_start=1, chapter_end=12)
+    assert not checkpoint_can_be_replaced_by(stored, chapter_start=3, chapter_end=7)
+    assert not checkpoint_can_be_replaced_by(stored, chapter_start=7, chapter_end=12)
 
 
 def test_chunk_checkpoint_save_load_list_and_overwrite() -> None:

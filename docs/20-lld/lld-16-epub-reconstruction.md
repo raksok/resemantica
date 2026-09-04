@@ -105,17 +105,19 @@ Chapter-level flags should include:
 
 ## Packaging Flow
 
-1. Copy the unpacked EPUB tree into a reconstruction work directory.
-2. Replace only chapter XHTML files that have rebuilt chapter output.
-3. Sync `toc.ncx` and `nav.xhtml` labels from rebuilt chapter titles when those navigation files exist.
-4. Preserve `mimetype` as the first stored ZIP entry.
-5. Deflate all other entries.
-6. Write final EPUB.
-7. Emit `artifact_written` and `validation_failed` events through orchestration.
+1. Preflight all selected chapters, placeholder maps, and final Pass 2/3 block mappings before mutating reconstruction outputs.
+2. Copy the unpacked EPUB tree into a reconstruction work directory.
+3. Replace only chapter XHTML files that have rebuilt chapter output.
+4. Sync `toc.ncx` and `nav.xhtml` labels from rebuilt chapter titles when those navigation files exist.
+5. Preserve `mimetype` as the first stored ZIP entry.
+6. Deflate all other entries.
+7. Write final EPUB.
+8. Emit `artifact_written` and `validation_failed` events through orchestration.
 
 ## Failure Policy
 
 - Missing translated blocks fail reconstruction unless explicitly marked skipped with reason.
+- Completeness preflight runs before the reconstruction work tree or final EPUB is changed; failure emits `epub-rebuild.preflight_failed` and preserves existing outputs.
 - Existing translated blocks override the non-story skip policy during reconstruction.
 - Placeholder restoration failures are hard failures.
 - XHTML parse failures are hard failures.

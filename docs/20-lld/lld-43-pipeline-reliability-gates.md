@@ -11,14 +11,16 @@ Production orchestration now performs deterministic preflight checks before ever
 - `translate-range`: packet metadata and packet/bundle artifacts for selected story chapters.
 - `epub-rebuild`: placeholder maps plus exact, non-empty final Pass 2/3 output coverage for every extracted parent block in selected story chapters, and the same validation for selected non-story chapters that already have pass artifacts.
 
+`epub-rebuild` validates direct durable inputs only. It does not recheck unresolved preprocess votes, summary artifacts, graph snapshots, or packet artifacts after final Pass 2/3 output exists.
+
 ## Non-Story Chapters
 Downstream gates use `summary_drafts.is_story_chapter = 0` as the authoritative non-story marker. Non-story chapters may omit packets and translation pass artifacts. Rebuild leaves their original XHTML untouched only when no translated blocks exist; if a selected non-story chapter has pass2/pass3 artifacts, the gate validates those artifacts and rebuild consumes them.
 
-Chapters with **no `summary_drafts` row at all** (e.g., excluded by `exclude_chapter_patterns` in the summaries pipeline) are silently skipped by the gate — they are not added to the `story_chapters` list and do not trigger gate failures. Downstream stages handle missing data gracefully (e.g., packets skips with `missing_story_so_far_summary`).
+Chapters with **no `summary_drafts` row at all** (e.g., excluded by `exclude_chapter_patterns` in the summaries pipeline) are silently skipped by preprocessing and packet gates. Reconstruction is stricter: an unclassified chapter is translation-required so missing classification cannot silently remove source XHTML from the final audit.
 
 ## Unresolved Preprocess Votes
 
-The gate checks for unresolved `glossary_translation_votes` and `idiom_translation_votes` before allowing `preprocess-idioms`, `preprocess-graph`, and downstream stages to run.
+The gate checks for unresolved `glossary_translation_votes` and `idiom_translation_votes` before allowing `preprocess-idioms`, `preprocess-graph`, continuity, packet building, and translation to run. Reconstruction does not consume those votes and does not repeat this check.
 
 For glossary votes, the gate applies the same `llm_keep` filter as the translation pipeline: candidates with `llm_keep = 0` (rejected by LLM evaluation) are excluded. This prevents a permanent gate deadlock where rejected candidates have orphaned unresolved votes that no downstream stage can resolve. Candidates with `llm_keep IS NULL` (legacy, never evaluated) are still checked.
 

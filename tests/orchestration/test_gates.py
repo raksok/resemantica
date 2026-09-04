@@ -701,6 +701,88 @@ def test_rebuild_gate_allows_non_story_chapter_with_valid_translation_artifact(
     assert report.metadata["rebuild_non_story_chapter_numbers"] == [1]
 
 
+def test_rebuild_gate_ignores_stale_upstream_state_when_translation_is_complete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "rebuild-direct-inputs"
+    run_id = "production"
+    _write_extracted_chapter(release_id)
+    _seed_summary(release_id)
+    _seed_unresolved_glossary_vote(release_id)
+    _seed_translation(release_id, run_id)
+    paths = derive_paths(load_config(), release_id=release_id)
+    (paths.summaries_dir / "chapter-1-en.json").unlink()
+
+    report = check_stage_gate(
+        stage_name="epub-rebuild",
+        release_id=release_id,
+        run_id=run_id,
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    assert report.success is True
+    assert report.metadata["story_chapter_numbers"] == [1]
+    assert report.metadata["rebuild_chapter_numbers"] == [1]
+    assert "unresolved_votes" not in report.metadata
+
+    from resemantica.orchestration.models import StageResult
+
+    monkeypatch.setattr(
+        OrchestrationRunner,
+        "_execute_stage",
+        lambda self, stage_name, **kwargs: StageResult(True, stage_name, "ok"),
+    )
+    result = OrchestrationRunner(release_id, run_id).run_stage(
+        "epub-rebuild",
+        enforce_gates=True,
+    )
+
+    assert result.success is True
+    assert not paths.glossary_review_path.exists()
+
+
+def test_rebuild_gate_requires_translation_for_unclassified_chapter(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    release_id = "rebuild-unclassified"
+    run_id = "production"
+    _write_extracted_chapter(release_id)
+
+    missing = check_stage_gate(
+        stage_name="epub-rebuild",
+        release_id=release_id,
+        run_id=run_id,
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    assert missing.success is False
+    assert missing.metadata["story_chapter_numbers"] == [1]
+    assert missing.metadata["rebuild_chapter_numbers"] == [1]
+    assert "missing pass2/pass3 translated artifact" in missing.message()
+
+    _seed_translation(release_id, run_id)
+    complete = check_stage_gate(
+        stage_name="epub-rebuild",
+        release_id=release_id,
+        run_id=run_id,
+        config=load_config(),
+        chapter_start=1,
+        chapter_end=1,
+    )
+
+    assert complete.success is True
+    assert complete.metadata["story_chapter_numbers"] == [1]
+    assert complete.metadata["rebuild_chapter_numbers"] == [1]
+
+
 def test_rebuild_gate_requires_translation_and_placeholders(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     release_id = "rebuild-gate"

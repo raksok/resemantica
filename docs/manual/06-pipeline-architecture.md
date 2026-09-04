@@ -73,7 +73,7 @@ Before executing, each stage in `STAGE_ORDER` runs validation gates (`orchestrat
 | `preprocess-continuity` | ✓ | ✓ | ✓ | ✓ | | |
 | `packets-build` | ✓ | ✓ | ✓ | ✓ | | |
 | `translate-range` | ✓ | ✓ | ✓ | ✓ | ✓ | |
-| `epub-rebuild` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `epub-rebuild` | ✓ | | | | | ✓ |
 
 #### Gate Functions
 
@@ -88,6 +88,8 @@ Before executing, each stage in `STAGE_ORDER` runs validation gates (`orchestrat
 **`_check_packet_inputs()`** — For each story chapter, verifies `packet_metadata` exists in SQLite and both packet and bundle artifact files exist on disk. Skips chapters with known skip events (empty records, non-story).
 
 **`_check_rebuild_inputs()`** — For each selected story chapter, verifies the placeholder map and requires an exact mapping from every extracted parent block to a non-empty final Pass 2/3 output. Non-story chapters without translation artifacts keep their original XHTML; those with artifacts must pass the same completeness audit.
+
+`epub-rebuild` uses only the extracted and rebuild checks. Final Pass 2/3 artifacts are authoritative for reconstruction, so stale preprocessing votes and missing historical summary, graph, or packet artifacts do not block it. Chapters without an explicit non-story marker remain translation-required.
 
 ### Gate Failure Handling
 
@@ -111,9 +113,9 @@ Before translation, each chapter's XHTML is parsed into extractable units (`epub
 
 Long-running stages (summaries, translate-range) use chunk-level checkpoints (`orchestration/chunk_checkpoints.py`) for granular progress:
 
-- Each chunk is identified by `(release_id, run_id, stage_name, chunk_index)`.
+- Each row is looked up by `(release_id, run_id, stage_name, chunk_index)`, but its stored `chapter_start`/`chapter_end` must also be compatible with the requested range.
 - On completion, each chunk saves status `"completed"` to the `chunk_checkpoints` table.
-- On resume, `last_completed_chunk()` finds the highest completed chunk index and resumes from the next one.
+- On translation resume, a completed row is reused only when its bounds cover the current chunk and its final artifacts are complete. Incompatible retry ranges execute without overwriting the older row.
 - The `last-good-chunk` cleanup scope can rewind to the last completed chunk, preserving earlier work.
 
 ## Runtime Lifecycle
